@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronDown, CircleHelp, Cpu, Download, Edit3, ExternalLink, Layers3, Loader2, Play, Printer, Timer, X } from 'lucide-react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
@@ -33,6 +32,14 @@ import {
 import { resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
+import {
+  appendSliceExtension,
+  getSavedSliceFilenameFormat,
+  resolveSliceFilenameFormat,
+  resolveSliceOutputExtension,
+  saveSliceFilenameFormat,
+} from '@/features/slicing/sliceFilenameFormat';
+import { SliceFilenameFormatEditor } from './SliceFilenameFormatEditor';
 import {
   getSavedSlicingPerformanceSettings,
   saveSlicingPerformanceSettings,
@@ -84,7 +91,7 @@ interface SlicingPanelProps {
   canUpload?: boolean;
   canPrint?: boolean;
   onSliceIntentChanged?: (intent: SliceIntent) => void;
-  onBeforeSliceStart?: (intent: SliceIntent) => Promise<boolean> | boolean;
+  onBeforeSliceStart?: (intent: SliceIntent, suggestedOutputName: string) => Promise<boolean> | boolean;
   onBeforeSlicingRun?: () => Promise<void> | void;
   resolveOutputPathForIntent?: (intent: SliceIntent) => string | null | undefined;
 }
@@ -104,34 +111,6 @@ type RemoteMaterialProfile = {
   name: string;
   locked?: boolean;
 };
-
-function normalizeExportBaseName(rawName: string | null | undefined): string {
-  const trimmed = (rawName ?? '').trim();
-  if (!trimmed) return 'MyPrint';
-
-  const withoutKnownExt = trimmed.replace(KNOWN_SOURCE_EXTENSION_STRIP_RE, '');
-  const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
-  return cleaned || 'MyPrint';
-}
-
-function resolveSliceFilenameBase(models: LoadedModel[], activeModel: LoadedModel | null): string {
-  const visibleModels = models.filter((model) => model.visible);
-
-  if (visibleModels.length === 1) {
-    return normalizeExportBaseName(visibleModels[0].name);
-  }
-
-  if (visibleModels.length > 1) {
-    const firstVisibleName = normalizeExportBaseName(visibleModels[0]?.name);
-    return `${firstVisibleName}_DF_Scene`;
-  }
-
-  if (activeModel) {
-    return normalizeExportBaseName(activeModel.name);
-  }
-
-  return 'MyPrint';
-}
 
 function formatDuration(ms: number | null): string {
   if (ms == null || !Number.isFinite(ms)) return '—';
@@ -760,7 +739,6 @@ const AUTO_AA_PRESET_OPTIONS: ReadonlyArray<{
 
 export function SlicingPanel({
   models,
-  activeModel,
   estimatedLayerCountOverride,
   estimatedLayerHeightMmOverride,
   estimatedVolumeLabelOverride,
@@ -794,6 +772,8 @@ export function SlicingPanel({
   const sliceIntentMenuRef = useRef<HTMLDivElement | null>(null);
   const sliceIntentAnchorRef = useRef<HTMLDivElement | null>(null);
   const [isSlicingZip, setIsSlicingZip] = useState(false);
+  const [sliceFilenameFormat, setSliceFilenameFormat] = useState(getSavedSliceFilenameFormat);
+  const [filenamePreviewTime, setFilenamePreviewTime] = useState(() => new Date());
   const [sliceStatus, setSliceStatus] = useState('Idle');
   const [currentPhase, setCurrentPhase] = useState('Idle');
   const [progressDone, setProgressDone] = useState(0);
@@ -1266,10 +1246,9 @@ export function SlicingPanel({
     return sliceIntent;
   }, [canPrint, canUpload, canUvTools, isShiftHeld, sliceIntent]);
   // 'preview' is always available regardless of network state
-  const sliceFilenameBase = useMemo(
-    () => resolveSliceFilenameBase(models, activeModel),
-    [activeModel, models],
-  );
+  useEffect(() => {
+    saveSliceFilenameFormat(sliceFilenameFormat);
+  }, [sliceFilenameFormat]);
 
   useEffect(() => {
     if (!activePrinterProfileId) {
@@ -1971,6 +1950,18 @@ export function SlicingPanel({
     showRemoteOfflineLayerHeightOverride,
   ]);
 
+  const filenameContext = useMemo(() => ({
+    printerName: activePrinterProfile?.name ?? 'Printer',
+    materialName: resolveCompositeMaterialLabel(materialProfileForSlicing) ?? materialProfileForSlicing?.name ?? 'Material',
+    layerHeightMm: effectiveLayerHeightMm ?? 0.05,
+    timestamp: filenamePreviewTime,
+  }), [activePrinterProfile?.name, effectiveLayerHeightMm, filenamePreviewTime, materialProfileForSlicing]);
+  const filenamePreview = useMemo(
+    () => resolveSliceFilenameFormat(sliceFilenameFormat, filenameContext),
+    [filenameContext, sliceFilenameFormat],
+  );
+  const outputExtension = resolveSliceOutputExtension(activePrinterProfile?.display.outputFormat, selectedFormat?.outputFormat);
+
   useEffect(() => {
     if (!showSlicingModal) {
       setDisplayProgressPercent(0);
@@ -2107,10 +2098,23 @@ export function SlicingPanel({
       return;
     }
 
-    const proceed = await Promise.resolve(onBeforeSliceStart?.(effectiveSliceIntent) ?? true).catch(() => false);
+    // Capture the local time once per job. The artifact retains this name through
+    // save dialogs, browser downloads, and the Printing panel.
+    const jobTime = new Date();
+    const jobFilename = resolveSliceFilenameFormat(sliceFilenameFormat, {
+      ...filenameContext,
+      timestamp: jobTime,
+    });
+    if (!jobFilename.basename) {
+      alert(jobFilename.error ?? 'Choose a valid filename format.');
+      return;
+    }
+    const jobOutputName = appendSliceExtension(jobFilename.basename, outputExtension);
+    const proceed = await Promise.resolve(onBeforeSliceStart?.(effectiveSliceIntent, jobOutputName) ?? true).catch(() => false);
     if (!proceed) {
       return;
     }
+    setFilenamePreviewTime(jobTime);
 
     const resolvedOutputPath = (resolveOutputPathForIntent?.(effectiveSliceIntent) ?? '').trim();
 
@@ -2177,7 +2181,7 @@ export function SlicingPanel({
         models: visibleModels,
         printerProfile: activePrinterProfile,
         materialProfile: materialProfileForSlicing,
-        filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
+        filenameBase: jobFilename.basename,
         outputPath: resolvedOutputPath.length > 0 ? resolvedOutputPath : null,
         antiAliasingLevel: effectiveAntiAliasingLevel,
         antiAliasingMode: effectiveAntiAliasingMode,
@@ -2650,6 +2654,13 @@ export function SlicingPanel({
                 </div>
               </div>
             </div>
+
+            <SliceFilenameFormatEditor
+              format={sliceFilenameFormat}
+              context={filenameContext}
+              extension={outputExtension}
+              onChange={setSliceFilenameFormat}
+            />
 
             {showRemoteOfflineLayerHeightOverride && (
               <div className="mt-2 rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -3703,7 +3714,7 @@ export function SlicingPanel({
           {/* Slice intent split-button */}
           {(() => {
             const isAutoAaPending = aaQualityMode === 'auto' && isAutoAaCalculating;
-            const isDisabled = isSlicingZip || isAutoAaPending || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
+            const isDisabled = isSlicingZip || isAutoAaPending || !activePrinterProfile || !materialProfileForSlicing || models.length === 0 || Boolean(filenamePreview.error);
             type IconType = React.FC<{ className?: string }>;
             const intentOptions: { key: SliceIntent; label: string; Icon: IconType; enabled: boolean; menuOnly?: boolean }[] = [
               { key: 'file',    label: 'Slice to File',      Icon: Download as IconType, enabled: true },

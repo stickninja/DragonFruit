@@ -5321,18 +5321,6 @@ export default function Home() {
     activeNetworkUiAdapter
     && activeNetworkUiAdapter.supportsRemoteMaterialProfiles !== false,
   );
-  const suggestedSliceOutputFilename = React.useMemo(() => {
-    const modelName = (scene.activeModel?.name ?? scene.models[0]?.name ?? '').trim();
-    const base = (modelName || activePrinterProfile?.name || 'slice_export')
-      .replace(/\.[^.]+$/, '')
-      .replace(/[<>:"/\\|?*]+/g, '_')
-      .replace(/\s+/g, '_');
-    const outputFormat = (activePrinterProfile?.display.outputFormat ?? '').trim();
-    const ext = outputFormat.length > 0
-      ? (outputFormat.startsWith('.') ? outputFormat : `.${outputFormat}`)
-      : '.print';
-    return `${base || 'slice_export'}${ext}`;
-  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.name, scene.activeModel?.name, scene.models]);
   const isPreSliceTargetPicker = printingTargetPickerMode !== 'post-slice';
   const canPrintNow = Boolean(
     printingReadyPlateId
@@ -5350,7 +5338,7 @@ export default function Home() {
     }
   }, [flushAutosave]);
 
-  const handleBeforeSliceStart = React.useCallback(async (intent: SliceIntent): Promise<boolean> => {
+  const handleBeforeSliceStart = React.useCallback(async (intent: SliceIntent, suggestedOutputName: string): Promise<boolean> => {
     if (shouldReturnToPrintingAfterSliceRef.current) {
       return true;
     }
@@ -5365,7 +5353,7 @@ export default function Home() {
 
     if (intent === 'file' || intent === 'uvtools') {
       try {
-        const destinationPath = await pickSavePathWithNativeDialog(suggestedSliceOutputFilename);
+        const destinationPath = await pickSavePathWithNativeDialog(suggestedOutputName);
         if (!destinationPath || destinationPath.trim().length === 0) {
           return false;
         }
@@ -5437,7 +5425,6 @@ export default function Home() {
     printerReachabilityByDeviceId,
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
-    suggestedSliceOutputFilename,
   ]);
 
   const printingDialogStageLabel = React.useMemo(() => {

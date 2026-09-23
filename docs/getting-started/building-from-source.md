@@ -9,9 +9,11 @@ If you only want to use DragonFruit, use prebuilt releases from the [Installatio
 Install the following before building:
 
 - **Git**
-- **Node.js** (LTS recommended) + `npm`
-- **Rust toolchain** via `rustup`
+- **Node.js** 22 and `npm`. The release and PR build workflows use Node 22.23.1; use that version when reproducing their builds.
+- **Rust toolchain** via `rustup`. On Windows, install the MSVC target, Visual Studio C++ Build Tools, a Windows SDK, and CMake.
 - **Platform-specific Tauri system dependencies**
+
+On Windows, run the build from a normal user terminal with Node, Rust, and the Visual Studio C++ environment on that terminal's `PATH`.
 
 !!! tip
       If desktop build steps fail early, the most common cause is missing Tauri system dependencies on your OS.

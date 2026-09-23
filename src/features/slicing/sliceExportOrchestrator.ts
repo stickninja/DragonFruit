@@ -13,6 +13,7 @@ import {
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
+import { appendSliceExtension, resolveSliceOutputExtension } from './sliceFilenameFormat';
 
 function resolvePngCompressionStrategy(
     mode: PngCompressionStrategy,
@@ -325,13 +326,6 @@ export type SliceExportResult = {
         };
     };
 };
-
-function safeFilenameBase(raw: string): string {
-    const trimmed = raw.trim();
-    if (!trimmed) return 'slice_export';
-    const cleaned = trimmed.replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
-    return cleaned || 'slice_export';
-}
 
 function setMetadataPathValue(target: Record<string, unknown>, path: string, value: unknown): void {
     const segments = path
@@ -845,8 +839,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     throwIfAborted(options.abortSignal);
     options.onProgress?.(Math.max(progressDone, progressTotal), progressTotal, 'Finalizing');
 
-    const printerExt = options.printerProfile.display.outputFormat.replace(/^\./, '') || format.outputFormat.replace(/^\./, '') || 'slice';
-    const outputName = `${safeFilenameBase(options.filenameBase)}.${printerExt}`;
+    const printerExt = resolveSliceOutputExtension(options.printerProfile.display.outputFormat, format.outputFormat);
+    const outputName = appendSliceExtension(options.filenameBase, printerExt);
 
     const totalElapsedMs = performance.now() - orchestratorStartMs;
     options.onProgress?.(progressTotal, progressTotal, 'Handoff');

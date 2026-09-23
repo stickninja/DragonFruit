@@ -42,8 +42,16 @@ This page is the developer-facing source of truth for client-side persistence us
 | `dragonfruit.slicing.minimumAaAlphaOverrideEnabled` | localStorage + sessionStorage | Enable AA alpha override                                               |
 | `dragonfruit.slicing.remoteOfflineLayerHeightMm`    | localStorage + sessionStorage | Offline/remote slicing layer height override                           |
 | `dragonfruit.slicing.intentByPrinterProfile.v1`     | localStorage + sessionStorage | Preferred action intent by profile (`file`/`upload`/`print`/`preview`) |
+| `dragonfruit:slice-filename-format:v1`               | localStorage                  | Plain string template for sliced output filenames                     |
 | `dragonfruit.slicing.thumbnailRenderOptions`        | localStorage                  | Export-thumbnail rendering options                                     |
 | `app-slicing-performance-settings`                  | localStorage                  | Slicing performance settings                                           |
+
+The filename format key stores a plain string. When absent, the default is
+`{printer_name}_{timestamp}_{material_name}_{layer_height}mm`. Supported
+placeholders are `printer_name`, `timestamp`, `material_name`, `layer_height`
+(millimeters), and `layer_height_um` (micrometers). Existing installations have
+no earlier filename-format key to migrate; they receive the default until a
+custom template is saved. The format is shared across printer profiles.
 
 ## Scene and import keys
 

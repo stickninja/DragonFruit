@@ -22,8 +22,9 @@ Rafts improve adhesion and support stability, especially in resin workflows.
 ## Export workflow
 
 1. Review supports and raft visually.
-2. Export scene/model assets.
-3. Re-open output in downstream workflow for final validation.
+2. In the Slicing panel, edit **Output filename format** if needed. The preview shows the printer's output extension; its timestamp is captured when slicing starts. The format is saved for later sessions.
+3. Slice to a printer file or export scene/model assets.
+4. Re-open output in downstream workflow for final validation.
 
 ## Export quality checks
 
