@@ -24,6 +24,7 @@ concurrency:
 jobs:
   detect-version-bump:
     name: Detect version bump
+    if: github.repository == 'Open-Resin-Alliance/DragonFruit'
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.version.outputs.should_release }}
@@ -96,7 +97,7 @@ jobs:
     name: Build ${{ matrix.artifact_name }}
     needs:
       - detect-version-bump
-    if: needs.detect-version-bump.outputs.should_release == 'true'
+    if: github.repository == 'Open-Resin-Alliance/DragonFruit' && needs.detect-version-bump.outputs.should_release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -249,7 +250,7 @@ jobs:
     needs:
       - detect-version-bump
       - build-tauri
-    if: needs.detect-version-bump.outputs.should_release == 'true'
+    if: github.repository == 'Open-Resin-Alliance/DragonFruit' && needs.detect-version-bump.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts

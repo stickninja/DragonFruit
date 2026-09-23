@@ -1,6 +1,8 @@
 # Phase 0.1 acceptance: output filenames
 
-The behavior and manual checklist below define the phase target. The later **Verification performed** section records checks actually completed; unlisted checks remain open. The user must explicitly accept this phase after reviewing results before the next phase or a release.
+**Status:** Accepted by the user on 2026-09-23. This accepts the Phase 0.1 feature, not a 0.1.0 release.
+
+The behavior and manual checklist below define the phase target. The later **Verification performed** section records checks actually completed; unlisted checks remain open. Acceptance does not imply that every manual check was performed.
 
 ## Behavior
 
@@ -34,7 +36,8 @@ The primary agent performed these checks on the Phase 0.1 worktree:
 - A normal-account Node 22.23.1 `tauri build --debug --no-bundle` completed successfully (exit 0, 634 seconds), including the frontend build, typecheck, thumbnail helpers, and native Rust compile. It produced `src-tauri/target/debug/dragonfruit-desktop.exe`.
 - A separate local debug build with an isolated smoke-test app identity passed (exit 0, 33.53 seconds). Its native Windows application opened with a fresh profile. With Saturn 2 selected, a 10 × 10 × 0.5 mm calibration block imported as ten layers. The default millimetre preview was correct. After changing the pattern to `{printer_name}_{timestamp}_{material_name}_{layer_height_um}um`, the native Save dialog suggested `Saturn_2_20260923-171443_Default_Standard_405nm_50um.ctb`. The application reported CTB export complete; its Generated file and Saved to labels matched that exact filename and timestamp, even though saving finished later.
 - The CTB file was independently confirmed at the selected destination with that exact basename, 158,738 bytes, and a later write time of 2026-09-23 17:15:08. The isolated app was closed through its UI and its process was confirmed stopped. After restart, the recent calibration STL reopened; Export still showed the exact custom pattern and a correct `50um` preview with a fresh timestamp.
+- The final optimized Windows x64 frontend, typecheck, native, and NSIS build passed. The unsigned installer completed a silent installation with ProductName **DragonFruit (stickninja)**, Version `0.1.0`, and Publisher **stickninja**. The installed executable matched the built executable apart from the expected NSIS bundle-type marker. The official executable's SHA-256, official uninstall entry, and `.voxl` registration were unchanged. The final installed app opened with a fresh profile, showed the correct title and About version, and displayed **Download fork releases manually** in Settings with a link to the fork's releases.
 
 The native smoke covers one small block and one printer profile. Other printer profiles, broader `SlicingPanel` workflows, output-reader compatibility, and printer behavior remain unverified. The browser harness simulated a job start; it did not slice. Full repository lint retains inherited errors; `page.tsx` showed the same 16 error signatures as upstream on unchanged lines.
 
-This work is the Phase 0.1 implementation and review branch. Phase 0.1 has not been released or accepted by the user. Review the remaining manual checks and obtain explicit user acceptance before advancing.
+This work is the accepted Phase 0.1 implementation. The remaining manual checks above are recorded as limitations, not passed results. The 0.1.0 Windows x64 package passed build and installation checks.

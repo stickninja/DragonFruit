@@ -14,7 +14,6 @@ import { LoggingSettingsTab, getSavedLogLevel, saveLogLevel, type LogLevelFilter
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from './UISettingsTab';
 import { UpdatesSettingsTab } from '@/features/updater/UpdatesSettingsTab';
-import { getUpdateChannel, type UpdateChannel } from '@/features/updater/updateBridge';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
 import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
@@ -288,7 +287,6 @@ export function SettingsModal({
   const [draftSlicingThumbnailRenderSettings, setDraftSlicingThumbnailRenderSettings] = useState<SlicingThumbnailRenderSettings>(() => slicingThumbnailRenderSettings ?? DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
   const [draftUvToolsSettings, setDraftUvToolsSettings] = useState<UvToolsSettings>(() => getSavedUvToolsSettings());
   const [draftLogLevel, setDraftLogLevel] = useState<LogLevelFilter>(() => getSavedLogLevel());
-  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>('stable');
   const [showRestoreDefaultsConfirm, setShowRestoreDefaultsConfirm] = useState(false);
   const [showThemeSaveConfirm, setShowThemeSaveConfirm] = useState(false);
   const [showThemeRenameDialog, setShowThemeRenameDialog] = useState(false);
@@ -307,11 +305,6 @@ export function SettingsModal({
   const [isLightTheme, setIsLightTheme] = useState(false);
   const didCommitThemeDraftRef = React.useRef(false);
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
-
-  // Load saved update channel preference.
-  React.useEffect(() => {
-    getUpdateChannel().then(setUpdateChannel);
-  }, []);
 
   const accentSecondaryActionColor = isLightTheme
     ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
@@ -1113,7 +1106,7 @@ export function SettingsModal({
     },
     updates: {
       label: 'Updates',
-      description: 'Check for new versions and manage channels',
+      description: 'Download fork releases manually',
       icon: CloudDownload,
       tone: 'secondary',
     },
@@ -1469,12 +1462,7 @@ export function SettingsModal({
                   onLogLevelChange={setDraftLogLevel}
                 />
               )}
-              {activeTab === 'updates' && (
-                <UpdatesSettingsTab
-                  channel={updateChannel}
-                  onChannelChange={setUpdateChannel}
-                />
-              )}
+              {activeTab === 'updates' && <UpdatesSettingsTab />}
               {activeTab === 'about' && (
                 <div className="flex h-full min-h-0 flex-col gap-3.5">
                   <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">

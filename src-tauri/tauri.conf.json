@@ -1,8 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DragonFruit",
-  "version": "0.1.9",
-  "identifier": "org.openresinalliance.dragonfruit",
+  "productName": "DragonFruit (stickninja)",
+  "mainBinaryName": "dragonfruit-stickninja",
+  "version": "0.1.0",
+  "identifier": "io.github.stickninja.dragonfruit",
   "build": {
     "beforeDevCommand": "npm run predev:once && npm run dev",
     "beforeBuildCommand": "npm run build:tauri && node scripts/build-thumbnail-providers.mjs",
@@ -11,17 +12,8 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
-    "fileAssociations": [
-      {
-        "ext": [
-          "voxl"
-        ],
-        "name": "DragonFruit Scene File",
-        "description": "DragonFruit scene",
-        "mimeType": "application/vnd.dragonfruit.voxl+json"
-      }
-    ],
+    "publisher": "stickninja",
+    "createUpdaterArtifacts": false,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -32,15 +24,6 @@
     ]
   },
   "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0NjE2N0VERDQ3RjYwMDcKUldRSFlIL1U3V2RoNVBnc0hoWnU5NnZSdkhSRys5OFFRVXpHNWhsd3ZwRGYwc1N1UkpLR3htWmkK",
-      "endpoints": [
-        "https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest/download/latest.json"
-      ],
-      "windows": {
-        "installMode": "passive"
-      }
-    },
     "macos-fps": {
       "enabled": true
     }
@@ -62,7 +45,7 @@
         "alwaysOnTop": true,
         "theme": "Dark",
         "backgroundColor": "#14061b",
-        "title": "DragonFruit"
+        "title": "DragonFruit (stickninja)"
       },
       {
         "label": "main",
@@ -70,7 +53,7 @@
         "visible": false,
         "theme": "Dark",
         "backgroundColor": "#0B0F14",
-        "title": "DragonFruit",
+        "title": "DragonFruit (stickninja)",
         "width": 1280,
         "height": 800,
         "minWidth": 960,

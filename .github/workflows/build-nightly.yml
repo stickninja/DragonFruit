@@ -46,6 +46,7 @@ jobs:
   # ── Comment handler: /preview (or the deprecated /nightly) ──────────────
   activate-nightly:
     if: >
+      github.repository == 'Open-Resin-Alliance/DragonFruit' &&
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       (startsWith(github.event.comment.body, '/preview') ||
@@ -400,7 +401,7 @@ jobs:
 
   # ── Derive metadata (branch, tag, names) ────────────────────────────────
   derive:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.repository == 'Open-Resin-Alliance/DragonFruit' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       branch: ${{ steps.branch.outputs.branch }}
@@ -485,7 +486,7 @@ jobs:
 
   # ── Fetch macOS DMG from PR check run ──────────────────────────────────
   fetch-macos-artifacts:
-    if: github.event_name == 'workflow_dispatch' && inputs.pr_run_id
+    if: github.repository == 'Open-Resin-Alliance/DragonFruit' && github.event_name == 'workflow_dispatch' && inputs.pr_run_id
     needs:
       - derive
     runs-on: ubuntu-latest
@@ -524,6 +525,7 @@ jobs:
   # ── Build matrix ────────────────────────────────────────────────────────
   build-tauri:
     name: Build ${{ matrix.artifact_name }}
+    if: github.repository == 'Open-Resin-Alliance/DragonFruit'
     needs:
       - derive
     strategy:
@@ -663,7 +665,7 @@ jobs:
   # ── Fallback: build macOS Universal natively (manual dispatch, no PR check) ─
   build-macos-fallback:
     name: Build macOS Universal (fallback)
-    if: always() && github.event_name == 'workflow_dispatch' && (!inputs.pr_run_id || needs.fetch-macos-artifacts.result != 'success')
+    if: always() && github.repository == 'Open-Resin-Alliance/DragonFruit' && github.event_name == 'workflow_dispatch' && (!inputs.pr_run_id || needs.fetch-macos-artifacts.result != 'success')
     needs:
       - derive
       - fetch-macos-artifacts
@@ -754,7 +756,7 @@ jobs:
   # ── Publish nightly prerelease ──────────────────────────────────────────
   publish-nightly:
     name: Publish nightly prerelease
-    if: always() && !cancelled() && needs.derive.result == 'success' && needs.build-tauri.result == 'success'
+    if: always() && github.repository == 'Open-Resin-Alliance/DragonFruit' && !cancelled() && needs.derive.result == 'success' && needs.build-tauri.result == 'success'
     needs:
       - derive
       - build-tauri

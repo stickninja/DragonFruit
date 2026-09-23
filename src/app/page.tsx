@@ -10,7 +10,6 @@ import { AlertTriangle, CheckCircle2, ChevronDown, Download, Gamepad2, LayoutGri
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
-import { GlobalUpdateIndicator } from '@/features/updater/GlobalUpdateIndicator';
 import { EmptySceneState } from '@/components/layout/EmptySceneState';
 import { IslandScanCard } from '@/components/controls/IslandScanCard';
 import { IslandOverlayControls } from '@/components/controls/IslandOverlayControls';
@@ -18692,8 +18691,6 @@ export default function Home() {
         warnBeforeProfileSettingsOpen={Boolean(printingArtifact && !printingArtifactIsInvalid)}
         onOpenMonitor={() => setPrintingMonitorModalOpen(true)}
       />
-
-      <GlobalUpdateIndicator />
 
       <FloatingPanelStack>
         {scene.mode === 'prepare' ? (

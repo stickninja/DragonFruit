@@ -33,6 +33,7 @@ jobs:
     # workflow_dispatch — it is exempt from the rule that token-driven events do
     # not chain — so that path requires a human actor.
     if: >-
+      github.repository == 'Open-Resin-Alliance/DragonFruit' &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') &&
       (github.event_name != 'workflow_dispatch' || github.triggering_actor != 'github-actions[bot]')
     permissions:

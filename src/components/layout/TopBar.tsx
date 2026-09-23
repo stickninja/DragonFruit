@@ -22,7 +22,6 @@ import {
   dispatchProfileSettingsModalOpenChange,
   type ProfileSettingsTab,
 } from '@/components/settings/profileModalEvents';
-import { OPEN_SETTINGS_ABOUT_EVENT } from '@/features/updater/updateNotificationEvents';
 import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
@@ -487,21 +486,6 @@ export function TopBar({
     window.addEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
     return () => {
       window.removeEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
-    };
-  }, []);
-
-  // Listen for event to open Settings → About tab (from update notification).
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const handleOpenSettingsAbout = () => {
-      setSettingsInitialTab('about');
-      setIsSettingsOpen(true);
-    };
-
-    window.addEventListener(OPEN_SETTINGS_ABOUT_EVENT, handleOpenSettingsAbout);
-    return () => {
-      window.removeEventListener(OPEN_SETTINGS_ABOUT_EVENT, handleOpenSettingsAbout);
     };
   }, []);
 

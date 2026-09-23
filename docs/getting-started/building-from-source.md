@@ -56,6 +56,14 @@ Common outputs by platform:
 - **macOS:** `.dmg`
 - **Linux:** `.flatpak` (project workflow may include additional Flatpak steps)
 
+### First stickninja fork package (Windows)
+
+The fork's `0.1.0` package is a manual, unsigned Windows x64 NSIS release. Use Node **22.23.1** to match the release CI version, along with the Windows Rust/MSVC, C++ Build Tools, SDK, and CMake prerequisites above. In the fork checkout, `npm version <version> --no-git-tag-version` updates the npm package and lockfile and runs the repository's version sync for Tauri and Cargo. Review those changes before building; do not create a Git tag as part of this command.
+
+On a supported Windows x64 build host, `npx tauri build --bundles nsis` produces the installer for the default host target. The fork uses a separate app identity and app data. Its first installer does not register `.voxl` file associations or COM thumbnails, and it does not migrate profiles automatically. Updates are manual from the fork's releases until a fork-specific signed updater is available.
+
+The inherited macOS and Linux recipes describe the upstream project. The original-repository-only release, nightly, and docs workflows intentionally skip publishing in this fork. The 0.1.0 Windows x64 optimized build and silent installation check passed; validate artifacts after any local change.
+
 ## 6) Useful verification commands
 
 Run checks before opening a PR:

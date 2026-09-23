@@ -5,7 +5,6 @@ mod mesh_minima;
 mod mesh_repair;
 mod network;
 mod sdf;
-mod updater_channel;
 
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
@@ -2994,7 +2993,7 @@ fn resolve_log_level_pref_path() -> std::path::PathBuf {
     {
         let appdata = std::env::var("APPDATA").unwrap_or_default();
         std::path::PathBuf::from(appdata)
-            .join("org.openresinalliance.dragonfruit")
+            .join("io.github.stickninja.dragonfruit")
             .join("loglevel")
     }
     #[cfg(target_os = "macos")]
@@ -3003,7 +3002,7 @@ fn resolve_log_level_pref_path() -> std::path::PathBuf {
         std::path::PathBuf::from(home)
             .join("Library")
             .join("Application Support")
-            .join("org.openresinalliance.dragonfruit")
+            .join("io.github.stickninja.dragonfruit")
             .join("loglevel")
     }
     #[cfg(target_os = "linux")]
@@ -3012,7 +3011,7 @@ fn resolve_log_level_pref_path() -> std::path::PathBuf {
             format!("{}/.local/share", std::env::var("HOME").unwrap_or_default())
         });
         std::path::PathBuf::from(base)
-            .join("org.openresinalliance.dragonfruit")
+            .join("io.github.stickninja.dragonfruit")
             .join("loglevel")
     }
 }
@@ -3308,12 +3307,6 @@ fn main() {
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_plugin_macos_fps::init());
 
-    // Updater plugin — checks GitHub releases for new versions and handles
-    // download + install across all platforms.
-    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
-    // Process plugin — needed for app relaunch after update installs.
-    let builder = builder.plugin(tauri_plugin_process::init());
-
     builder
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
@@ -3397,10 +3390,6 @@ fn main() {
             sdf::compute_heightmap_from_staged,
             sdf::invalidate_sdf_cache,
             astar::run_astar_pathfinding,
-            updater_channel::check_updates,
-            updater_channel::perform_update,
-            updater_channel::get_saved_update_channel,
-            updater_channel::save_update_channel
         ])
         .run(tauri::generate_context!())
         .expect("error while running DragonFruit desktop app");
