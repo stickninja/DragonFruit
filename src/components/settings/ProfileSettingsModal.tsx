@@ -589,10 +589,12 @@ export function ProfileSettingsModal({
       .map((tab, index) => ({ id: tab.id, title: tab.title, order: tab.order ?? (index + 1) * 10 }));
     return [
       ...declared,
+      ...(selectedPrinter?.display.outputFormat.trim().toLowerCase() === '.ctb'
+        ? [{ id: 'ctb-timing', title: 'Timing', order: 25 }] : []),
       { id: 'meta', title: 'Meta', order: 1000 },
       { id: 'anti-aliasing', title: 'Anti-Aliasing', order: 1010 },
     ];
-  }, [selectedLocalMaterialSettingsAdapter, usePluginLocalSettingsAsReplacement]);
+  }, [selectedLocalMaterialSettingsAdapter, selectedPrinter?.display.outputFormat, usePluginLocalSettingsAsReplacement]);
 
   const replacementMaterialEditorDefaultTab = React.useMemo(() => {
     if (!usePluginLocalSettingsAsReplacement) return 'meta';
@@ -2809,6 +2811,7 @@ export function ProfileSettingsModal({
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
       minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
       antiAliasingSettings: selectedMaterial.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+      ctbTimingV1: selectedMaterial.ctbTimingV1,
     });
     if (selectedPrinter) {
       setEditMaterialLocalSettingsByOutput(
@@ -2928,6 +2931,7 @@ export function ProfileSettingsModal({
       retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
       minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
       antiAliasingSettings: preset.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+      ctbTimingV1: preset.ctbTimingV1,
       ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
       ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
     });
@@ -2978,6 +2982,7 @@ export function ProfileSettingsModal({
         retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
         minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
         antiAliasingSettings: preset.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+        ctbTimingV1: preset.ctbTimingV1,
         ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
         ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
         localSettingsByOutput: preset.localSettingsByOutput
@@ -3111,6 +3116,7 @@ export function ProfileSettingsModal({
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
       minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
       antiAliasingSettings: selectedMaterial.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+      ctbTimingV1: selectedMaterial.ctbTimingV1,
       localSettingsByOutput: selectedMaterial.localSettingsByOutput,
       officialTemplateId: undefined,
       officialTemplateVersion: undefined,
@@ -3283,6 +3289,7 @@ export function ProfileSettingsModal({
             ? Math.max(0, Math.min(100, Number(source.minimumAaAlphaPercent)))
             : 35,
           antiAliasingSettings: source.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+          ctbTimingV1: source.ctbTimingV1,
           localSettingsByOutput: source.localSettingsByOutput
             ? (source.localSettingsByOutput as Record<string, Record<string, string | number | boolean>>)
             : resolveDefaultLocalSettingsForOutput(selectedPrinter.display.outputFormat, selectedResolvedSettingsMode),
@@ -4757,6 +4764,7 @@ export function ProfileSettingsModal({
                     printerDitherBitDepth={printerDitherBitDepth}
                     outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
                     settingsMode={selectedResolvedSettingsMode}
+                    formatVersion={selectedResolvedFormatVersion}
                     adapter={selectedLocalMaterialSettingsAdapter}
                     localSettingsByOutput={editMaterialLocalSettingsByOutput}
                     onLocalSettingsByOutputChange={setEditMaterialLocalSettingsByOutput}
@@ -5465,6 +5473,7 @@ export function ProfileSettingsModal({
                     printerDitherBitDepth={printerDitherBitDepth}
                     outputFormat={selectedPrinter.display.outputFormat}
                     settingsMode={selectedResolvedSettingsMode}
+                    formatVersion={selectedResolvedFormatVersion}
                     adapter={selectedLocalMaterialSettingsAdapter}
                     localSettingsByOutput={newMaterialLocalSettingsByOutput}
                     onLocalSettingsByOutputChange={setNewMaterialLocalSettingsByOutput}

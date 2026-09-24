@@ -43,6 +43,18 @@ There is no separate variant storage key or inherited settings layer. Profile
 import/export and the legacy profile fallback must preserve existing data and
 remain compatible with profiles that lack these optional fields.
 
+CTB materials may also carry an optional `ctbTimingV1` object in the same
+profile envelope. It has an `enabled` flag, independent `defaults.bottom` and
+`defaults.normal` values for raw light-off delay and waits before cure, after
+cure, and after lift (all seconds), an ordered `overrides` array, and a
+`startupDummy` flag. Each override has an ID, inclusive one-based model-layer
+`startLayer`/`endLayer`, and a partial `values` object; omitted fields inherit
+the current bottom or normal default, and later matching overrides win per
+field. Invalid stored fields are sanitized on load. A missing or disabled
+`ctbTimingV1` leaves the legacy `.ctb` `localSettingsByOutput` behavior in
+place. Material and printer bundle imports, profile duplication, and color
+variants copy the object independently. There is no new localStorage key.
+
 ## Slicing and printing keys
 
 | Key                                                 | Medium                        | Purpose                                                                |

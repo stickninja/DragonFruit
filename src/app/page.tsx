@@ -40,6 +40,8 @@ import { ExportManager } from '@/features/export/logic/ExportManager';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
+import { CtbLayerInspector } from '@/features/printing/components/CtbLayerInspector';
+import { ctbPreviewLayer, estimateCtbPlanSeconds, sliceProfileFingerprint } from '@/features/printing/ctbArtifact';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
@@ -3737,9 +3739,10 @@ export default function Home() {
   }, [clearPrintingLayerPreviewUrls]);
 
   const selectedPrintingLayerPreviewUrl = React.useMemo(() => {
+    if (printingArtifact?.ctbLayerPlan && printingDisplayedLayer !== printingSelectedLayer) return null;
     if (printingDisplayedLayer < 1) return null;
     return printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null;
-  }, [printingLayerPreviewUrls, printingDisplayedLayer]);
+  }, [printingArtifact, printingSelectedLayer, printingLayerPreviewUrls, printingDisplayedLayer]);
 
   const isPrintingPngLoaded = React.useMemo(() => {
     if (!selectedPrintingLayerPreviewUrl) return false;
@@ -3755,10 +3758,11 @@ export default function Home() {
     const layerIndex = layerNumber - 1;
     if (printingLayerPreviewUrls[layerIndex]) return;
 
-    const inFlight = printingLayerPreviewLoadInFlightRef.current;
-    if (inFlight.has(layerNumber)) return;
-    inFlight.add(layerNumber);
-
+    // Phase 3 requests use effect cancellation rather than a shared layer-only
+    // in-flight key, which can strand a revisited layer after fast scrubbing.
+    const inFlight = printingArtifact.ctbLayerPlan ? null : printingLayerPreviewLoadInFlightRef.current;
+    if (inFlight?.has(layerNumber)) return;
+    inFlight?.add(layerNumber);
     let cancelled = false;
     void readPrintLayerPreviewPngFromPath(printingArtifact.nativeTempPath, layerNumber, printingArtifact.outputFormat)
       .then((pngBytes: Uint8Array) => {
@@ -3784,7 +3788,7 @@ export default function Home() {
         }
       })
       .finally(() => {
-        inFlight.delete(layerNumber);
+        inFlight?.delete(layerNumber);
       });
 
     return () => {
@@ -3793,6 +3797,8 @@ export default function Home() {
   }, [
     scene.mode,
     printingArtifact?.nativeTempPath,
+    printingArtifact?.ctbLayerPlan,
+    printingArtifact?.outputFormat,
     printingDisplayedLayer,
     printingLayerPreviewUrls,
     printingPreviewTotalLayers,
@@ -3815,8 +3821,9 @@ export default function Home() {
   ]);
 
   const printingPreviewPngUrlForDisplay = React.useMemo(() => {
+    if (printingArtifact?.ctbLayerPlan) return selectedPrintingLayerPreviewUrl;
     return selectedPrintingLayerPreviewUrl ?? printingPngLoadedUrl;
-  }, [printingPngLoadedUrl, selectedPrintingLayerPreviewUrl]);
+  }, [printingArtifact, printingPngLoadedUrl, selectedPrintingLayerPreviewUrl]);
 
   React.useEffect(() => {
     if (!selectedPrintingLayerPreviewUrl) {
@@ -4084,12 +4091,11 @@ export default function Home() {
 
   const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
   const activeSliceProfileFingerprint = React.useMemo(() => {
-    const printerProfileId = String(activePrinterProfile?.id ?? '').trim();
-    const materialProfileId = String(activeMaterialProfile?.id ?? '').trim();
-    return `${printerProfileId}::${materialProfileId}`;
-  }, [activeMaterialProfile?.id, activePrinterProfile?.id]);
+    return sliceProfileFingerprint(activePrinterProfile, activeMaterialProfile);
+  }, [activeMaterialProfile, activePrinterProfile]);
 
   const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
+    slicedArtifactProfileFingerprintRef.current = artifact.profileFingerprint ?? null;
     setPrintingArtifact(artifact);
     setPrintingArtifactIsInvalid(false);
     setShowPrintingResliceModal(false);
@@ -4129,6 +4135,10 @@ export default function Home() {
     // If we re-sliced from printing mode, return there now
     if (shouldReturnToPrintingAfterSliceRef.current) {
       shouldReturnToPrintingAfterSliceRef.current = false;
+      // A reslice creates a fresh preview artifact; an earlier saved/uploaded
+      // file does not represent these new bytes, including when timing is off.
+      setCompletedSliceIntent('preview');
+      setCompletedSaveDestinationPath(null);
       setShouldAutoSliceOnExportEntry(false);
       scene.setMode('printing');
       return;
@@ -4906,6 +4916,10 @@ export default function Home() {
   }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
 
   const estimatedPrintTimeLabel = React.useMemo(() => {
+    if (printingArtifact?.ctbLayerPlan) {
+      const minutes = Math.round(estimateCtbPlanSeconds(printingArtifact.ctbLayerPlan) / 60);
+      return `~${Math.floor(minutes / 60)}h ${minutes % 60}m (CTB estimate)`;
+    }
     if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
 
     const totalLayers = printingPreviewTotalLayers;
@@ -4930,7 +4944,7 @@ export default function Home() {
     const mins = minutes % 60;
     if (hours > 0) return `~${hours}h ${mins}m`;
     return `~${mins}m`;
-  }, [activeMaterialProfile, printingPreviewTotalLayers]);
+  }, [activeMaterialProfile, printingPreviewTotalLayers, printingArtifact]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
   const activeNetworkUiAdapter = React.useMemo(
@@ -11881,9 +11895,15 @@ export default function Home() {
     if (printingPreviewTotalLayers <= 0) return null;
 
     const clampedLayer = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
-    const height = clampedLayer * crossSectionLayerHeightMm;
+    const height = ctbPreviewLayer(printingArtifact?.ctbLayerPlan, clampedLayer, crossSectionLayerHeightMm).positionZMm;
+    if (printingArtifact?.ctbLayerPlan) return height;
     return Math.min(Math.max(height, 0), Math.max(slicing.heightMm, 0));
-  }, [crossSectionLayerHeightMm, printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicing.heightMm]);
+  }, [crossSectionLayerHeightMm, printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicing.heightMm, printingArtifact]);
+
+  const printingSelectedCtbLayer = ctbPreviewLayer(printingArtifact?.ctbLayerPlan, printingSelectedLayer, crossSectionLayerHeightMm);
+  const printingSampleHeightMm = printingArtifact?.ctbLayerPlan
+    ? printingSelectedCtbLayer.sampleZMm
+    : printingCurrentHeightMm;
 
   React.useEffect(() => {
     const handleLayerHotkeys = (event: CustomEvent) => {
@@ -12195,7 +12215,7 @@ export default function Home() {
 
     // Keep 3D cross-section in lock-step with selected PNG layer.
     // Use 1-based layer index here so layer 1 still produces a real cut plane.
-    const targetLayerIndex = Math.max(1, clamped);
+    const targetLayerIndex = Math.max(1, ctbPreviewLayer(printingArtifact?.ctbLayerPlan, clamped, crossSectionLayerHeightMm).modelLayerNumber ?? 1);
     if (slicing.layerIndex === targetLayerIndex) {
       return;
     }
@@ -12204,6 +12224,8 @@ export default function Home() {
     scene.mode,
     printingPreviewTotalLayers,
     printingSelectedLayer,
+    printingArtifact,
+    crossSectionLayerHeightMm,
     slicing.layerIndex,
     slicing.setLayerIndex,
   ]);
@@ -19090,6 +19112,9 @@ export default function Home() {
               sliceIntent={completedSliceIntent}
               savedFilePath={completedSaveDestinationPath}
             />
+            {printingArtifact?.outputFormat.toLowerCase().includes('ctb') && (
+              <CtbLayerInspector key="printing-ctb-layer-inspector" artifact={printingArtifact} layerNumber={printingSelectedLayer} bottomClearancePx={modelStatsBottomClearancePx} />
+            )}
           </>
         ) : (
           <>
@@ -19806,8 +19831,13 @@ export default function Home() {
                 selectedModelIds={scene.selectedModelIds}
                 inBoundsModelIds={inBoundsModelIds}
                 numLayers={estimatedSlicerLayerCount}
+                layerCountLabelOverride={scene.mode === 'printing' && printingArtifact?.ctbLayerPlan
+                  ? `${printingArtifact.ctbLayerPlan.modelLayerCount} model / ${printingArtifact.ctbLayerPlan.layers.length} file`
+                  : null}
                 heightMm={slicing.heightMm}
-                estimatedPrintTimeLabelOverride={modelStatsEstimatedPrintTimeLabel}
+                estimatedPrintTimeLabelOverride={scene.mode === 'printing' && printingArtifact?.ctbLayerPlan
+                  ? estimatedPrintTimeLabel
+                  : modelStatsEstimatedPrintTimeLabel}
                 estimatedResinLabelOverride={estimatedVolumeMlLabel}
               />
             </div>
@@ -19884,6 +19914,9 @@ export default function Home() {
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                 Layer {Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}/{Math.max(1, printingPreviewTotalLayers)}
+                {printingArtifact?.ctbLayerPlan && (printingSelectedCtbLayer.isDummy
+                  ? ' · Startup dummy'
+                  : ` · Model layer ${printingSelectedCtbLayer.modelLayerNumber}/${printingArtifact.modelLayerCount}`)}
               </div>
 
               <div
@@ -19935,7 +19968,7 @@ export default function Home() {
                         >
                           <PrintingLayerGpuPreview
                             models={scene.models}
-                            clipZ={printingCurrentHeightMm}
+                            clipZ={printingSampleHeightMm}
                             buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
                             buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
                             viewportWidthMm={printingPreviewTargetResolution?.viewportWidth}

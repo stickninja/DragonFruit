@@ -24,6 +24,7 @@ interface ModelStatsCardProps {
   selectedModelIds: string[];
   inBoundsModelIds: string[];
   numLayers: number;
+  layerCountLabelOverride?: string | null;
   heightMm: number;
   estimatedPrintTimeLabelOverride?: string | null;
   estimatedResinLabelOverride?: string | null;
@@ -35,6 +36,7 @@ export function ModelStatsCard({
   selectedModelIds,
   inBoundsModelIds,
   numLayers,
+  layerCountLabelOverride,
   heightMm,
   estimatedPrintTimeLabelOverride,
   estimatedResinLabelOverride,
@@ -528,7 +530,7 @@ export function ModelStatsCard({
 
               <span>Layers:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {resolvedLayerCount != null ? resolvedLayerCount : '-'}
+                {layerCountLabelOverride ?? (resolvedLayerCount != null ? resolvedLayerCount : '-')}
               </span>
 
               <span>Est. print time:</span>

@@ -2817,6 +2817,25 @@ async fn read_print_file_chunk(
 }
 
 #[tauri::command]
+async fn read_ctb_layer_settings(
+    source_path: String,
+    layer_number: u32,
+) -> Result<
+    dragonfruit_slicing_engine::encoders::generated_plugin_encoders::ctb_encoder::CtbStoredLayerSettings,
+    String,
+> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = std::path::PathBuf::from(source_path.trim());
+        dragonfruit_slicing_engine::encoders::generated_plugin_encoders::ctb_encoder::read_ctb_layer_settings_from_file(
+            &source,
+            layer_number,
+        )
+    })
+    .await
+    .map_err(|err| format!("CTB layer inspection failed to join: {err}"))?
+}
+
+#[tauri::command]
 async fn read_print_layer_png(
     source_path: String,
     layer_number: u32,
@@ -3339,6 +3358,7 @@ fn main() {
             read_print_file_size,
             read_print_file_chunk,
             read_print_layer_png,
+            read_ctb_layer_settings,
             delete_print_temp_file,
             cleanup_stale_print_temp_files,
             cleanup_all_print_temp_files,

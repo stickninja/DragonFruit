@@ -44,6 +44,15 @@ test('material colors survive legacy load, persistence, duplication, and printer
       normalExposureSec: 2.3,
       scaleCompensationPct: { x: 1, y: 2, z: 3 },
       localSettingsByOutput: { '.ctb': { waitBeforeCure: 1.5 } },
+      ctbTimingV1: {
+        enabled: true,
+        defaults: {
+          bottom: { lightOffDelaySec: 30, waitTimeBeforeCureSec: 1, waitTimeAfterCureSec: 0, waitTimeAfterLiftSec: 0 },
+          normal: { lightOffDelaySec: 20, waitTimeBeforeCureSec: 2, waitTimeAfterCureSec: 0, waitTimeAfterLiftSec: 0 },
+        },
+        overrides: [{ id: 'layer-10', startLayer: 10, endLayer: 10, values: { lightOffDelaySec: 32 } }],
+        startupDummy: true,
+      },
       colorName: ' Red ', colorHex: '#aBc123',
     });
     const persistedBeforeDraft = storage.get('dragonfruit-profiles-v1');
@@ -65,17 +74,25 @@ test('material colors survive legacy load, persistence, duplication, and printer
     assert.equal(variant.localSettingsByOutput?.['.ctb']?.waitBeforeCure, 1.5);
     assert.notStrictEqual(variant.scaleCompensationPct, base.scaleCompensationPct);
     assert.notStrictEqual(variant.localSettingsByOutput, base.localSettingsByOutput);
+    assert.notStrictEqual(variant.ctbTimingV1, base.ctbTimingV1);
+    assert.notStrictEqual(variant.ctbTimingV1?.overrides, base.ctbTimingV1?.overrides);
     assert.notStrictEqual(variant.antiAliasingSettings, base.antiAliasingSettings);
 
     updateMaterialProfile(variantId, {
       colorName: 'Blue', colorHex: '#123456', normalExposureSec: 3.1, liftSpeedMmMin: 42,
       localSettingsByOutput: { '.ctb': { waitBeforeCure: 2.5 } },
+      ctbTimingV1: { ...variant.ctbTimingV1!, defaults: {
+        ...variant.ctbTimingV1!.defaults,
+        normal: { ...variant.ctbTimingV1!.defaults.normal, lightOffDelaySec: 24 },
+      } },
     });
     setActiveMaterialProfile(variantId);
     variant = getProfileStoreSnapshot().materialProfiles.find((material) => material.id === variantId)!;
     assert.equal(variant.normalExposureSec, 3.1);
     assert.equal(variant.liftSpeedMmMin, 42);
     assert.equal(variant.localSettingsByOutput?.['.ctb']?.waitBeforeCure, 2.5);
+    assert.equal(variant.ctbTimingV1?.defaults.normal.lightOffDelaySec, 24);
+    assert.equal(base.ctbTimingV1?.defaults.normal.lightOffDelaySec, 20);
     assert.equal(getProfileStoreSnapshot().materialProfiles.find((material) => material.id === baseId)?.normalExposureSec, 2.3);
     assert.equal(getProfileStoreSnapshot().materialProfiles.find((material) => material.id === baseId)?.liftSpeedMmMin, 60);
     assert.equal(getProfileStoreSnapshot().materialProfiles.find((material) => material.id === baseId)?.localSettingsByOutput?.['.ctb']?.waitBeforeCure, 1.5);
@@ -115,6 +132,8 @@ test('material colors survive legacy load, persistence, duplication, and printer
     assert.equal(reloadedVariant.normalExposureSec, 3.1);
     assert.equal(reloadedVariant.liftSpeedMmMin, 42);
     assert.equal(reloadedVariant.localSettingsByOutput['.ctb'].waitBeforeCure, 2.5);
+    assert.equal(reloadedVariant.ctbTimingV1.defaults.normal.lightOffDelaySec, 24);
+    assert.equal(reloadedVariant.ctbTimingV1.overrides[0].values.lightOffDelaySec, 32);
     const reloadedInvalid = reloaded.materialProfiles.find((material: { id: string }) => material.id === invalidId);
     assert.equal(reloadedInvalid.colorName, undefined);
     assert.equal(reloadedInvalid.colorHex, undefined);
@@ -124,12 +143,15 @@ test('material colors survive legacy load, persistence, duplication, and printer
     assert.ok(copiedVariant);
     assert.notEqual(copiedVariant.id, variantId);
     assert.notStrictEqual(copiedVariant.localSettingsByOutput, variant.localSettingsByOutput);
+    assert.notStrictEqual(copiedVariant.ctbTimingV1, variant.ctbTimingV1);
 
     const importedPrinterId = importPrinterBundle({ printer: getProfileStoreSnapshot().printerProfiles.find((printer) => printer.id === printerId), materials: [variant] });
     const imported = getProfileStoreSnapshot().materialProfiles.find((material) => material.printerProfileId === importedPrinterId)!;
     assert.equal(imported.colorName, 'Blue');
     assert.equal(imported.colorHex, '#123456');
     assert.notEqual(imported.id, variantId);
+    assert.equal(imported.ctbTimingV1?.startupDummy, true);
+    assert.notStrictEqual(imported.ctbTimingV1, variant.ctbTimingV1);
 
     updateMaterialProfile(variantId, { colorName: '', colorHex: undefined });
     const cleared = getProfileStoreSnapshot().materialProfiles.find((material) => material.id === variantId)!;

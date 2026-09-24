@@ -6,7 +6,7 @@ This roadmap orders the accepted changes to this fork. Complete and review each 
 | --- | --- | --- |
 | 0.1 | Configurable output filenames, including a saved pattern and live preview. | **Accepted by the user on 2026-09-23.** See [verification and remaining limits](phase-1-acceptance.md). |
 | 0.2 | Material colors and independent variants. | **Accepted by the user on 2026-09-24.** See [verification and remaining limits](phase-2-acceptance.md). |
-| 0.3 | CTB timing; individual and range overrides; an LOD calculator; startup dummy; and a per-layer preview inspector. Cover Saturn 2 and Saturn 3, simple and TSMC workflows. | Define acceptance checks using representative printer profiles and output inspection, implement and verify them, then obtain user acceptance. |
+| 0.3 | CTB timing; individual and range overrides; an LOD calculator; startup dummy; and a per-layer preview inspector. Cover Saturn 2 and Saturn 3, simple and TSMC workflows. | **Implemented; acceptance pending.** Focused tests and initial independent CTB inspection passed. Complete the remaining checks in [Phase 0.3 acceptance](phase-3-acceptance.md), then obtain explicit user acceptance. |
 | 0.4 | Multiple visible build plates sharing one printer and material selection. | Define acceptance checks for plate visibility, assignment, slicing, and saved scenes, implement and verify them, then obtain user acceptance. |
 
 ## Release boundary

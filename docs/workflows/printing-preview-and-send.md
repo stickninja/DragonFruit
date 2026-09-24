@@ -27,6 +27,43 @@ Use the vertical layer slider to inspect layers:
 
 During scrubbing, DragonFruit can use fast preview rendering paths to keep interaction responsive.
 
+For CTB V4/V5, the **Encoded layer settings** inspector reads the selected layer
+from the generated file on disk. It shows Z, exposure, light-off delay, three
+independent waits, lift/retract distances and speeds, and PWM. Loading and read
+errors replace the values; settings are never inferred from the currently edited
+material. Retract distance 1 is displayed as total lift minus retract distance 2.
+The inspector can collapse like the Printing panel; its scrollable body keeps
+all encoded fields and the estimate explanation accessible in smaller windows.
+
+## CTB timing and startup dummy
+
+For Saturn 2 and Saturn 3 CTB profiles, open the material's **Timing** tab and
+enable CTB timing. Set separate bottom and normal timings. Range overrides use
+inclusive, one-based **model layer** numbers. Single-layer overrides use the
+same start and end. Later matching rules take precedence only for the fields
+they specify. The LOD calculator adds constant-speed motion time to the desired
+pre-exposure rest; it leaves the independent wait fields unchanged.
+
+The optional startup dummy adds one file layer before model layer 1. It uses a
+tiny pixel, short exposure, low PWM and minimal lift. It shares the first real
+layer's Z; every model layer retains its original Z and raster sample height.
+The slider and total count use file layers, while the preview and inspector
+also label model layers and the startup dummy. During dummy preview loading,
+the preview stays blank instead of showing model geometry.
+
+Timing controls require CTB V4/V5 (including encrypted variants). Unsupported
+versions fail before mesh preparation; disable timing or select a supported
+version. With timing disabled, legacy export behavior is preserved. Changes to
+enabled CTB timing, exposure or motion settings invalidate the current artifact
+and require re-slicing.
+
+**Reslice Now** regenerates the preview without overwriting the previously saved
+file. The completed action becomes Preview, the old saved path is cleared, and
+**Export as file** becomes available. Export again to save the updated timings.
+This also applies when CTB timing is disabled before re-slicing. Previously the
+reslice handoff retained the earlier “Saved to” path; that inherited display bug
+is fixed.
+
 ## 3) Review print summary
 
 In the Printing panel, confirm:
@@ -36,6 +73,11 @@ In the Printing panel, confirm:
 - estimated print time
 - estimated volume
 - generated file name/format/size
+
+For enabled CTB timing, the estimate uses the completed job's settings snapshot:
+exposure + all three waits + the greater of motion time and light-off delay,
+summed over every file layer including the dummy. This UVtools-style estimate
+is not a firmware timing guarantee.
 
 ## 4) Export or send
 

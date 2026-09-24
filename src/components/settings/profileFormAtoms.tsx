@@ -19,6 +19,7 @@ import {
     type PrinterOutputFormat,
 } from '@/features/profiles/profileStore';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
+import { CtbTimingEditor } from './CtbTimingEditor';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -1982,6 +1983,7 @@ type PluginLocalMaterialSettingsSectionsProps = {
     activeTabId?: string;
     onActiveTabChange?: (tabId: string) => void;
     showTabBar?: boolean;
+    ctbTimingEnabled?: boolean;
 };
 
 export function PluginLocalMaterialSettingsSections({
@@ -1994,6 +1996,7 @@ export function PluginLocalMaterialSettingsSections({
     activeTabId: controlledActiveTabId,
     onActiveTabChange,
     showTabBar = true,
+    ctbTimingEnabled = false,
 }: PluginLocalMaterialSettingsSectionsProps) {
     if (!adapter || adapter.fields.length === 0) return null;
 
@@ -2023,8 +2026,14 @@ export function PluginLocalMaterialSettingsSections({
         const fallbackTabId = tabs[0]?.id;
         return adapter.fields
             .filter((field) => (field.placement?.tabId ?? fallbackTabId) === activeTabId)
+            .filter((field) => !ctbTimingEnabled || ![
+                'lightOffDelaySec', 'bottomLightOffDelaySec',
+                'waitTimeBeforeCureSec', 'waitTimeAfterCureSec', 'waitTimeAfterLiftSec',
+                'bottomWaitTimeBeforeCureSec', 'bottomWaitTimeAfterCureSec', 'bottomWaitTimeAfterLiftSec',
+                'waitTimeBottomLayerCount',
+            ].includes(field.key))
             .sort((a, b) => (a.placement?.order ?? 0) - (b.placement?.order ?? 0));
-    }, [activeTabId, adapter.fields, tabs]);
+    }, [activeTabId, adapter.fields, tabs, ctbTimingEnabled]);
 
     const sectionById = React.useMemo(() => {
         const map = new Map<string, { id: string; title: string; order?: number }>();
@@ -2113,6 +2122,10 @@ export function PluginLocalMaterialSettingsSections({
                     })}
                 </div>
             )}
+
+            {ctbTimingEnabled && activeTabId === 'simple' && <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Per-layer timing is controlled in the Timing tab while it is enabled.
+            </p>}
 
             {sectionGroups.length === 0 ? (
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -2294,6 +2307,7 @@ type ReplacementMaterialEditorShellProps = {
     activeTabStyle?: React.CSSProperties;
     outputFormat: string;
     settingsMode?: string;
+    formatVersion?: string;
     adapter: ReturnType<typeof getProfileLocalMaterialSettingsAdapter> | null;
     localSettingsByOutput: LocalSettingsByOutputDraft;
     onLocalSettingsByOutputChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
@@ -2309,6 +2323,7 @@ export function ReplacementMaterialEditorShell({
     outputFormat,
     activeTabStyle,
     settingsMode,
+    formatVersion,
     adapter,
     localSettingsByOutput,
     onLocalSettingsByOutputChange,
@@ -2317,6 +2332,11 @@ export function ReplacementMaterialEditorShell({
     const [minBodyHeight, setMinBodyHeight] = React.useState<number | null>(null);
 
     const renderTabBody = React.useCallback((tabId: string) => {
+        if (tabId === 'ctb-timing') {
+            return <CtbTimingEditor draft={draft} onDraftChange={onDraftChange}
+                outputValues={localSettingsByOutput} adapter={adapter}
+                settingsMode={settingsMode ?? 'simple'} formatVersion={formatVersion ?? 'v5'} />;
+        }
         if (tabId === 'meta') {
             return <MaterialProfileIdentitySection draft={draft} onChange={onDraftChange} />;
         }
@@ -2341,9 +2361,10 @@ export function ReplacementMaterialEditorShell({
                 replacementMode
                 activeTabId={tabId}
                 showTabBar={false}
+                ctbTimingEnabled={outputFormat.trim().toLowerCase() === '.ctb' && draft.ctbTimingV1?.enabled === true}
             />
         );
-    }, [adapter, draft, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, printerDitherBitDepth, settingsMode]);
+    }, [adapter, draft, formatVersion, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, printerDitherBitDepth, settingsMode]);
 
     React.useLayoutEffect(() => {
         const root = measureRootRef.current;

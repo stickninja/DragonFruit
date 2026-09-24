@@ -14,6 +14,8 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 import { appendSliceExtension, resolveSliceOutputExtension } from './sliceFilenameFormat';
+import { buildCtbLayerPlan, isCtbTimingPlanSupported, type CtbLayerPlanV1 } from './ctbLayerTiming';
+import { sliceProfileFingerprint } from '@/features/printing/ctbArtifact';
 
 function resolvePngCompressionStrategy(
     mode: PngCompressionStrategy,
@@ -230,6 +232,11 @@ export type SliceExportArtifact = {
     nativeTempPath: string | null;
     /** Output format identifier, e.g. ".nanodlp" or ".ctb". Used to route layer preview decoding to the correct plugin decoder. */
     outputFormat: string;
+    /** Snapshot of the export inputs, never recomputed from edited profiles. */
+    profileFingerprint?: string;
+    ctbLayerPlan?: CtbLayerPlanV1;
+    modelLayerCount?: number;
+    fileLayerCount?: number;
 };
 
 export type SliceExportResult = {
@@ -482,6 +489,15 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         materialProfile: options.materialProfile,
     });
 
+    const formatVersion = resolveOutputFormatVersion(format.outputFormat, options.printerProfile.display.formatVersion);
+    const settingsMode = resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode);
+    const ctbTimingConfig = format.outputFormat.toLowerCase().includes('ctb') && options.materialProfile.ctbTimingV1?.enabled
+        ? options.materialProfile.ctbTimingV1 : undefined;
+    if (ctbTimingConfig && !isCtbTimingPlanSupported(formatVersion ?? '', settingsMode ?? '')) {
+        throw new Error('CTB timing and startup dummy require CTB V4 or V5 with Simple, Two Stage, or All Fields settings. Select a supported CTB version or disable CTB timing.');
+    }
+    const profileFingerprint = sliceProfileFingerprint(options.printerProfile, options.materialProfile);
+
     logDebug('Export orchestrator start', {
         format: format.outputFormat,
         displayName: format.displayName,
@@ -728,6 +744,20 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
     const effectiveDitherPolicy = resolveEffectiveDitherPolicy(options);
 
+    const mergedMetadataJson = mergeMetadataOverridesIntoMetadata(
+        solidMesh.metadataJson, format.outputFormat, options.materialProfile, settingsMode,
+        options.printerProfile.display.outputFormat,
+    );
+    const mergedMetadata = ctbTimingConfig ? JSON.parse(mergedMetadataJson) as Record<string, unknown> : {};
+    const ctbLayerPlan = ctbTimingConfig ? buildCtbLayerPlan({
+        metadata: mergedMetadata, config: ctbTimingConfig, modelLayerCount: solidMesh.totalLayers,
+        layerHeightMm: solidMesh.layerHeightMm, settingsMode: settingsMode ?? '', formatVersion: formatVersion ?? '',
+    }) : undefined;
+    if (ctbLayerPlan) {
+        mergedMetadata.ctb = { ...(mergedMetadata.ctb as Record<string, unknown> ?? {}), layerPlanV1: ctbLayerPlan };
+    }
+    const fileLayerCount = ctbLayerPlan?.layers.length ?? solidMesh.totalLayers;
+
     const nativeJob = {
         outputFormat: format.outputFormat,
         formatVersion: resolveOutputFormatVersion(
@@ -792,13 +822,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         meshEncoding: meshTransportEncoding,
         meshQuantization: meshTransportQuantization,
         outputPath: options.outputPath?.trim() || null,
-        metadataJson: mergeMetadataOverridesIntoMetadata(
-            solidMesh.metadataJson,
-            format.outputFormat,
-            options.materialProfile,
-            resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode),
-            options.printerProfile.display.outputFormat,
-        ),
+        metadataJson: ctbLayerPlan ? JSON.stringify(mergedMetadata) : mergedMetadataJson,
     };
 
     const coreStartMs = performance.now();
@@ -845,7 +869,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     const totalElapsedMs = performance.now() - orchestratorStartMs;
     options.onProgress?.(progressTotal, progressTotal, 'Handoff');
     const layersPerSecond = totalElapsedMs > 0
-        ? (solidMesh.totalLayers * 1000) / totalElapsedMs
+        ? (fileLayerCount * 1000) / totalElapsedMs
         : null;
     const stageMeshAvgChunkBytes = stageMeshChunkCount > 0
         ? (cumulativeBytesStage / stageMeshChunkCount)
@@ -869,12 +893,16 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             byteSize: encodedArtifact.byteLen,
             nativeTempPath: encodedArtifact.tempPath,
             outputFormat: format.outputFormat,
+            profileFingerprint,
+            ctbLayerPlan,
+            modelLayerCount: solidMesh.totalLayers,
+            fileLayerCount,
         },
         benchmark: {
             totalElapsedMs,
             meshPrepMs,
             coreSlicingMs,
-            totalLayers: solidMesh.totalLayers,
+            totalLayers: fileLayerCount,
             layersPerSecond,
             jobConfig: {
                 outputFormat: format.outputFormat,
@@ -909,7 +937,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 buildWidthMm: nativeJob.buildWidthMm,
                 buildDepthMm: nativeJob.buildDepthMm,
                 layerHeightMm: nativeJob.layerHeightMm,
-                totalLayers: nativeJob.totalLayers,
+                totalLayers: fileLayerCount,
                 metadataJsonBytes: nativeJob.metadataJson.length,
                 exportThumbnailProvided: Boolean(options.exportThumbnailPng && options.exportThumbnailPng.length > 0),
                 exportThumbnailBytes: options.exportThumbnailPng?.length ?? 0,

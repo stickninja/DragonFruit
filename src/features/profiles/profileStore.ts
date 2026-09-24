@@ -1,5 +1,6 @@
 import printerPresetsData from '../../../profiles/printers';
 import materialTemplatesData from '../../../profiles/materials';
+import { sanitizeCtbTimingConfig, type CtbTimingConfigV1 } from '@/features/slicing/ctbTiming';
 import {
     getProfileLocalMaterialSettingsAdapter,
     getInstalledProfilePlugins,
@@ -305,6 +306,7 @@ export type MaterialProfile = {
     minimumAaAlphaPercent: number;
     antiAliasingSettings: MaterialAntiAliasingSettings;
     localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
+    ctbTimingV1?: CtbTimingConfigV1;
 };
 
 function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
@@ -980,6 +982,7 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((template as any).antiAliasingSettings),
         localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput),
+        ctbTimingV1: sanitizeCtbTimingConfig(template.ctbTimingV1),
         id: createDefaultMaterialIdFromTemplateName(template.name),
         printerProfileId: primaryPrinterId,
         officialTemplateId: typeof (template as any).templateId === 'string' && (template as any).templateId.trim().length > 0
@@ -1195,6 +1198,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
                         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((profile as any).antiAliasingSettings),
                         localSettingsByOutput: sanitizeLocalSettingsByOutput((profile as any).localSettingsByOutput),
+                        ctbTimingV1: sanitizeCtbTimingConfig(profile.ctbTimingV1),
                     };
                 })
                 .filter((profile): profile is MaterialProfile => profile !== null)
@@ -1421,6 +1425,7 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
             minimumAaAlphaPercent: 35,
             antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
             localSettingsByOutput: undefined,
+            ctbTimingV1: undefined,
         };
 
         activeMaterialByPrinter[nextState.activePrinterProfileId] = createdMaterial.id;
@@ -1742,6 +1747,7 @@ export function addMaterialProfile(
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(partial?.antiAliasingSettings),
         localSettingsByOutput: sanitizeLocalSettingsByOutput(partial?.localSettingsByOutput),
+        ctbTimingV1: sanitizeCtbTimingConfig(partial?.ctbTimingV1),
     };
 
     setState(ensureActiveMaterialForActivePrinter({
@@ -2056,6 +2062,9 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             localSettingsByOutput: updates.localSettingsByOutput !== undefined
                 ? sanitizeLocalSettingsByOutput(updates.localSettingsByOutput)
                 : profile.localSettingsByOutput,
+            ctbTimingV1: Object.prototype.hasOwnProperty.call(updates, 'ctbTimingV1')
+                ? sanitizeCtbTimingConfig(updates.ctbTimingV1)
+                : profile.ctbTimingV1,
             antiAliasingSettings: updates.antiAliasingSettings !== undefined
                 ? sanitizeMaterialAntiAliasingSettings(updates.antiAliasingSettings)
                 : profile.antiAliasingSettings,
@@ -2121,6 +2130,7 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
             scaleCompensationPct: { ...material.scaleCompensationPct },
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
+            ctbTimingV1: sanitizeCtbTimingConfig(material.ctbTimingV1),
         }))
         : [
             {
@@ -2145,6 +2155,7 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
                 minimumAaAlphaPercent: 35,
                 antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
                 localSettingsByOutput: undefined,
+                ctbTimingV1: undefined,
             },
         ];
 
@@ -2216,6 +2227,7 @@ export function createMaterialColorVariantDraft(source: MaterialProfile): Omit<M
         minimumAaAlphaPercent: source.minimumAaAlphaPercent,
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(source.antiAliasingSettings),
         localSettingsByOutput: sanitizeLocalSettingsByOutput(source.localSettingsByOutput),
+        ctbTimingV1: sanitizeCtbTimingConfig(source.ctbTimingV1),
     };
 }
 
@@ -2331,6 +2343,7 @@ export function importPrinterBundle(payload: unknown): string {
             minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(material.minimumAaAlphaPercent, 35),
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
+            ctbTimingV1: sanitizeCtbTimingConfig(material.ctbTimingV1),
         }));
 
     if (importedMaterials.length === 0) {
@@ -2356,6 +2369,7 @@ export function importPrinterBundle(payload: unknown): string {
             minimumAaAlphaPercent: 35,
             antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
             localSettingsByOutput: undefined,
+            ctbTimingV1: undefined,
         });
     }
 
@@ -2819,6 +2833,8 @@ export function applyOfficialMaterialProfileUpdate(materialProfileId: string): A
                 ),
                 localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput)
                     ?? item.localSettingsByOutput,
+                ctbTimingV1: sanitizeCtbTimingConfig(template.ctbTimingV1)
+                    ?? item.ctbTimingV1,
                 officialTemplateId: templateId,
                 officialTemplateVersion: latestVersion,
             };
