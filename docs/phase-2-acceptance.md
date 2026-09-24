@@ -1,6 +1,6 @@
 # Phase 0.2 acceptance: material colors and independent variants
 
-**Status:** Implemented; awaiting user acceptance. This phase is not accepted.
+**Status:** Accepted by the user on 2026-09-24.
 
 The behavior and manual checklist below define the Phase 0.2 target. The **Verification performed** section records checks actually completed; checks still marked pending must not be treated as passed.
 
@@ -30,9 +30,9 @@ Record platform, build, profile fixture, and observed result for each check befo
 The primary agent completed these checks:
 
 - The focused material-color and filename tests passed: 11/11 (two Phase 2 workflow tests and nine Phase 1 filename tests). Focused ESLint for `materialLabel` and the new test passed. For `ProfileSettingsModal`, `profileFormAtoms`, `profileStore`, and `pluginRegistry`, lint output matched the baseline exactly: 191 inherited errors and 43 warnings, with no new error or warning signatures.
-- The optimized frontend build, TypeScript check, and isolated Windows release no-bundle native build passed. No installer was built, version was changed, or release published.
+- During feature review, the optimized frontend build, TypeScript check, and isolated Windows release no-bundle native build passed. The subsequent 0.2.0 optimized Windows and installer validation is recorded in the [0.2.0 release notes](releases/0.2.0.md).
 - In a local full-app browser run at 1280 × 720 with Saturn 2 selected, a legacy material retained its existing list label. Starting a color variant and cancelling left the material list unchanged. Creating Grey (`#808080`) with exposure 2.2 produced an independent profile; creating Black copied exposure 2.2, and changing Black to 3.3 left Grey at 2.2. Both profiles and their independent exposure values remained after browser reload. The Meta editor was readable at the tested viewport. Browser automation briefly filled Black's color input with `#202020` but did not commit that value to application state, so arbitrary swatch persistence was not verified in the browser.
 - Native printer-bundle import/export passed for Grey (`#808080`, exposure 2.2), Black (`#202020`, exposure 3.3), and a legacy colorless profile (exposure 2.8). All three CTB local settings maps matched exactly across the round trip. In the native picker, changing Black with the keyboard to `#242424`, then saving and exporting it, preserved the color, exposure 3.3, motion settings, and wait settings. The material bundle's suggested filename was `phase_2_resin_black-bundle.json`.
 - Individual native material import/re-export passed for Black (`#242424`). The re-imported profile had a new ID; JSON comparison found no differences in the remaining material properties, including color, exposure 3.3, AA settings, and full local settings maps, after excluding the expected `id`, `printerProfileId`, and `officialTemplateVersion` differences.
 
-No actual sliced-file export or hardware print was performed for this phase; filename integration is covered by the passing automated tests above. Phase 0.2 is implemented and awaiting user acceptance; it is not yet accepted.
+No actual sliced-file export or hardware print was performed for this phase; filename integration is covered by the passing automated tests above. The user accepted the Phase 0.2 feature on 2026-09-24. The 0.2.0 package has passed build and installation checks.
