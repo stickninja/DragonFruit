@@ -33,6 +33,16 @@ This page is the developer-facing source of truth for client-side persistence us
 | `dragonfruit.material.activeByPrinterProfile.v1` | localStorage + sessionStorage | Active material selection per printer profile      |
 | `dragonfruit-plugins-v1`                         | localStorage                  | Installed plugin registry + trust/install metadata |
 
+Material color metadata is stored as optional fields on ordinary material
+profiles in the `dragonfruit-profiles-v1` envelope: `colorName` is trimmed
+display text, and `colorHex` is a normalized `#RRGGBB` swatch value. Profiles
+without either field remain valid and retain their existing appearance.
+Color variants are separate material profiles with independent IDs and full
+settings; variant creation copies the current settings into a new profile.
+There is no separate variant storage key or inherited settings layer. Profile
+import/export and the legacy profile fallback must preserve existing data and
+remain compatible with profiles that lack these optional fields.
+
 ## Slicing and printing keys
 
 | Key                                                 | Medium                        | Purpose                                                                |

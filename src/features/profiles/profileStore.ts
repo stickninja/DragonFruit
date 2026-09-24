@@ -284,6 +284,8 @@ export type MaterialProfile = {
     officialTemplateVersion?: number;
     name: string;
     brand: string;
+    colorName?: string;
+    colorHex?: string;
     currencyCode: string;
     bottlePrice: number;
     bottleCapacityMl: number;
@@ -309,6 +311,16 @@ function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return fallback;
     return Math.max(0, Math.min(100, numeric));
+}
+
+export function normalizeMaterialColorName(value: unknown): string | undefined {
+    return typeof value === 'string' ? value.trim() || undefined : undefined;
+}
+
+export function normalizeMaterialColorHex(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const candidate = value.trim();
+    return /^#[0-9a-f]{6}$/i.test(candidate) ? candidate.toUpperCase() : undefined;
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -962,6 +974,8 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
 
     return getAllMaterialTemplates().map((template) => ({
         ...template,
+        colorName: normalizeMaterialColorName(template.colorName),
+        colorHex: normalizeMaterialColorHex(template.colorHex),
         currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((template as any).antiAliasingSettings),
@@ -1160,6 +1174,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         officialTemplateVersion: normalizeProfileVersion(materialProfile.officialTemplateVersion, normalizeProfileVersion((matchedTemplate as any)?.profileVersion, 1)),
                         name: profile.name,
                         brand: typeof (profile as any).brand === 'string' ? (profile as any).brand : 'Default',
+                        colorName: normalizeMaterialColorName(materialProfile.colorName),
+                        colorHex: normalizeMaterialColorHex(materialProfile.colorHex),
                         currencyCode: typeof (profile as any).currencyCode === 'string' ? (profile as any).currencyCode.toUpperCase() : 'USD',
                         bottlePrice: Number((profile as any).bottlePrice) || 0,
                         bottleCapacityMl: Number((profile as any).bottleCapacityMl) || 1000,
@@ -1705,6 +1721,8 @@ export function addMaterialProfile(
             : undefined,
         name: partial?.name?.trim() || `Material ${state.materialProfiles.length + 1}`,
         brand: partial?.brand?.trim() || 'Default',
+        colorName: normalizeMaterialColorName(partial?.colorName),
+        colorHex: normalizeMaterialColorHex(partial?.colorHex),
         currencyCode: partial?.currencyCode?.trim().toUpperCase() || 'USD',
         bottlePrice: partial?.bottlePrice ?? 0,
         bottleCapacityMl: partial?.bottleCapacityMl ?? 1000,
@@ -2027,6 +2045,12 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             ...updates,
             printerProfileId: profile.printerProfileId,
             brand: updates.brand !== undefined ? updates.brand : profile.brand,
+            colorName: Object.prototype.hasOwnProperty.call(updates, 'colorName')
+                ? normalizeMaterialColorName(updates.colorName)
+                : profile.colorName,
+            colorHex: Object.prototype.hasOwnProperty.call(updates, 'colorHex')
+                ? normalizeMaterialColorHex(updates.colorHex)
+                : profile.colorHex,
             currencyCode: updates.currencyCode !== undefined ? updates.currencyCode.toUpperCase() : profile.currencyCode,
             name: updates.name !== undefined ? updates.name : profile.name,
             localSettingsByOutput: updates.localSettingsByOutput !== undefined
@@ -2094,6 +2118,9 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
             printerProfileId: duplicateId,
             officialTemplateId: undefined,
             officialTemplateVersion: undefined,
+            scaleCompensationPct: { ...material.scaleCompensationPct },
+            antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
+            localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
         }))
         : [
             {
@@ -2163,6 +2190,33 @@ export function movePrinterProfile(id: string, beforeId?: string): void {
         ...state,
         printerProfiles: nextPrinterProfiles,
     });
+}
+
+/** Prepare an independent color variant without modifying the profile store. */
+export function createMaterialColorVariantDraft(source: MaterialProfile): Omit<MaterialProfile, 'id' | 'printerProfileId'> {
+    return {
+        name: source.name,
+        brand: source.brand,
+        colorName: undefined,
+        colorHex: undefined,
+        officialTemplateId: undefined,
+        officialTemplateVersion: undefined,
+        currencyCode: source.currencyCode,
+        bottlePrice: source.bottlePrice,
+        bottleCapacityMl: source.bottleCapacityMl,
+        resinFamily: source.resinFamily,
+        scaleCompensationPct: { ...source.scaleCompensationPct },
+        layerHeightMm: source.layerHeightMm,
+        normalExposureSec: source.normalExposureSec,
+        bottomExposureSec: source.bottomExposureSec,
+        bottomLayerCount: source.bottomLayerCount,
+        liftDistanceMm: source.liftDistanceMm,
+        liftSpeedMmMin: source.liftSpeedMmMin,
+        retractSpeedMmMin: source.retractSpeedMmMin,
+        minimumAaAlphaPercent: source.minimumAaAlphaPercent,
+        antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(source.antiAliasingSettings),
+        localSettingsByOutput: sanitizeLocalSettingsByOutput(source.localSettingsByOutput),
+    };
 }
 
 export type PrinterBundleExportPayload = {
@@ -2254,6 +2308,8 @@ export function importPrinterBundle(payload: unknown): string {
             brand: typeof material.brand === 'string' && material.brand.trim().length > 0
                 ? material.brand.trim()
                 : 'Default',
+            colorName: normalizeMaterialColorName(material.colorName),
+            colorHex: normalizeMaterialColorHex(material.colorHex),
             currencyCode: typeof material.currencyCode === 'string' && material.currencyCode.trim().length > 0
                 ? material.currencyCode.trim().toUpperCase()
                 : 'USD',
@@ -2736,6 +2792,8 @@ export function applyOfficialMaterialProfileUpdate(materialProfileId: string): A
                 ...item,
                 name: template.name,
                 brand: template.brand,
+                colorName: normalizeMaterialColorName(template.colorName),
+                colorHex: normalizeMaterialColorHex(template.colorHex),
                 currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : item.currencyCode,
                 bottlePrice: Number((template as any).bottlePrice) || item.bottlePrice,
                 bottleCapacityMl: Number((template as any).bottleCapacityMl) || item.bottleCapacityMl,

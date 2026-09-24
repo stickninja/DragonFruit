@@ -477,6 +477,10 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
   return {
     name,
     brand: boundedString(value.brand, 80) || 'Default',
+    colorName: boundedString(value.colorName, 80) || undefined,
+    colorHex: typeof value.colorHex === 'string' && /^#[0-9a-f]{6}$/i.test(value.colorHex.trim())
+      ? value.colorHex.trim().toUpperCase()
+      : undefined,
     currencyCode: (boundedString(value.currencyCode, 3) || 'USD').toUpperCase(),
     bottlePrice: sanitizeNumber(value.bottlePrice, 0, 0, 1000000),
     bottleCapacityMl: sanitizeNumber(value.bottleCapacityMl, 1000, 1, 1000000),

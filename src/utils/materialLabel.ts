@@ -2,6 +2,8 @@ export type MaterialLabelInput = {
   brand?: string | null;
   resinFamily?: string | null;
   name?: string | null;
+  colorName?: string | null;
+  colorHex?: string | null;
 };
 
 export function formatResinFamilyLabel(resinFamily: string | null | undefined): string {
@@ -64,6 +66,8 @@ export function resolveCompositeMaterialLabel(material: MaterialLabelInput | nul
   const brand = (material.brand ?? '').trim();
   const resinFamilyLabel = formatResinFamilyLabel(material.resinFamily);
   const name = (material.name ?? '').trim();
+  const colorName = (material.colorName ?? '').trim();
+  const colorHex = (material.colorHex ?? '').trim();
 
   let label = '';
   if (brand) {
@@ -75,7 +79,23 @@ export function resolveCompositeMaterialLabel(material: MaterialLabelInput | nul
   if (name) {
     label = appendWithWordOverlap(label, name);
   }
+  if (colorName) {
+    label = appendWithWordOverlap(label, colorName);
+  } else if (/^#[0-9a-fA-F]{6}$/.test(colorHex)) {
+    label = appendWithWordOverlap(label, colorHex.toUpperCase());
+  }
 
   const normalized = label.trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+/** Short profile-list label; legacy profiles keep their original name. */
+export function resolveMaterialProfileListLabel(material: MaterialLabelInput | null | undefined): string | null {
+  if (!material) return null;
+  const name = (material.name ?? '').trim();
+  const colorName = (material.colorName ?? '').trim();
+  const colorHex = (material.colorHex ?? '').trim();
+  const color = colorName || (/^#[0-9a-fA-F]{6}$/.test(colorHex) ? colorHex.toUpperCase() : '');
+  const label = appendWithWordOverlap(name, color);
+  return label || null;
 }

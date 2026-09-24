@@ -576,6 +576,32 @@ export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProf
                     value={draft.name}
                     onChange={(value) => onChange((prev) => ({ ...prev, name: value }))}
                 />
+                <LabeledInput
+                    label="Color name (optional)"
+                    value={draft.colorName ?? ''}
+                    onChange={(value) => onChange((prev) => ({ ...prev, colorName: value }))}
+                />
+                <div className="space-y-1">
+                    <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Color swatch (optional)</div>
+                    <div className="flex h-[36px] items-center gap-2">
+                        {draft.colorHex ? (
+                            <>
+                                <input
+                                    type="color"
+                                    value={draft.colorHex}
+                                    onChange={(event) => onChange((prev) => ({ ...prev, colorHex: event.target.value }))}
+                                    aria-label="Material color swatch"
+                                    className="h-8 w-10 cursor-pointer rounded border p-0.5"
+                                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                                />
+                                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{draft.colorHex}</span>
+                                <button type="button" onClick={() => onChange((prev) => ({ ...prev, colorHex: undefined }))} className="text-xs underline" style={{ color: 'var(--text-muted)' }}>Clear</button>
+                            </>
+                        ) : (
+                            <button type="button" onClick={() => onChange((prev) => ({ ...prev, colorHex: '#808080' }))} className="text-xs underline" style={{ color: 'var(--text-muted)' }}>Set swatch</button>
+                        )}
+                    </div>
+                </div>
                 <LabeledResinFamilySelect
                     label="Resin Family"
                     value={draft.resinFamily}

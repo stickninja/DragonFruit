@@ -12,6 +12,7 @@ import {
   DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   addMaterialProfile,
   addPrinterProfileFromPreset,
+  createMaterialColorVariantDraft,
   disconnectPrinterNetworkDevice,
   duplicatePrinterProfileAsCustom,
   getActivePrinterProfile,
@@ -40,6 +41,7 @@ import {
   type PrinterOutputFormat,
   type PrinterProfile,
 } from '@/features/profiles/profileStore';
+import { resolveCompositeMaterialLabel, resolveMaterialProfileListLabel } from '@/utils/materialLabel';
 import {
   getAvailableProfileNetworkModes,
   getDefaultProfileNetworkUiAdapter,
@@ -319,6 +321,7 @@ export function ProfileSettingsModal({
   const [selectedManufacturer, setSelectedManufacturer] = React.useState<string | null>(null);
   const [selectedResinFamily, setSelectedResinFamily] = React.useState<MaterialProfile['resinFamily'] | null>(null);
   const [isCreateMaterialOpen, setIsCreateMaterialOpen] = React.useState(false);
+  const [colorVariantSourceName, setColorVariantSourceName] = React.useState<string | null>(null);
   const [showMaterialPresetPicker, setShowMaterialPresetPicker] = React.useState(false);
   const [materialPresetSearch, setMaterialPresetSearch] = React.useState('');
   const [selectedMaterialPresetBrand, setSelectedMaterialPresetBrand] = React.useState<string>('');
@@ -2786,6 +2789,8 @@ export function ProfileSettingsModal({
     setEditMaterialDraft({
       name: selectedMaterial.name,
       brand: selectedMaterial.brand,
+      colorName: selectedMaterial.colorName,
+      colorHex: selectedMaterial.colorHex,
       currencyCode: selectedMaterial.currencyCode || 'USD',
       bottlePrice: selectedMaterial.bottlePrice,
       bottleCapacityMl: selectedMaterial.bottleCapacityMl,
@@ -2870,6 +2875,7 @@ export function ProfileSettingsModal({
 
   const handleAddMaterial = React.useCallback(() => {
     if (!selectedPrinter) return;
+    setColorVariantSourceName(null);
     setMaterialEditorTab('meta');
     setNewMaterialDraft({
       name: `Material ${printerMaterials.length + 1}`,
@@ -2900,11 +2906,14 @@ export function ProfileSettingsModal({
 
   const handleApplyMaterialLibraryPreset = React.useCallback((preset: MaterialPreset) => {
     if (!selectedPrinter) return;
+    setColorVariantSourceName(null);
     setShowMaterialPresetPicker(false);
     setMaterialEditorTab('meta');
     setNewMaterialDraft({
       name: preset.name,
       brand: preset.brand ?? 'Default',
+      colorName: preset.colorName,
+      colorHex: preset.colorHex,
       currencyCode: preset.currencyCode ?? 'USD',
       bottlePrice: preset.bottlePrice ?? 0,
       bottleCapacityMl: preset.bottleCapacityMl ?? 1000,
@@ -2953,6 +2962,8 @@ export function ProfileSettingsModal({
       const newId = addMaterialProfile(selectedPrinter.id, {
         name: preset.name,
         brand: (preset.brand ?? 'Default').trim() || 'Default',
+        colorName: preset.colorName,
+        colorHex: preset.colorHex,
         currencyCode: preset.currencyCode ?? 'USD',
         bottlePrice: preset.bottlePrice ?? 0,
         bottleCapacityMl: preset.bottleCapacityMl ?? 1000,
@@ -3002,6 +3013,7 @@ export function ProfileSettingsModal({
     setSelectedMaterialId(newId);
     setActiveMaterialProfile(newId);
     setIsCreateMaterialOpen(false);
+    setColorVariantSourceName(null);
   }, [newMaterialDraft, newMaterialLocalSettingsByOutput, printerMaterials.length, selectedPrinter]);
 
   const requestDeleteSelectedMaterial = React.useCallback(() => {
@@ -3083,6 +3095,8 @@ export function ProfileSettingsModal({
     const newId = addMaterialProfile(selectedPrinter.id, {
       name: baseName,
       brand: selectedMaterial.brand,
+      colorName: selectedMaterial.colorName,
+      colorHex: selectedMaterial.colorHex,
       currencyCode: selectedMaterial.currencyCode,
       bottlePrice: selectedMaterial.bottlePrice,
       bottleCapacityMl: selectedMaterial.bottleCapacityMl,
@@ -3106,6 +3120,19 @@ export function ProfileSettingsModal({
     setShowOfficialMaterialLockDialog(false);
     setIsMaterialEditorOpen(true);
   }, [selectedMaterial, selectedPrinter]);
+
+  const handleCreateColorVariant = React.useCallback(() => {
+    if (!selectedMaterial || !selectedPrinter) return;
+    setColorVariantSourceName(selectedMaterial.name);
+    setNewMaterialDraft(createMaterialColorVariantDraft(selectedMaterial));
+    setNewMaterialLocalSettingsByOutput(mergeWithLocalSettingsDefaults(
+      selectedPrinter.display.outputFormat,
+      selectedResolvedSettingsMode,
+      selectedMaterial.localSettingsByOutput,
+    ));
+    setMaterialEditorTab('meta');
+    setIsCreateMaterialOpen(true);
+  }, [selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
 
   const triggerImageUpload = React.useCallback((printerId: string) => {
     setUploadTargetPrinterId(printerId);
@@ -3186,7 +3213,7 @@ export function ProfileSettingsModal({
         material: selectedMaterial,
       };
 
-      const safeName = selectedMaterial.name.replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
+      const safeName = (resolveMaterialProfileListLabel(selectedMaterial) ?? selectedMaterial.name).replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
       const suggestedFilename = `${safeName || 'material-profile'}-bundle.json`;
       const bytes = new TextEncoder().encode(JSON.stringify(payload, null, 2));
 
@@ -3232,6 +3259,8 @@ export function ProfileSettingsModal({
           brand: typeof source.brand === 'string' && source.brand.trim().length > 0
             ? source.brand.trim()
             : 'Default',
+          colorName: source.colorName,
+          colorHex: source.colorHex,
           currencyCode: typeof source.currencyCode === 'string' && source.currencyCode.trim().length > 0
             ? source.currencyCode.trim().toUpperCase()
             : 'USD',
@@ -4319,7 +4348,8 @@ export function ProfileSettingsModal({
                             <div className="flex items-center justify-between gap-2">
                               <span className="inline-flex min-w-0 items-center gap-1.5 truncate font-semibold">
                                 {isOfficial && <Lock className="w-3.5 h-3.5 shrink-0" />}
-                                <span className="truncate">{material.name}</span>
+                                {material.colorHex && <span aria-hidden="true" className="h-3 w-3 shrink-0 rounded-full border" style={{ background: material.colorHex, borderColor: 'var(--border-strong)' }} />}
+                                <span className="truncate">{resolveMaterialProfileListLabel(material) ?? material.name}</span>
                               </span>
                               <span className="tabular-nums">{Math.round(material.layerHeightMm * 1000)}μm</span>
                             </div>
@@ -4358,6 +4388,16 @@ export function ProfileSettingsModal({
                   >
                     <Edit3 className="w-3.5 h-3.5" />
                     Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCreateColorVariant}
+                    disabled={!selectedMaterial}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                    title="Copy all print settings into a separate editable color profile"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Color variant
                   </button>
                   <button
                     type="button"
@@ -4692,7 +4732,7 @@ export function ProfileSettingsModal({
                       ? `Edit ${replacementMaterialModalLabel} Material Profile`
                       : 'Material Profile Settings'}
                   </h3>
-                  <p className="ui-meta">{selectedMaterial.name} • {selectedMaterial.brand}</p>
+                  <p className="ui-meta">{resolveCompositeMaterialLabel(selectedMaterial) ?? selectedMaterial.name}</p>
                 </div>
                 <button
                   type="button"
@@ -5394,11 +5434,13 @@ export function ProfileSettingsModal({
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    {usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
+                    {colorVariantSourceName
+                      ? 'Create Color Variant'
+                      : usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
                       ? `Create ${replacementMaterialModalLabel} Material Profile`
                       : 'Create Material Profile'}
                   </h3>
-                  <p className="ui-meta">{selectedPrinter.name}</p>
+                  <p className="ui-meta">{colorVariantSourceName ? `Based on ${colorVariantSourceName} · ${selectedPrinter.name}` : selectedPrinter.name}</p>
                 </div>
                 <button
                   type="button"
@@ -5462,7 +5504,7 @@ export function ProfileSettingsModal({
                   style={accentSecondaryActionStyle92}
                 >
                   <Check className="w-3.5 h-3.5" />
-                  Save Material
+                  {colorVariantSourceName ? 'Create Variant' : 'Save Material'}
                 </button>
               </div>
             </div>

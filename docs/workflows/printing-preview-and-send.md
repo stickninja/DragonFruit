@@ -8,6 +8,14 @@ Printing mode is available when printing workspace data exists.
 
 If scene changes invalidate the current slice, DragonFruit can require re-slicing before continuing.
 
+Before slicing, choose the material profile in the material selector. Legacy
+profiles keep their original label; profiles with color metadata show the
+material name with its color name or swatch. A color variant is a separate
+profile with its own print settings, so select the profile whose settings
+should apply to the job. Statistics and slicing use a composite label that
+includes the material color, and that label supplies the `{material_name}`
+filename placeholder.
+
 ## 2) Scrub layers
 
 Use the vertical layer slider to inspect layers:
