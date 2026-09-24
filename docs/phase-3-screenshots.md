@@ -22,12 +22,12 @@ Target extra rest, motion-time correction, travel breakdown, and the calculated 
 
 ## Startup dummy preview
 
-The file-layer inspector identifies the startup dummy separately from the first real model layer.
+The left-aligned file-layer inspector above the printer and material stats card identifies the startup dummy separately from the first real model layer.
 
 ![Startup dummy in the per-layer inspector](images/phase-3/03-startup-dummy-preview.png)
 
 ## Layer override preview
 
-An individual or range override appears in the per-layer inspector with its resolved timing values.
+The left-aligned per-layer inspector above the printer and material stats card shows resolved timing for an individual or range override.
 
 ![Resolved layer override in the per-layer inspector](images/phase-3/04-layer-override-preview.png)

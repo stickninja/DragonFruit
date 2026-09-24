@@ -25,6 +25,7 @@ type PrintingPanelProps = {
   onSendToUvTools?: () => void;
   sliceIntent?: 'file' | 'upload' | 'print' | 'preview' | 'uvtools' | null;
   savedFilePath?: string | null;
+  bodyMaxHeight?: string;
 };
 
 export function PrintingPanel({
@@ -49,6 +50,7 @@ export function PrintingPanel({
   onSendToUvTools,
   sliceIntent = null,
   savedFilePath = null,
+  bodyMaxHeight,
 }: PrintingPanelProps) {
   const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [revealingSavedPath, setRevealingSavedPath] = React.useState(false);
@@ -109,7 +111,7 @@ export function PrintingPanel({
         )}
       />
 
-      {isExpanded && <div className="px-3 pb-3 space-y-2.5">
+      {isExpanded && <div className="px-3 pb-3 space-y-2.5 custom-scrollbar" style={bodyMaxHeight ? { maxHeight: bodyMaxHeight, overflowY: 'auto' } : undefined}>
         <div className="rounded-md border p-2.5 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
           <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Printer</div>
           <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{printerName}</div>

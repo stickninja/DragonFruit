@@ -2933,6 +2933,7 @@ export default function Home() {
   });
   const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
   const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
+  const [modelStatsCardWidthPx, setModelStatsCardWidthPx] = React.useState(320);
   const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
   const trackSupportCollectionsInHome = scene.mode !== 'support';
   
@@ -3475,6 +3476,7 @@ export default function Home() {
       const safetyGapPx = 14;
       const measured = Math.ceil(rect.height + bottomMarginPx + safetyGapPx);
       setModelStatsBottomClearancePx(Math.max(220, measured));
+      setModelStatsCardWidthPx(Math.ceil(rect.width));
     };
 
     updateClearance();
@@ -4090,6 +4092,10 @@ export default function Home() {
   }, [selectedPrintingLayerPreviewUrl]);
 
   const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
+  const hasCtbPrintingInspector = scene.mode === 'printing' && printingArtifact?.outputFormat.toLowerCase().includes('ctb');
+  // Split the left rail between Printing and encoded settings, reserving both
+  // headers/gaps and the measured stats card below. Each body scrolls locally.
+  const printingCtbPanelBodyMaxHeight = `min(22rem, max(4rem, calc((100vh - var(--topbar-height) - ${modelStatsBottomClearancePx + 132}px) / 2)))`;
   const activeSliceProfileFingerprint = React.useMemo(() => {
     return sliceProfileFingerprint(activePrinterProfile, activeMaterialProfile);
   }, [activeMaterialProfile, activePrinterProfile]);
@@ -19080,6 +19086,7 @@ export default function Home() {
         ) : scene.mode === 'printing' ? (
           <>
             <PrintingPanel
+              bodyMaxHeight={hasCtbPrintingInspector ? printingCtbPanelBodyMaxHeight : undefined}
               outputName={printingArtifact?.outputName ?? null}
               outputFormat={printingArtifact?.outputName?.split('.').pop() ? `.${printingArtifact.outputName.split('.').pop()}` : null}
               outputSizeLabel={printingOutputSizeLabel}
@@ -19112,9 +19119,6 @@ export default function Home() {
               sliceIntent={completedSliceIntent}
               savedFilePath={completedSaveDestinationPath}
             />
-            {printingArtifact?.outputFormat.toLowerCase().includes('ctb') && (
-              <CtbLayerInspector key="printing-ctb-layer-inspector" artifact={printingArtifact} layerNumber={printingSelectedLayer} bottomClearancePx={modelStatsBottomClearancePx} />
-            )}
           </>
         ) : (
           <>
@@ -19818,6 +19822,12 @@ export default function Home() {
               <SnapAngleReadout />
               <RotationHintTooltip />
             </>
+          )}
+
+          {hasCtbPrintingInspector && printingArtifact && scene.models.length > 0 && (
+            <div className="absolute left-3 z-30 pointer-events-auto" style={{ bottom: modelStatsBottomClearancePx, width: modelStatsCardWidthPx }}>
+              <CtbLayerInspector artifact={printingArtifact} layerNumber={printingSelectedLayer} bodyMaxHeight={printingCtbPanelBodyMaxHeight} />
+            </div>
           )}
 
           {scene.models.length > 0 && (

@@ -32,8 +32,11 @@ from the generated file on disk. It shows Z, exposure, light-off delay, three
 independent waits, lift/retract distances and speeds, and PWM. Loading and read
 errors replace the values; settings are never inferred from the currently edited
 material. Retract distance 1 is displayed as total lift minus retract distance 2.
-The inspector can collapse like the Printing panel; its scrollable body keeps
-all encoded fields and the estimate explanation accessible in smaller windows.
+The inspector sits on the left directly above the printer/material statistics
+card, matching its width. It can collapse like the Printing panel. Both panels
+use bounded scrollable bodies to keep their controls accessible without overlap
+in smaller windows; the inspector includes all encoded fields and the estimate
+explanation.
 
 ## CTB timing and startup dummy
 
