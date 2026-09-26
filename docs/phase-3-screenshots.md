@@ -1,6 +1,6 @@
 # Phase 0.3 screenshots
 
-These screenshots show synthetic review profiles; physical printer timing has not been verified, and Phase 0.3 awaits user acceptance.
+These screenshots show synthetic review profiles. The user reported a successful DragonFruit LOD hardware check and accepted Phase 0.3 on 2026-09-26; the setup details and remaining hardware limits are recorded in the [acceptance evidence](phase-3-acceptance.md).
 
 ## Timing defaults
 
