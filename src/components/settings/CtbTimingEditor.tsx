@@ -123,6 +123,26 @@ function MotionNumber({ label, value, onChange }: {
   </label>;
 }
 
+function PwmNumber({ value, onChange }: {
+  value: number | undefined; onChange: (next: number | undefined) => void;
+}) {
+  const [raw, setRaw] = React.useState<string | null>(null);
+  const shown = raw ?? (value === undefined ? '' : String(value));
+  const parsed = Number(shown);
+  const invalid = shown !== '' && (!shown.trim() || !Number.isFinite(parsed) || parsed < 0 || parsed > 100);
+  return <label className="block space-y-1 text-xs">
+    <span style={{ color: 'var(--text-muted)' }}>Projector PWM (%)</span>
+    <input className={fieldClass} style={cardStyle} type="text" inputMode="decimal"
+      aria-invalid={invalid} value={shown} placeholder="Inherit"
+      onBlur={() => { if (!invalid) setRaw(null); }} onChange={(event) => {
+        const next = event.target.value;
+        setRaw(next);
+        onChange(next === '' ? undefined : next.trim() ? Number(next) : Number.NaN);
+      }} />
+    {invalid && <span role="alert" style={{ color: 'var(--danger, #f87171)' }}>Enter a percentage from 0 to 100, or clear to inherit.</span>}
+  </label>;
+}
+
 export function CtbTimingEditor({ draft, onDraftChange, outputValues, adapter, settingsMode, formatVersion, motionCapability }: Props) {
   const values = outputValues['.ctb'] ?? {};
   const config = draft.ctbTimingV1 ?? deriveLegacyConfig(values);
@@ -180,7 +200,7 @@ export function CtbTimingEditor({ draft, onDraftChange, outputValues, adapter, s
         Use per-layer CTB settings
       </label>
       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-        When enabled, this tab controls CTB timing and range lift/retract motion for model layers. Legacy timing and bottom/normal motion settings on the Simple tab apply when this switch is off.
+        When enabled, this tab controls CTB timing and range lift/retract motion and projector PWM for model layers. Bottom/normal motion and projector PWM stay in the material settings tab and supply the fallback. Legacy timing applies when this switch is off.
       </p>
       {!supported && <p className="text-xs" role="alert" style={{ color: 'var(--danger, #f87171)' }}>
         Select CTB V4 or V5 and Simple, Two Stage, or All Fields mode in the printer profile to use per-layer timing. Current selection: {formatVersion}, {settingsMode}.
@@ -233,6 +253,19 @@ export function CtbTimingEditor({ draft, onDraftChange, outputValues, adapter, s
               if (value === undefined) delete values[key]; else values[key] = value;
               return { ...item, values };
             })} />)}
+        </div>
+        <div className="border-t pt-2 space-y-2" style={{ borderColor: 'var(--border-subtle)' }}>
+          <div className="text-xs font-semibold">Projector light</div>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            Blank leaves an earlier matching range’s PWM in effect, or inherits burn-in or normal Projector PWM from Light Settings. Later matching ranges win. A saved 0% override is distinct from inheriting.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <PwmNumber value={rule.pwmPercent} onChange={(value) => updateRule(rule.id, (item) => {
+              const next = { ...item };
+              if (value === undefined) delete next.pwmPercent; else next.pwmPercent = value;
+              return next;
+            })} />
+          </div>
         </div>
         <div className="border-t pt-2 space-y-2" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="text-xs font-semibold">Lift and retract</div>

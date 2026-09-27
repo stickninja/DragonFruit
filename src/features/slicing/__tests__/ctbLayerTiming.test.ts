@@ -86,6 +86,55 @@ test('zero PWM percent retains legacy CTB full-power fallback', () => {
   assert.deepEqual(plan.layers.map((layer) => layer.pwm), [255, 255, 255]);
 });
 
+test('PWM overrides resolve independently across inclusive overlaps, defaults, modes, versions, and dummy', () => {
+  const active = { ...config, startupDummy: true, overrides: [
+    { id: 'pwm-range', startLayer: 2, endLayer: 4, values: {}, pwmPercent: 50 },
+    { id: 'timing-only', startLayer: 2, endLayer: 3, values: { lightOffDelaySec: 19 } },
+    { id: 'pwm-off', startLayer: 3, endLayer: 3, values: {}, pwmPercent: 0 },
+  ] };
+  for (const settingsMode of ['simple', 'twostage', 'allfields']) for (const formatVersion of ['v4', 'v5', 'v4enc', 'v5enc']) {
+    // No firmware declaration: PWM uses the timing support gate, independently of motion.
+    const plan = buildCtbLayerPlan({ metadata, config: active, modelLayerCount: 5,
+      layerHeightMm: 0.05, settingsMode, formatVersion });
+    assert.deepEqual(plan.layers.map(layer => layer.pwm), [1, 204, 128, 0, 128, 255]);
+    assert.deepEqual(plan.layers.map(layer => layer.lightOffDelaySec), [0, 8, 19, 19, 9, 9]);
+  }
+});
+
+test('PWM percentage quantizes to nearest byte, including off and full power', () => {
+  const percentages = [0, 0.1, 0.2, 33.3, 50, 99.9, 100];
+  const plan = buildCtbLayerPlan({ metadata, config: { ...config, overrides: percentages.map((pwmPercent, index) => ({
+    id: `pwm-${index}`, startLayer: index + 1, endLayer: index + 1, values: {}, pwmPercent,
+  })) }, modelLayerCount: percentages.length, layerHeightMm: 0.05, settingsMode: 'simple', formatVersion: 'v4' });
+  assert.deepEqual(plan.layers.map(layer => layer.pwm), [0, 0, 1, 85, 128, 255, 255]);
+});
+
+test('PWM persistence retains invalid imports for rejection and legacy absent fields stay absent', () => {
+  const rule = { id: 'pwm', startLayer: 1, endLayer: 1, values: {} };
+  const legacy = sanitizeCtbTimingConfig({ ...config, overrides: [rule] })!;
+  assert.equal('pwmPercent' in legacy.overrides[0], false);
+  for (const pwmPercent of [0, 37.5, 100]) {
+    const active = { ...config, overrides: [{ ...rule, pwmPercent }] };
+    assert.deepEqual(sanitizeCtbTimingConfig(JSON.parse(JSON.stringify(active))), active);
+  }
+  for (const pwmPercent of [-1, 100.1, Infinity, NaN, null, '', 'invalid', true]) {
+    const sanitized = sanitizeCtbTimingConfig({ ...config, overrides: [{ ...rule, pwmPercent }] })!;
+    const reloaded = sanitizeCtbTimingConfig(JSON.parse(JSON.stringify(sanitized)))!;
+    assert.throws(() => validateCtbTimingConfigForExport(reloaded, 5, 'v4', 'simple'), /PWM range 1.*0 to 100/);
+  }
+  assert.throws(() => validateCtbTimingConfigForExport({ ...config, overrides: [{ ...rule, pwmPercent: 50 }] }, 5, 'v3', 'simple'), /V4\/V5/);
+});
+
+test('bottom PWM accepts the historical metadata alias while canonical zero retains legacy full-power semantics', () => {
+  for (const canonical of [undefined, 0, 60]) {
+    const plan = buildCtbLayerPlan({ metadata: { ...metadata, ctb: { ...metadata.ctb,
+      bottomProjectorPwmPercent: canonical, bottomLayerProjectorPwmPercent: 40,
+    } }, config, modelLayerCount: 3, layerHeightMm: 0.05, settingsMode: 'simple', formatVersion: 'v5' });
+    assert.equal(plan.layers[0].pwm, canonical === undefined ? 102 : canonical === 0 ? 255 : 153);
+    assert.equal(plan.layers[2].pwm, 255);
+  }
+});
+
 test('calculator includes two-stage travel and correction without adding explicit waits', () => {
   const lod = calculateLightOffDelaySec(30, {
     liftDistanceMm: 1, liftDistance2Mm: 4, liftSpeedMmMin: 60, liftSpeed2MmMin: 240,

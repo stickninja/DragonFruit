@@ -1,6 +1,6 @@
 # Phase 0.4 screenshots
 
-These screenshots use a synthetic printer and material fixture in the native Windows app. The fixture's capability declaration is test data; it does not confirm per-layer motion on a physical printer or any real firmware. See [Phase 0.4 acceptance](phase-4-acceptance.md) for checks performed and remaining coverage.
+These screenshots use synthetic printer and material fixtures in the native Windows app. The earlier motion fixture's capability declaration is test data. The PWM fixture has no motion capability declaration. Neither confirms behavior on a physical printer or any real firmware. See [Phase 0.4 acceptance](phase-4-acceptance.md) for checks performed and remaining coverage.
 
 ## Resin weight and density
 
@@ -31,3 +31,21 @@ The 20 × 20 × 2 mm test model displays 0.8 mL, 1 g, and $0.04 using the synthe
 After an encrypted CTB V5 export, the file-backed inspector shows layer 7's applied 35.25 s raw LOD and its encoded lift/retract motion. Independent UVtools decoding of the app-produced file is recorded in the acceptance evidence.
 
 ![Encoded CTB settings for model layer 7](images/phase-4/encoded-layer-seven.png)
+
+## Simple CTB PWM defaults
+
+The synthetic Simple CTB V5 encrypted profile shows separate normal 60% and bottom 80% PWM controls.
+
+![Separate Simple CTB normal and bottom PWM controls](images/phase-4/pwm-simple-defaults.jpg)
+
+## PWM layer ranges
+
+The Timing tab shows a 50% override for model layers 2–3 and an overlapping 0% override for layer 3. These controls are available without a per-layer motion firmware declaration.
+
+![Overlapping CTB PWM range overrides](images/phase-4/pwm-layer-ranges.jpg)
+
+## Encoded PWM layers
+
+The file-backed inspector screenshot shows model layer 2 at PWM 128/255 (50.2%) in the native app. The same review also showed the startup dummy at 1/255 (0.4%) and model layer 3 at 0/255 (0.0%). UVtools independently decoded the app-produced file as recorded in the acceptance evidence.
+
+![Encoded CTB PWM byte and percentage for model layer 2](images/phase-4/pwm-encoded-layer.jpg)

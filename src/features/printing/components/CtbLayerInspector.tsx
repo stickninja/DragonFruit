@@ -48,7 +48,7 @@ export function CtbLayerInspector({ artifact, layerNumber, bodyMaxHeight = '22re
             ['Lift speed 1 / 2', `${number(layer.liftSpeedMmMin)} / ${number(layer.liftSpeed2MmMin)} mm/min`],
             ['Retract distance 1 / 2', `${number(Math.max(0, layer.liftDistanceMm + layer.liftDistance2Mm - layer.retractDistance2Mm))} / ${number(layer.retractDistance2Mm)} mm`],
             ['Retract speed 1 / 2', `${number(layer.retractSpeedMmMin)} / ${number(layer.retractSpeed2MmMin)} mm/min`],
-            ['PWM', `${layer.pwm} / 255`],
+            ['PWM', `${layer.pwm} / 255 (${(layer.pwm / 255 * 100).toFixed(1)}%)`],
           ] as const).map(([label, value]) => <div key={label} className="contents"><dt style={{ color: 'var(--text-muted)' }}>{label}</dt><dd>{value}</dd></div>)}
         </dl>
         <p style={{ color: 'var(--text-muted)' }}>Values read from the generated file. Retract distance 1 is total lift minus retract distance 2.</p>

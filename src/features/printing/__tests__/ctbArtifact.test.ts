@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { buildCtbLayerPlan } from '../../slicing/ctbLayerTiming';
 import { ctbPreviewLayer, estimateCtbPlanSeconds, sliceProfileFingerprint } from '../ctbArtifact';
 import type { MaterialProfile, PrinterProfile } from '../../profiles/profileStore';
+import { DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS } from '../../profiles/profileStore';
 import type { CtbTimingConfigV1 } from '../../slicing/ctbTiming';
 
 const waits = { lightOffDelaySec: 15, waitTimeBeforeCureSec: 1, waitTimeAfterCureSec: 2, waitTimeAfterLiftSec: 3 };
@@ -59,4 +60,30 @@ test('range motion artifacts invalidate when firmware support changes, timing-on
     assert.notEqual(original, sliceProfileFingerprint(changed, material));
     assert.equal(sliceProfileFingerprint(printer, timingOnly), sliceProfileFingerprint(changed, timingOnly));
   }
+});
+
+test('PWM range edits and default edits invalidate the slice without requiring firmware capability', () => {
+  const printer = { id: 'p', display: { outputFormat: '.ctb', formatVersion: 'v4', settingsMode: 'simple' } } as PrinterProfile;
+  const rule = { id: 'pwm', startLayer: 1, endLayer: 2, values: {}, pwmPercent: 50 };
+  const material: MaterialProfile = { id: 'm', printerProfileId: 'p', name: 'Resin', brand: '',
+    currencyCode: 'USD', bottlePrice: 20, bottleCapacityMl: 1000, resinFamily: 'standard',
+    scaleCompensationPct: { x: 0, y: 0, z: 0 }, layerHeightMm: 0.05,
+    normalExposureSec: 2, bottomExposureSec: 20, bottomLayerCount: 2,
+    liftDistanceMm: 5, liftSpeedMmMin: 60, retractSpeedMmMin: 120,
+    minimumAaAlphaPercent: 35, antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+    ctbTimingV1: { ...config, overrides: [rule] },
+    localSettingsByOutput: { '.ctb': { projectorPwmPercent: 90, bottomProjectorPwmPercent: 80 } },
+  };
+  const original = sliceProfileFingerprint(printer, material);
+  for (const pwmPercent of [undefined, 0, 100]) {
+    assert.notEqual(original, sliceProfileFingerprint(printer, { ...material,
+      ctbTimingV1: { ...config, overrides: [{ ...rule, pwmPercent }] },
+    }));
+  }
+  assert.notEqual(original, sliceProfileFingerprint(printer, { ...material,
+    localSettingsByOutput: { '.ctb': { projectorPwmPercent: 90, bottomProjectorPwmPercent: 70 } },
+  }));
+  assert.equal(original, sliceProfileFingerprint({ ...printer,
+    ctbMotionCapability: { firmware: 'declared', confirmed: true },
+  }, material));
 });

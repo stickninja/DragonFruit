@@ -126,6 +126,9 @@ export function validateCtbTimingConfigForExport(
     const rule = config.overrides[index]!;
     if (!rule.id || ids.has(rule.id)) throw new Error(`CTB timing range ${index + 1} has a missing or duplicate ID.`);
     ids.add(rule.id);
+    if (rule.pwmPercent !== undefined && (!Number.isFinite(rule.pwmPercent) || rule.pwmPercent < 0 || rule.pwmPercent > 100)) {
+      throw new Error(`CTB PWM range ${index + 1} must be a finite percentage from 0 to 100.`);
+    }
     if (!Number.isSafeInteger(rule.startLayer) || !Number.isSafeInteger(rule.endLayer)
       || rule.startLayer < 1 || rule.endLayer < rule.startLayer || rule.endLayer > modelLayerCount) {
       throw new Error(`CTB timing range ${index + 1} must use inclusive model layers from 1 to ${modelLayerCount}.`);
@@ -248,7 +251,8 @@ export function buildCtbLayerPlan(input: CtbLayerPlanInput): CtbLayerPlanV1 {
   const bottomExposure = readNumber(metadata, 'bottomExposureSec');
   const normalExposure = readNumber(metadata, 'normalExposureSec');
   const normalPwm = readOptionalNumber(metadata, 'projectorPwmPercent') ?? 100;
-  const bottomPwm = readOptionalNumber(metadata, 'bottomProjectorPwmPercent') ?? 100;
+  const bottomPwm = readOptionalNumber(metadata, 'bottomProjectorPwmPercent')
+    ?? readOptionalNumber(metadata, 'bottomLayerProjectorPwmPercent') ?? 100;
   const layers: CtbResolvedLayer[] = [];
   for (let modelLayerNumber = 1; modelLayerNumber <= modelLayerCount; modelLayerNumber++) {
     const bottom = modelLayerNumber <= bottomCount;
@@ -258,14 +262,20 @@ export function buildCtbLayerPlan(input: CtbLayerPlanInput): CtbLayerPlanV1 {
         ? bottomExposure + (normalExposure - bottomExposure) * transitionIndex / transitionCount
         : normalExposure;
     const waits = resolveCtbTimingValues(config, modelLayerNumber, bottomCount);
+    // Preserve legacy zero/missing defaults, while an explicit range zero is off.
+    let pwmPercent = (bottom ? bottomPwm : normalPwm) || 100;
+    for (const rule of config.overrides) {
+      if (modelLayerNumber >= rule.startLayer && modelLayerNumber <= rule.endLayer && rule.pwmPercent !== undefined) {
+        pwmPercent = rule.pwmPercent;
+      }
+    }
     layers.push({
       modelLayerNumber,
       positionZMm: modelLayerNumber * layerHeightMm,
       exposureSec,
       ...waits,
       ...resolveCtbMotion(metadata, mode, config, modelLayerNumber),
-      // Match the legacy CTB parser: zero or missing percent means full power.
-      pwm: Math.max(0, Math.min(255, Math.round((bottom ? (bottomPwm || 100) : (normalPwm || 100)) * 255 / 100))),
+      pwm: Math.max(0, Math.min(255, Math.round(pwmPercent * 255 / 100))),
       isDummy: false,
     });
   }

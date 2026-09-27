@@ -12,6 +12,7 @@ for (const version of ['v4', 'v5', 'v4enc', 'v5enc']) {
   for (const settingsMode of ['simple', 'twostage']) for (const dummy of [false, true]) {
     const metadata = { ctb: {
       settingsMode, bottomLayerCount: 2, transitionLayerCount: 1, bottomExposureSec: 20, normalExposureSec: 2,
+      bottomProjectorPwmPercent: 80, projectorPwmPercent: 90,
       liftDistanceMm: 2, liftDistance2Mm: 4, liftSpeedMmMin: 60, liftSpeed2MmMin: 240,
       retractDistance2Mm: 3, retractSpeedMmMin: 120, retractSpeed2MmMin: 180,
       bottomLiftDistanceMm: 3, bottomLiftDistance2Mm: 1, bottomLiftSpeedMmMin: 30, bottomLiftSpeed2MmMin: 60,
@@ -22,7 +23,8 @@ for (const version of ['v4', 'v5', 'v4enc', 'v5enc']) {
     config.startupDummy = dummy;
     config.overrides = [
       { id: 'range', startLayer: 1, endLayer: 3, values: {}, motion: { liftDistanceMm: 4, liftSpeedMmMin: 40 } },
-      { id: 'overlap', startLayer: 3, endLayer: 3, values: { lightOffDelaySec: 17 }, motion: {
+      { id: 'pwm-range', startLayer: 2, endLayer: 3, values: {}, pwmPercent: 50 },
+      { id: 'overlap', startLayer: 3, endLayer: 3, values: { lightOffDelaySec: 17 }, pwmPercent: 0, motion: {
         liftSpeedMmMin: 20, retractSpeedMmMin: 30,
         ...(settingsMode === 'twostage' ? { liftDistance2Mm: 2, liftSpeed2MmMin: 100, retractDistance2Mm: 2, retractSpeed2MmMin: 50 } : {}),
       } },

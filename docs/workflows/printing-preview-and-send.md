@@ -29,7 +29,8 @@ During scrubbing, DragonFruit can use fast preview rendering paths to keep inter
 
 For CTB V4/V5, the **Encoded layer settings** inspector reads the selected layer
 from the generated file on disk. It shows Z, exposure, light-off delay, three
-independent waits, lift/retract distances and speeds, and PWM. Loading and read
+independent waits, lift/retract distances and speeds, and the stored PWM byte
+out of 255 with its percentage. Loading and read
 errors replace the values; settings are never inferred from the currently edited
 material. Retract distance 1 is displayed as total lift minus retract distance 2.
 The inspector sits on the left directly above the printer/material statistics
@@ -47,6 +48,18 @@ inclusive, one-based **model layer** numbers. Single-layer overrides use the
 same start and end. Later matching rules take precedence only for the fields
 they specify. The LOD calculator adds constant-speed motion time to the desired
 pre-exposure rest; it leaves the independent wait fields unchanged.
+
+Simple CTB has separate bottom and normal PWM controls, like Two Stage and All
+Fields. Set new bottom/normal values from 1 to 100%. A range may set PWM from 0
+to 100%; blank leaves an earlier matching PWM in place, or inherits the bottom
+or normal default. Later matching ranges replace PWM only when they set it,
+independently of timing and motion overrides. Explicit range 0% exports PWM
+byte 0. A legacy bottom/normal default of 0 keeps its full-power fallback.
+With per-layer timing enabled, the percentage is rounded to a 0–255 byte; the
+inspector shows that stored byte and its percentage. Legacy native defaults
+outside the per-layer plan retain their existing encoding. Range PWM follows
+the enabled CTB timing gate for plain or encrypted V4/V5 and does not need a
+motion firmware declaration.
 
 For Phase 0.4, a range can also override lift and retract motion. Set the
 printer's firmware version under **Printer Settings → Output**, then confirm
@@ -72,8 +85,9 @@ and block export until corrected. If Two Stage values remain after switching
 to Simple, clear them in the Timing tab or switch back to Two Stage.
 
 The optional startup dummy adds one file layer before model layer 1. It uses a
-tiny pixel, short exposure, low PWM and minimal lift. It shares the first real
-layer's Z; every model layer retains its original Z and raster sample height.
+tiny pixel, short exposure, fixed PWM byte 1 and minimal lift. It shares the
+first real layer's Z; every model layer retains its original Z and raster sample
+height.
 The slider and total count use file layers, while the preview and inspector
 also label model layers and the startup dummy. During dummy preview loading,
 the preview stays blank instead of showing model geometry.

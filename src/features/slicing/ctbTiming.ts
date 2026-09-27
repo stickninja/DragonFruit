@@ -27,6 +27,7 @@ export type CtbTimingOverride = {
   endLayer: number;
   values: Partial<CtbLayerTimingValues>;
   motion?: Partial<CtbMotion>;
+  pwmPercent?: number;
 };
 
 export type CtbTimingConfigV1 = {
@@ -112,6 +113,11 @@ export function sanitizeCtbTimingConfig(input: unknown): CtbTimingConfigV1 | und
         endLayer,
         values,
         ...(Object.keys(motion).length ? { motion } : {}),
+        ...(Object.prototype.hasOwnProperty.call(rule, 'pwmPercent') ? {
+          // As with motion, invalid imports must remain visible and block export.
+          pwmPercent: typeof rule.pwmPercent === 'number' ? rule.pwmPercent
+            : typeof rule.pwmPercent === 'string' && rule.pwmPercent.trim() ? Number(rule.pwmPercent) : Number.NaN,
+        } : {}),
       }];
     }),
     startupDummy: source.startupDummy === true,

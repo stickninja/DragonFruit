@@ -63,6 +63,20 @@ motion values remain invalid after draft/profile sanitization so export can
 reject them with an actionable error; they are not silently clamped to a valid
 value. The startup dummy is not in the one-based model-layer range.
 
+The same `ctbTimingV1.overrides` entries may also carry an optional
+`pwmPercent` number from 0 to 100. Omitted PWM leaves any earlier matching PWM
+in place, or inherits the bottom or normal CTB default when none is set.
+Precedence is independent of timing and motion; later matching PWM values win.
+An explicit range value of 0 is retained and exports encoded byte 0.
+This differs from the legacy bottom/normal default value of 0, which still
+falls back to full power; new bottom/normal entries use 1–100%. The enabled
+per-layer timing plan rounds percentage to the nearest 0–255 byte; legacy
+native defaults outside that plan retain their existing encoding. The startup
+dummy remains fixed at byte 1. Simple CTB profiles retain separate bottom and
+normal PWM defaults, as Two Stage and All Fields already do. Range PWM uses the
+existing enabled timing gate for plain or encrypted CTB V4/V5 and does not
+depend on `ctbMotionCapability`. No new storage key is used.
+
 Phase 0.4 material quantity stays in that same material profile. The optional
 `resinQuantity` object stores a positive bottle `value` and its entered `unit`
 (`mL`, `g`, or `kg`); `uncuredDensityGPerMl` is optional and must be positive and
