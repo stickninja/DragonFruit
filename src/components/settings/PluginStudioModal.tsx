@@ -25,6 +25,7 @@ import {
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import type { LocalMaterialSettingsMap, LocalMaterialSettingsValue } from '@/features/profiles/profileStore';
+import { sanitizeResinQuantity, sanitizeUncuredDensityGPerMl } from '@/features/profiles/resinQuantity';
 import {
   type MaterialDraft,
   type LocalSettingsByOutputDraft,
@@ -1010,6 +1011,8 @@ function parseMaterialTemplateDrafts(value: unknown): MaterialTemplateDraft[] {
       currencyCode: asString(value.currencyCode, DEFAULT_MATERIAL_DRAFT.currencyCode),
       bottlePrice: asNumber(value.bottlePrice, DEFAULT_MATERIAL_DRAFT.bottlePrice),
       bottleCapacityMl: asNumber(value.bottleCapacityMl, DEFAULT_MATERIAL_DRAFT.bottleCapacityMl),
+      resinQuantity: sanitizeResinQuantity(value.resinQuantity),
+      uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(value.uncuredDensityGPerMl),
       resinFamily: asResinFamily(value.resinFamily, DEFAULT_MATERIAL_DRAFT.resinFamily),
       scaleCompensationPct: {
         x: asNumber(rawScaleComp.x, DEFAULT_MATERIAL_DRAFT.scaleCompensationPct.x),

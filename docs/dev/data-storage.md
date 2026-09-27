@@ -50,10 +50,36 @@ cure, and after lift (all seconds), an ordered `overrides` array, and a
 `startupDummy` flag. Each override has an ID, inclusive one-based model-layer
 `startLayer`/`endLayer`, and a partial `values` object; omitted fields inherit
 the current bottom or normal default, and later matching overrides win per
-field. Invalid stored fields are sanitized on load. A missing or disabled
+field. Invalid timing fields are sanitized on load. A missing or disabled
 `ctbTimingV1` leaves the legacy `.ctb` `localSettingsByOutput` behavior in
 place. Material and printer bundle imports, profile duplication, and color
 variants copy the object independently. There is no new localStorage key.
+
+Phase 0.4 adds an optional partial `motion` object to each range. It contains
+`liftDistanceMm`, `liftDistance2Mm`, `liftSpeedMmMin`, `liftSpeed2MmMin`,
+`retractDistance2Mm`, `retractSpeedMmMin`, and `retractSpeed2MmMin`. Omitted
+fields inherit independently from bottom/normal motion. Invalid entered
+motion values remain invalid after draft/profile sanitization so export can
+reject them with an actionable error; they are not silently clamped to a valid
+value. The startup dummy is not in the one-based model-layer range.
+
+Phase 0.4 material quantity stays in that same material profile. The optional
+`resinQuantity` object stores a positive bottle `value` and its entered `unit`
+(`mL`, `g`, or `kg`); `uncuredDensityGPerMl` is optional and must be positive and
+finite. Weight entries require density before bottle volume or print cost can
+be calculated. Print mass is shown only when density is known. An incomplete
+or invalid quantity retains its selected unit with a zero value
+so calculations remain unavailable until the user enters a valid amount. The
+existing `bottleCapacityMl` field remains in place for older profiles; when
+`resinQuantity` is absent, it remains the volume and cost denominator without
+assuming density. An invalid entered weight cannot fall back to that legacy
+capacity. Color variants, duplication, and bundle import copy each quantity
+and density independently. No new storage key or migration is needed.
+
+Printer profiles may include optional `ctbMotionCapability` with a firmware
+string and an explicit `confirmed` boolean. Missing or unconfirmed capability
+keeps per-layer CTB motion disabled. This metadata shares the profile envelope
+and is sanitized on load and bundle import; duplication copies it independently.
 
 ## Slicing and printing keys
 

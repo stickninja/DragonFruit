@@ -122,8 +122,8 @@ export function PrintingPanel({
           <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Estimated print time</div>
           <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedPrintTimeLabel}</div>
 
-          <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Estimated volume</div>
-          <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
+          <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Estimated resin</div>
+          <div className="text-sm font-semibold break-words" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
         </div>
 
         <div className="rounded-md border p-2.5 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>

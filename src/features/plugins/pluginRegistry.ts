@@ -1,4 +1,5 @@
 import type { MaterialPreset, MaterialProfile, PrinterPreset } from '@/features/profiles/profileStore';
+import { sanitizeResinQuantity, sanitizeUncuredDensityGPerMl } from '@/features/profiles/resinQuantity';
 export type { MaterialPreset };
 import type {
   PluginLocalMaterialSettingsAdapterContract,
@@ -484,6 +485,8 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
     currencyCode: (boundedString(value.currencyCode, 3) || 'USD').toUpperCase(),
     bottlePrice: sanitizeNumber(value.bottlePrice, 0, 0, 1000000),
     bottleCapacityMl: sanitizeNumber(value.bottleCapacityMl, 1000, 1, 1000000),
+    resinQuantity: sanitizeResinQuantity(value.resinQuantity),
+    uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(value.uncuredDensityGPerMl),
     resinFamily,
     scaleCompensationPct: {
       x: sanitizeNumber((value as any).scaleCompensationPct?.x, 0, -100, 100),

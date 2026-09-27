@@ -19,7 +19,9 @@ import {
     type PrinterOutputFormat,
 } from '@/features/profiles/profileStore';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
+import { convertResinQuantityUnit } from '@/features/profiles/resinQuantity';
 import { CtbTimingEditor } from './CtbTimingEditor';
+import type { CtbMotionCapability } from '@/features/slicing/ctbMotionCapability';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -563,6 +565,34 @@ type MaterialProfileIdentitySectionProps = {
 };
 
 export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProfileIdentitySectionProps) {
+    const quantityInputId = React.useId();
+    const densityInputId = React.useId();
+    const quantity = draft.resinQuantity ?? { value: draft.bottleCapacityMl, unit: 'mL' as const };
+    const [quantityInput, setQuantityInput] = React.useState(() => String(quantity.value));
+    const [quantityFocused, setQuantityFocused] = React.useState(false);
+    const [densityInput, setDensityInput] = React.useState(() => draft.uncuredDensityGPerMl == null ? '' : String(draft.uncuredDensityGPerMl));
+    const [densityFocused, setDensityFocused] = React.useState(false);
+    React.useEffect(() => {
+        if (!quantityFocused) setQuantityInput(quantity.value > 0 ? String(quantity.value) : '');
+    }, [quantity.value, quantityFocused]);
+    React.useEffect(() => {
+        if (!densityFocused) setDensityInput(draft.uncuredDensityGPerMl == null ? '' : String(draft.uncuredDensityGPerMl));
+    }, [draft.uncuredDensityGPerMl, densityFocused]);
+    const density = draft.uncuredDensityGPerMl;
+    const hasDensity = typeof density === 'number' && Number.isFinite(density) && density > 0;
+    const equivalentVolumeMl = quantity.value > 0
+        ? quantity.unit === 'mL' ? quantity.value
+            : hasDensity ? (quantity.unit === 'kg' ? quantity.value * 1000 : quantity.value) / density! : null
+        : null;
+    const changeQuantityUnit = (unit: 'mL' | 'g' | 'kg') => {
+        onChange((prev) => {
+            const previous = prev.resinQuantity ?? { value: prev.bottleCapacityMl, unit: 'mL' as const };
+            if (previous.unit === unit) return prev;
+            const next = convertResinQuantityUnit(previous, unit, prev.uncuredDensityGPerMl);
+            return { ...prev, resinQuantity: next,
+                ...(unit === 'mL' && next.value > 0 ? { bottleCapacityMl: next.value } : {}) };
+        });
+    };
     return (
         <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
             <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Material Profile</div>
@@ -620,11 +650,56 @@ export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProf
                     value={draft.bottlePrice}
                     onChange={(value) => onChange((prev) => ({ ...prev, bottlePrice: value }))}
                 />
-                <LabeledNumberInput
-                    label="Bottle Capacity (ml)"
-                    value={draft.bottleCapacityMl}
-                    onChange={(value) => onChange((prev) => ({ ...prev, bottleCapacityMl: value }))}
-                />
+                <div className="space-y-1">
+                    <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }} htmlFor={quantityInputId}>Bottle quantity</label>
+                    <div className="flex gap-1">
+                        <input id={quantityInputId} type="number" min="0" step="any" className="ui-input w-full h-[36px] px-2.5 text-sm"
+                            value={quantityInput}
+                            placeholder="Enter quantity"
+                            onChange={(event) => {
+                                setQuantityInput(event.target.value);
+                                const value = Number(event.target.value);
+                                onChange((prev) => ({ ...prev,
+                                    resinQuantity: { value, unit: quantity.unit },
+                                    ...(quantity.unit === 'mL' ? { bottleCapacityMl: value } : {}),
+                                }));
+                            }} onFocus={() => setQuantityFocused(true)} onBlur={() => setQuantityFocused(false)} />
+                        <select aria-label="Bottle quantity unit" className="ui-input h-[36px] px-1 text-sm"
+                            value={quantity.unit} onChange={(event) => changeQuantityUnit(event.target.value as 'mL' | 'g' | 'kg')}>
+                            <option value="mL">mL</option><option value="g">g</option><option value="kg">kg</option>
+                        </select>
+                    </div>
+                </div>
+                <div className="space-y-1">
+                    <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }} htmlFor={densityInputId}>Uncured density (g/mL, optional)</label>
+                    <input id={densityInputId} type="number" min="0" step="any" className="ui-input w-full h-[36px] px-2.5 text-sm"
+                        value={densityInput}
+                        onChange={(event) => {
+                            setDensityInput(event.target.value);
+                            const value = Number(event.target.value);
+                            onChange((prev) => ({ ...prev, uncuredDensityGPerMl: event.target.value === '' ? undefined : value }));
+                        }} onFocus={() => setDensityFocused(true)} onBlur={() => setDensityFocused(false)} />
+                </div>
+                {quantity.unit !== 'mL' && !hasDensity && (
+                    <div className="col-span-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        Enter a positive uncured density to calculate bottle volume and print cost from weight.
+                    </div>
+                )}
+                {densityInput !== '' && !hasDensity && quantity.unit === 'mL' && (
+                    <div className="col-span-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        Density must be positive and finite; print mass is unavailable until corrected.
+                    </div>
+                )}
+                {quantity.value <= 0 && (
+                    <div className="col-span-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        Enter the bottle quantity in {quantity.unit}; the previous unit could not be converted without density.
+                    </div>
+                )}
+                {quantity.unit !== 'mL' && equivalentVolumeMl != null && Number.isFinite(equivalentVolumeMl) && (
+                    <div className="col-span-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        Equivalent bottle volume: {equivalentVolumeMl.toFixed(2)} mL
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -2308,6 +2383,7 @@ type ReplacementMaterialEditorShellProps = {
     outputFormat: string;
     settingsMode?: string;
     formatVersion?: string;
+    motionCapability?: CtbMotionCapability;
     adapter: ReturnType<typeof getProfileLocalMaterialSettingsAdapter> | null;
     localSettingsByOutput: LocalSettingsByOutputDraft;
     onLocalSettingsByOutputChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
@@ -2324,6 +2400,7 @@ export function ReplacementMaterialEditorShell({
     activeTabStyle,
     settingsMode,
     formatVersion,
+    motionCapability,
     adapter,
     localSettingsByOutput,
     onLocalSettingsByOutputChange,
@@ -2335,7 +2412,8 @@ export function ReplacementMaterialEditorShell({
         if (tabId === 'ctb-timing') {
             return <CtbTimingEditor draft={draft} onDraftChange={onDraftChange}
                 outputValues={localSettingsByOutput} adapter={adapter}
-                settingsMode={settingsMode ?? 'simple'} formatVersion={formatVersion ?? 'v5'} />;
+                settingsMode={settingsMode ?? 'simple'} formatVersion={formatVersion ?? 'v5'}
+                motionCapability={motionCapability} />;
         }
         if (tabId === 'meta') {
             return <MaterialProfileIdentitySection draft={draft} onChange={onDraftChange} />;
@@ -2364,7 +2442,7 @@ export function ReplacementMaterialEditorShell({
                 ctbTimingEnabled={outputFormat.trim().toLowerCase() === '.ctb' && draft.ctbTimingV1?.enabled === true}
             />
         );
-    }, [adapter, draft, formatVersion, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, printerDitherBitDepth, settingsMode]);
+    }, [adapter, draft, formatVersion, localSettingsByOutput, motionCapability, onDraftChange, onLocalSettingsByOutputChange, outputFormat, printerDitherBitDepth, settingsMode]);
 
     React.useLayoutEffect(() => {
         const root = measureRootRef.current;

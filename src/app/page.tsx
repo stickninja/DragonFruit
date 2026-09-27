@@ -19,6 +19,7 @@ import { IslandListCard } from '@/components/controls/IslandListCard';
 import { ModelManagerPanel } from '../components/controls/ModelManagerPanel';
 import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel';
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
+import { formatResinEstimateLabel } from '@/features/profiles/resinQuantity';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { SnapAngleReadout } from '@/components/gizmo/rotate/SnapAngleReadout';
 import { RotationHintTooltip } from '@/components/gizmo/rotate/RotationHintTooltip';
@@ -4918,8 +4919,8 @@ export default function Home() {
     if (visible.length === 0) return '—';
     if (isPrintingEstimatedResinBusy && printingEstimatedResinMl == null) return 'Calculating…';
     if (printingEstimatedResinMl == null) return '—';
-    return `${printingEstimatedResinMl.toFixed(2)} mL`;
-  }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
+    return formatResinEstimateLabel(printingEstimatedResinMl, activeMaterialProfile);
+  }, [activeMaterialProfile, isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
 
   const estimatedPrintTimeLabel = React.useMemo(() => {
     if (printingArtifact?.ctbLayerPlan) {

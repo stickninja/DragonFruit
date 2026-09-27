@@ -1,5 +1,6 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { CtbLayerPlanV1 } from '@/features/slicing/ctbLayerTiming';
+import { hasCtbMotionOverrides } from '../slicing/ctbMotionCapability';
 
 /** Only the opted-in CTB workflow extends legacy profile-ID invalidation. */
 export function sliceProfileFingerprint(printer: PrinterProfile | null, material: MaterialProfile | null): string {
@@ -7,7 +8,9 @@ export function sliceProfileFingerprint(printer: PrinterProfile | null, material
   if (!material?.ctbTimingV1?.enabled || !printer?.display.outputFormat.toLowerCase().includes('ctb')) return identity;
   const timingInputs = Object.fromEntries(Object.entries(material).filter(([key]) =>
     /ctbTimingV1|localSettingsByOutput|layerHeight|exposure|bottomLayerCount|transition|lift|retract|pwm/i.test(key)));
-  return `${identity}::${JSON.stringify({ display: printer.display, timingInputs })}`;
+  return `${identity}::${JSON.stringify({ display: printer.display, timingInputs,
+    ...(hasCtbMotionOverrides(material.ctbTimingV1) ? { motionCapability: printer.ctbMotionCapability ?? null } : {}),
+  })}`;
 }
 
 export function ctbPreviewLayer(plan: CtbLayerPlanV1 | undefined, fileLayerNumber: number, layerHeightMm: number) {

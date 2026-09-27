@@ -1,9 +1,13 @@
 import {
   CTB_TIMING_KEYS,
+  CTB_MOTION_KEYS,
   resolveCtbTimingValues,
   type CtbTimingConfigV1,
   type CtbLayerTimingValues,
+  type CtbMotion,
 } from './ctbTiming';
+import { getCtbMotionCapabilityError, hasCtbMotionOverrides, type CtbMotionCapability } from './ctbMotionCapability';
+export type { CtbMotion } from './ctbTiming';
 
 export type CtbResolvedLayer = {
   modelLayerNumber: number | null;
@@ -40,11 +44,8 @@ export type CtbLayerPlanInput = {
   layerHeightMm: number;
   settingsMode: string;
   formatVersion: string;
+  motionCapability?: CtbMotionCapability;
 };
-
-export type CtbMotion = Pick<CtbResolvedLayer,
-  'liftDistanceMm' | 'liftDistance2Mm' | 'liftSpeedMmMin' | 'liftSpeed2MmMin'
-  | 'retractDistance2Mm' | 'retractSpeedMmMin' | 'retractSpeed2MmMin'>;
 
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -101,10 +102,15 @@ export function validateCtbTimingConfigForExport(
   modelLayerCount: number,
   formatVersion: string,
   settingsMode: string,
+  motionCapability?: CtbMotionCapability,
 ): void {
   if (!config.enabled) throw new Error('CTB timing plan is disabled for this material.');
   if (!isCtbTimingPlanSupported(formatVersion, settingsMode)) {
     throw new Error(`CTB timing requires V4/V5 and Simple, Two Stage, or All Fields mode (selected: ${formatVersion}, ${settingsMode}).`);
+  }
+  if (hasCtbMotionOverrides(config)) {
+    const error = getCtbMotionCapabilityError(formatVersion, settingsMode, motionCapability);
+    if (error) throw new Error(error);
   }
   if (!Number.isSafeInteger(modelLayerCount) || modelLayerCount < 1 || modelLayerCount > 1_000_000) {
     throw new Error('CTB timing requires a positive model layer count.');
@@ -130,11 +136,91 @@ export function validateCtbTimingConfigForExport(
         throw new Error(`CTB timing range ${index + 1} ${key} must be a nonnegative finite number.`);
       }
     }
+    for (const key of CTB_MOTION_KEYS) {
+      const value = rule.motion?.[key];
+      if (value === undefined) continue;
+      if (!Number.isFinite(value) || value < 0) {
+        throw new Error(`CTB motion range ${index + 1} ${key} must be a nonnegative finite number.`);
+      }
+      if (settingsMode.trim().toLowerCase() === 'simple' && STAGE_TWO_KEYS.includes(key) && value !== 0) {
+        throw new Error(`CTB motion range ${index + 1} contains Two Stage values. Select Two Stage mode or clear its stage-two overrides.`);
+      }
+    }
   }
+}
+
+const STAGE_TWO_KEYS: readonly (keyof CtbMotion)[] = [
+  'liftDistance2Mm', 'liftSpeed2MmMin', 'retractDistance2Mm', 'retractSpeed2MmMin',
+];
+
+export function validateCtbMotion(motion: CtbMotion, label = 'CTB motion'): void {
+  for (const key of CTB_MOTION_KEYS) {
+    if (!Number.isFinite(motion[key]) || motion[key] < 0) {
+      throw new Error(`${label}: ${key} must be a nonnegative finite number.`);
+    }
+  }
+  const totalLift = motion.liftDistanceMm + motion.liftDistance2Mm;
+  if (!Number.isFinite(totalLift) || motion.retractDistance2Mm > totalLift) {
+    throw new Error(`${label}: stage-two retract distance must not exceed total lift distance.`);
+  }
+  for (const [distance, speed] of [
+    [motion.liftDistanceMm, motion.liftSpeedMmMin],
+    [motion.liftDistance2Mm, motion.liftSpeed2MmMin],
+    [totalLift - motion.retractDistance2Mm, motion.retractSpeedMmMin],
+    [motion.retractDistance2Mm, motion.retractSpeed2MmMin],
+  ]) {
+    if (distance! > 0 && speed! <= 0) throw new Error(`${label}: every stage with travel requires a positive speed.`);
+  }
+}
+
+export function resolveCtbMotion(
+  metadata: Record<string, unknown>, settingsMode: string, config: CtbTimingConfigV1, modelLayerNumber: number,
+): CtbMotion {
+  const mode = settingsMode.trim().toLowerCase();
+  const result = resolveMotion(metadata, modelLayerNumber <= Math.trunc(readNumber(metadata, 'bottomLayerCount')), mode);
+  for (const rule of config.overrides) {
+    if (modelLayerNumber < rule.startLayer || modelLayerNumber > rule.endLayer) continue;
+    for (const key of CTB_MOTION_KEYS) {
+      const value = rule.motion?.[key];
+      if (value === undefined) continue;
+      if (mode !== 'twostage' && STAGE_TWO_KEYS.includes(key) && value !== 0) {
+        throw new Error(`Model layer ${modelLayerNumber}: select Two Stage mode or clear stage-two motion overrides.`);
+      }
+      result[key] = value;
+    }
+  }
+  validateCtbMotion(result, `Model layer ${modelLayerNumber}`);
+  return result;
+}
+
+export type CtbMotionGroup = { startLayer: number; endLayer: number; motion: CtbMotion };
+
+/** Partition at defaults/range boundaries, without allocating one object per layer. */
+export function getCtbMotionGroupsForCalculator(
+  metadata: Record<string, unknown>, settingsMode: string, config: CtbTimingConfigV1,
+  startLayer: number, endLayer: number,
+): CtbMotionGroup[] {
+  if (!Number.isSafeInteger(startLayer) || !Number.isSafeInteger(endLayer) || startLayer < 1 || endLayer < startLayer) {
+    throw new Error('Choose an inclusive model-layer range beginning at layer 1 or later.');
+  }
+  const boundaries = new Set([startLayer, endLayer + 1]);
+  const add = (n: number) => { if (n > startLayer && n <= endLayer) boundaries.add(n); };
+  add(Math.trunc(readNumber(metadata, 'bottomLayerCount')) + 1);
+  for (const rule of config.overrides) { add(rule.startLayer); add(rule.endLayer + 1); }
+  const points = [...boundaries].sort((a, b) => a - b);
+  const groups: CtbMotionGroup[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const motion = resolveCtbMotion(metadata, settingsMode, config, points[i]!);
+    const previous = groups.at(-1);
+    if (previous && CTB_MOTION_KEYS.every((key) => previous.motion[key] === motion[key])) previous.endLayer = points[i + 1]! - 1;
+    else groups.push({ startLayer: points[i]!, endLayer: points[i + 1]! - 1, motion });
+  }
+  return groups;
 }
 
 /** Mirrors UVtools' constant-speed lift/retract calculator; explicit waits stay independent. */
 export function calculateLightOffDelaySec(targetPreExposureRestSec: number, motion: CtbMotion, motionTimeCorrectionSec = 0): number {
+  validateCtbMotion(motion);
   const travel = (distance: number, speed: number) => distance > 0 && speed > 0 ? 60 * distance / speed : 0;
   const retract1Distance = Math.max(0, motion.liftDistanceMm + motion.liftDistance2Mm - motion.retractDistance2Mm);
   const raw = Math.max(0, targetPreExposureRestSec) + Math.max(0, motionTimeCorrectionSec)
@@ -153,7 +239,7 @@ export function getCtbMotionForCalculator(metadata: Record<string, unknown>, set
 export function buildCtbLayerPlan(input: CtbLayerPlanInput): CtbLayerPlanV1 {
   const { metadata, config, modelLayerCount, layerHeightMm } = input;
   const mode = input.settingsMode.trim().toLowerCase();
-  validateCtbTimingConfigForExport(config, modelLayerCount, input.formatVersion, mode);
+  validateCtbTimingConfigForExport(config, modelLayerCount, input.formatVersion, mode, input.motionCapability);
   if (!Number.isFinite(layerHeightMm) || layerHeightMm <= 0) {
     throw new Error('CTB timing requires a positive layer height.');
   }
@@ -177,7 +263,7 @@ export function buildCtbLayerPlan(input: CtbLayerPlanInput): CtbLayerPlanV1 {
       positionZMm: modelLayerNumber * layerHeightMm,
       exposureSec,
       ...waits,
-      ...resolveMotion(metadata, bottom, mode),
+      ...resolveCtbMotion(metadata, mode, config, modelLayerNumber),
       // Match the legacy CTB parser: zero or missing percent means full power.
       pwm: Math.max(0, Math.min(255, Math.round((bottom ? (bottomPwm || 100) : (normalPwm || 100)) * 255 / 100))),
       isDummy: false,
@@ -185,8 +271,11 @@ export function buildCtbLayerPlan(input: CtbLayerPlanInput): CtbLayerPlanV1 {
   }
   if (config.startupDummy) {
     const first = layers[0]!;
+    // Startup motion belongs to the firmware prelude, never model-layer ranges.
+    const dummyMotion = resolveMotion(metadata, 1 <= bottomCount, mode);
     layers.unshift({
       ...first,
+      ...dummyMotion,
       modelLayerNumber: null,
       positionZMm: first.positionZMm,
       exposureSec: 0.01,
@@ -196,7 +285,7 @@ export function buildCtbLayerPlan(input: CtbLayerPlanInput): CtbLayerPlanV1 {
       waitTimeAfterLiftSec: 0,
       liftDistanceMm: 0.1,
       liftDistance2Mm: 0,
-      retractDistance2Mm: Math.min(first.retractDistance2Mm, 0.1),
+      retractDistance2Mm: Math.min(dummyMotion.retractDistance2Mm, 0.1),
       pwm: 1,
       isDummy: true,
     });

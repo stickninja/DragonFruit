@@ -3,6 +3,7 @@ import React from 'react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
+import { formatResinEstimateLabel } from '@/features/profiles/resinQuantity';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
@@ -430,13 +431,9 @@ export function ModelStatsCard({
     };
   }, [getOrComputeBaseResinMl, resinTargetModels]);
 
-  const estimatedResinCost = React.useMemo(() => {
+  const estimatedResinLabel = React.useMemo(() => {
     if (estimatedResinMl == null || !activeMaterialProfile) return null;
-    const bottleMl = Math.max(1, activeMaterialProfile.bottleCapacityMl || 0);
-    const price = Math.max(0, activeMaterialProfile.bottlePrice || 0);
-    const currency = (activeMaterialProfile.currencyCode || 'USD').toUpperCase();
-    const cost = (estimatedResinMl / bottleMl) * price;
-    return `${currency} ${cost.toFixed(2)}`;
+    return formatResinEstimateLabel(estimatedResinMl, activeMaterialProfile);
   }, [activeMaterialProfile, estimatedResinMl]);
 
   const frontHeader = connectedHostName || activePrinterProfile?.name || 'No printer connected';
@@ -539,10 +536,8 @@ export function ModelStatsCard({
               </span>
 
               <span>Est. resin:</span>
-              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {estimatedResinLabelOverride ?? (estimatedResinMl != null
-                  ? `${estimatedResinMl.toFixed(2)} ml${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
-                  : '-')}
+              <span className="min-w-0 whitespace-normal break-words" style={{ color: 'var(--text-strong)' }}>
+                {estimatedResinLabelOverride ?? estimatedResinLabel ?? '-'}
               </span>
             </div>
 

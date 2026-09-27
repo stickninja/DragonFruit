@@ -7,12 +7,12 @@ This roadmap orders the accepted changes to this fork. Complete and review each 
 | 0.1 | Configurable output filenames, including a saved pattern and live preview. | **Accepted by the user on 2026-09-23.** See [verification and remaining limits](phase-1-acceptance.md). |
 | 0.2 | Material colors and independent variants. | **Accepted by the user on 2026-09-24.** See [verification and remaining limits](phase-2-acceptance.md). |
 | 0.3 | CTB timing; individual and range overrides; an LOD calculator; startup dummy; and a per-layer preview inspector. Cover Saturn 2 and Saturn 3, simple and TSMC workflows. | **Accepted by the user on 2026-09-26.** See [verification and remaining limits](phase-3-acceptance.md). |
-| 0.4 | Resin quantity and cost conversions; per-layer lift and retract overrides. | **Planned next; not begun.** See the scope and acceptance outline below. |
+| 0.4 | Resin quantity and cost conversions; per-layer lift and retract overrides. | **Implemented; ready for user testing, not accepted or released.** See the scope below and [Phase 0.4 acceptance](phase-4-acceptance.md). |
 | 0.5 | Multiple visible build plates sharing one printer and material selection. | Planned after Phase 0.4 acceptance. Define checks for plate visibility, assignment, slicing, and saved scenes, then implement, verify, and obtain user acceptance. |
 
-## Phase 0.4 planned scope and acceptance
+## Phase 0.4 scope and acceptance
 
-Phase 0.4 adds resin quantity/cost conversions for material/color profiles. It also plans per-layer motion overrides for CTB V4/V5 as an initial candidate, including encrypted variants. The first version continues to use one shared printer and material selection.
+Phase 0.4 adds resin quantity/cost conversions for material/color profiles and per-layer motion overrides for CTB V4/V5, including encrypted variants. This version continues to use one shared printer and material selection. The implementation is ready for user testing; completion of the checks below and explicit user acceptance remain required before Phase 0.5 or a release.
 
 Resin profiles retain a weight entry in grams or kilograms, or a volume entry in millilitres, and an uncured-liquid density in g/mL for each material/color. Convert between weight and volume only with a positive finite density; if density is missing or invalid, keep volume entry valid and do not assume a value. The app computes equivalent resin volume, print mass, and cost from the effective material settings. Existing volume-based profiles remain valid and keep their current values and behavior.
 

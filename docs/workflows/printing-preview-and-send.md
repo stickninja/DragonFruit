@@ -40,12 +40,36 @@ explanation.
 
 ## CTB timing and startup dummy
 
-For Saturn 2 and Saturn 3 CTB profiles, open the material's **Timing** tab and
-enable CTB timing. Set separate bottom and normal timings. Range overrides use
+For CTB V4/V5 profiles, open the material's **Timing** tab and enable
+**Use per-layer CTB settings**. This switch governs both per-layer timing and
+range lift/retract motion. Set separate bottom and normal timings. Range overrides use
 inclusive, one-based **model layer** numbers. Single-layer overrides use the
 same start and end. Later matching rules take precedence only for the fields
 they specify. The LOD calculator adds constant-speed motion time to the desired
 pre-exposure rest; it leaves the independent wait fields unchanged.
+
+For Phase 0.4, a range can also override lift and retract motion. Set the
+printer's firmware version under **Printer Settings → Output**, then confirm
+per-layer motion support for that firmware before editing range motion. This is
+a user declaration, not a hardware check by DragonFruit. Printers without that
+declaration retain bottom and normal motion controls. For an official printer
+profile, make a custom copy before declaring support.
+
+In the Timing tab, blank motion fields inherit independently from the bottom
+or normal settings; later matching ranges win per field. Simple mode exposes
+lift travel and lift/retract speeds, with retract travel equal to total lift.
+Two Stage mode also exposes the second lift stage and the second-stage retract
+distance and speed. Retract stage 1 uses the remaining travel. The startup
+dummy is outside the one-based model-layer ranges.
+
+Choose a default or range in the LOD calculator, review the effective motion,
+then click **Apply raw LOD**. A default Apply changes only that default. If a
+range spans different effective motion, split it into the shown homogeneous
+groups before applying a value to each group. A motion or calculator input
+change after Apply leaves saved raw LOD and waits untouched and prompts you to
+reapply. Invalid speeds or a retract split larger than total lift show errors
+and block export until corrected. If Two Stage values remain after switching
+to Simple, clear them in the Timing tab or switch back to Two Stage.
 
 The optional startup dummy adds one file layer before model layer 1. It uses a
 tiny pixel, short exposure, low PWM and minimal lift. It shares the first real

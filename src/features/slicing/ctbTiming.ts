@@ -6,11 +6,27 @@ export type CtbLayerTimingValues = {
   waitTimeAfterLiftSec: number;
 };
 
+export type CtbMotion = {
+  liftDistanceMm: number;
+  liftDistance2Mm: number;
+  liftSpeedMmMin: number;
+  liftSpeed2MmMin: number;
+  retractDistance2Mm: number;
+  retractSpeedMmMin: number;
+  retractSpeed2MmMin: number;
+};
+
+export const CTB_MOTION_KEYS = [
+  'liftDistanceMm', 'liftDistance2Mm', 'liftSpeedMmMin', 'liftSpeed2MmMin',
+  'retractDistance2Mm', 'retractSpeedMmMin', 'retractSpeed2MmMin',
+] as const satisfies readonly (keyof CtbMotion)[];
+
 export type CtbTimingOverride = {
   id: string;
   startLayer: number;
   endLayer: number;
   values: Partial<CtbLayerTimingValues>;
+  motion?: Partial<CtbMotion>;
 };
 
 export type CtbTimingConfigV1 = {
@@ -72,6 +88,18 @@ export function sanitizeCtbTimingConfig(input: unknown): CtbTimingConfigV1 | und
       const valuesSource = rule.values && typeof rule.values === 'object' && !Array.isArray(rule.values)
         ? rule.values as Record<string, unknown> : {};
       const values: Partial<CtbLayerTimingValues> = {};
+      const motionSource = rule.motion && typeof rule.motion === 'object' && !Array.isArray(rule.motion)
+        ? rule.motion as Record<string, unknown> : undefined;
+      const motion: Partial<CtbMotion> = {};
+      for (const key of CTB_MOTION_KEYS) {
+        if (motionSource && Object.prototype.hasOwnProperty.call(motionSource, key)) {
+          const rawValue = motionSource[key];
+          // Retain invalid input as an invalid value, so import cannot silently
+          // remove an unsafe override. NaN serializes to null and remains invalid on reload.
+          motion[key] = typeof rawValue === 'number' ? rawValue
+            : typeof rawValue === 'string' && rawValue.trim() ? Number(rawValue) : Number.NaN;
+        }
+      }
       for (const key of CTB_TIMING_KEYS) {
         if (Object.prototype.hasOwnProperty.call(valuesSource, key)) {
           const parsed = Number(valuesSource[key]);
@@ -83,6 +111,7 @@ export function sanitizeCtbTimingConfig(input: unknown): CtbTimingConfigV1 | und
         startLayer,
         endLayer,
         values,
+        ...(Object.keys(motion).length ? { motion } : {}),
       }];
     }),
     startupDummy: source.startupDummy === true,

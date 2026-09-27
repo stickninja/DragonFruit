@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
 import { normalizeFormatVersion, normalizeOutputFormat, normalizeSettingsMode, normalizeWebcamRotationDeg, DEFAULT_WEBCAM_ROTATION_DEG } from '@/features/profiles/outputFormatUtils';
+import { sanitizeResinQuantity, sanitizeUncuredDensityGPerMl } from '@/features/profiles/resinQuantity';
 
 type GithubRepoRef = {
   owner: string;
@@ -127,6 +128,8 @@ function sanitizeMaterialTemplate(input: unknown) {
     currencyCode,
     bottlePrice: sanitizeNumber(value.bottlePrice, 0, 0, 1000000),
     bottleCapacityMl: sanitizeNumber(value.bottleCapacityMl, 1000, 1, 1000000),
+    resinQuantity: sanitizeResinQuantity(value.resinQuantity),
+    uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(value.uncuredDensityGPerMl),
     resinFamily,
     scaleCompensationPct: {
       x: sanitizeNumber((value as any).scaleCompensationPct?.x, 0, -100, 100),

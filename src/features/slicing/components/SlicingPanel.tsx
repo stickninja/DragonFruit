@@ -2634,8 +2634,8 @@ export function SlicingPanel({
                 </div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Volume</div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Resin</div>
+                <div className="text-sm font-semibold break-words" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Print Time</div>

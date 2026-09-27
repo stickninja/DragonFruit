@@ -4,8 +4,11 @@ import {
   buildCtbLayerPlan,
   calculateLightOffDelaySec,
   validateCtbTimingConfigForExport,
+  getCtbMotionGroupsForCalculator,
 } from '../ctbLayerTiming';
-import { createCtbTimingConfig, resolveCtbTimingValues, sanitizeCtbTimingConfig } from '../ctbTiming';
+import { createCtbTimingConfig, resolveCtbTimingValues, sanitizeCtbTimingConfig, type CtbMotion } from '../ctbTiming';
+import { getCtbMotionCapabilityError, sanitizeCtbMotionCapability } from '../ctbMotionCapability';
+import { estimateCtbPlanSeconds } from '../../printing/ctbArtifact';
 
 const metadata = {
   material: {
@@ -100,4 +103,83 @@ test('export rejects unsupported version and invalid or out-of-range overrides',
     ...config.defaults, bottom: { ...config.defaults.bottom, lightOffDelaySec: -1 },
   } }, 5, 'v5', 'simple'), /nonnegative/);
   assert.equal(sanitizeCtbTimingConfig(undefined), undefined);
+});
+
+const capability = { firmware: 'user-declared firmware', confirmed: true };
+const motionConfig = { ...config, startupDummy: true, overrides: [
+  { id: 'first', startLayer: 1, endLayer: 4, values: {}, motion: { liftDistanceMm: 4, liftSpeedMmMin: 40 } },
+  { id: 'second', startLayer: 3, endLayer: 3, values: { lightOffDelaySec: 17 }, motion: { liftSpeedMmMin: 20, retractSpeedMmMin: 30 } },
+] };
+const motionPlan = (settingsMode = 'twostage', formatVersion = 'v5enc') => buildCtbLayerPlan({
+  metadata, config: motionConfig, modelLayerCount: 5, layerHeightMm: 0.05, settingsMode, formatVersion,
+  motionCapability: capability,
+});
+
+test('motion inheritance, later per-field precedence, boundaries and dummy exclusion cover every CTB variant and mode', () => {
+  for (const mode of ['simple', 'twostage']) for (const version of ['v4', 'v5', 'v4enc', 'v5enc']) {
+    const plan = motionPlan(mode, version);
+    assert.deepEqual(plan.layers.map(l => l.liftDistanceMm), [0.1, 4, 4, 4, 4, 2]);
+    assert.deepEqual(plan.layers.map(l => l.liftSpeedMmMin), [30, 40, 40, 20, 40, 60]);
+    assert.deepEqual(plan.layers.map(l => l.retractSpeedMmMin), [90, 90, 90, 30, 120, 120]);
+    assert.equal(plan.layers[3].lightOffDelaySec, 17);
+    assert.equal(plan.layers[3].waitTimeBeforeCureSec, 4);
+    assert.equal(plan.layers[3].liftDistance2Mm, mode === 'simple' ? 0 : 4);
+  }
+});
+
+test('calculator splits a selected range at effective motion changes including bottom/normal and overlaps', () => {
+  const groups = getCtbMotionGroupsForCalculator(metadata, 'twostage', motionConfig, 1, 5);
+  assert.deepEqual(groups.map(g => [g.startLayer, g.endLayer]), [[1, 2], [3, 3], [4, 4], [5, 5]]);
+  assert.equal(groups[1].motion.liftSpeedMmMin, 20);
+  assert.equal(groups[1].motion.liftDistanceMm, 4);
+  assert.notEqual(calculateLightOffDelaySec(1, groups[1].motion), calculateLightOffDelaySec(1, groups[2].motion));
+  assert.deepEqual(getCtbMotionGroupsForCalculator(metadata, 'simple', config, 1, 5).map(g => [g.startLayer, g.endLayer]), [[1, 2], [3, 5]]);
+  assert.throws(() => getCtbMotionGroupsForCalculator(metadata, 'simple', config, 0, 5), /model-layer range/);
+});
+
+test('effective motion rejects impossible inherited splits and speeds without clamping overrides', () => {
+  const build = (motion: Partial<CtbMotion>, settingsMode = 'twostage') => buildCtbLayerPlan({
+    metadata, config: { ...config, overrides: [{ id: 'bad', startLayer: 3, endLayer: 3, values: {}, motion }] },
+    modelLayerCount: 5, layerHeightMm: 0.05, settingsMode, formatVersion: 'v4', motionCapability: capability,
+  });
+  for (const motion of [{ liftSpeedMmMin: 0 }, { retractSpeedMmMin: 0 }, { liftSpeed2MmMin: 0 }, { retractSpeed2MmMin: 0 }]) {
+    assert.throws(() => build(motion), /positive speed/);
+  }
+  assert.throws(() => build({ liftDistanceMm: 0, liftDistance2Mm: 1 }), /retract distance/);
+  assert.throws(() => build({ retractDistance2Mm: 7 }), /retract distance/);
+  assert.throws(() => build({ liftDistanceMm: -1 }), /nonnegative/);
+  assert.throws(() => build({ liftDistance2Mm: 1 }, 'simple'), /Two Stage/);
+  assert.doesNotThrow(() => build({ liftDistanceMm: 0, liftSpeedMmMin: 0, retractDistance2Mm: 4, retractSpeedMmMin: 0 }));
+});
+
+test('capability declaration requires supported format/mode and named firmware; timing-only stays available', () => {
+  assert.match(getCtbMotionCapabilityError('v4', 'simple')!, /firmware/);
+  assert.match(getCtbMotionCapabilityError('v3', 'simple', capability)!, /V4/);
+  assert.match(getCtbMotionCapabilityError('v5', 'allfields', capability)!, /Simple or Two Stage/);
+  assert.equal(getCtbMotionCapabilityError('v5enc', 'twostage', capability), null);
+  assert.deepEqual(sanitizeCtbMotionCapability({ firmware: '  ', confirmed: true }), { firmware: '', confirmed: false });
+  assert.equal(sanitizeCtbMotionCapability(undefined), undefined);
+  assert.throws(() => validateCtbTimingConfigForExport(motionConfig, 5, 'v4', 'simple'), /firmware/);
+  assert.doesNotThrow(() => validateCtbTimingConfigForExport(config, 5, 'v4', 'simple'));
+});
+
+test('motion persistence is optional, roundtrips fields, and retains invalid imported input for export rejection', () => {
+  assert.deepEqual(sanitizeCtbTimingConfig(JSON.parse(JSON.stringify(motionConfig))), motionConfig);
+  assert.equal('motion' in sanitizeCtbTimingConfig({ ...config, overrides: [{ id: 'legacy', startLayer: 1, endLayer: 1, values: {} }] })!.overrides[0], false);
+  for (const rawValue of [-1, null, '', 'invalid']) {
+    const sanitized = sanitizeCtbTimingConfig({ ...config, overrides: [{ id: 'bad', startLayer: 1, endLayer: 1, values: {}, motion: { liftDistanceMm: rawValue } }] })!;
+    const reloaded = sanitizeCtbTimingConfig(JSON.parse(JSON.stringify(sanitized)))!;
+    assert.throws(() => validateCtbTimingConfigForExport(reloaded, 5, 'v4', 'simple', capability), /nonnegative/);
+  }
+});
+
+test('estimate uses effective overridden travel while preserving raw LOD and explicit waits', () => {
+  const slow = { ...config, startupDummy: false, overrides: [{ id: 'slow', startLayer: 3, endLayer: 3, values: {}, motion: { liftSpeedMmMin: 1 } }] };
+  const input = { metadata, modelLayerCount: 5, layerHeightMm: 0.05, settingsMode: 'simple', formatVersion: 'v4', motionCapability: capability };
+  const before = buildCtbLayerPlan({ ...input, config });
+  const after = buildCtbLayerPlan({ ...input, config: slow });
+  assert.equal(after.layers[2].lightOffDelaySec, before.layers[2].lightOffDelaySec);
+  assert.equal(after.layers[2].waitTimeAfterCureSec, before.layers[2].waitTimeAfterCureSec);
+  // Layer 3 moves for 121 seconds instead of being covered by raw LOD 9.
+  assert.equal(estimateCtbPlanSeconds(after) - estimateCtbPlanSeconds(before), 112);
 });

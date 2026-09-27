@@ -1,6 +1,8 @@
 import printerPresetsData from '../../../profiles/printers';
 import materialTemplatesData from '../../../profiles/materials';
 import { sanitizeCtbTimingConfig, type CtbTimingConfigV1 } from '@/features/slicing/ctbTiming';
+import { sanitizeCtbMotionCapability, type CtbMotionCapability } from '@/features/slicing/ctbMotionCapability';
+import { sanitizeResinQuantity, sanitizeUncuredDensityGPerMl, type ResinQuantity } from './resinQuantity';
 import {
     getProfileLocalMaterialSettingsAdapter,
     getInstalledProfilePlugins,
@@ -119,6 +121,7 @@ export type PrinterProfile = {
     platformBadge?: PrinterPlatformBadge;
     pixelSize?: PrinterPixelSize;
     bitDepth?: PrinterBitDepth;
+    ctbMotionCapability?: CtbMotionCapability;
     buildDimensionMode?: PrinterBuildDimensionMode;
     officialPresetId?: string;
     officialPresetVersion?: number;
@@ -290,6 +293,8 @@ export type MaterialProfile = {
     currencyCode: string;
     bottlePrice: number;
     bottleCapacityMl: number;
+    resinQuantity?: ResinQuantity;
+    uncuredDensityGPerMl?: number;
     resinFamily: 'standard' | 'abs-like' | 'tough' | 'flexible' | 'engineering' | 'other';
     scaleCompensationPct: {
         x: number;
@@ -983,6 +988,8 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((template as any).antiAliasingSettings),
         localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput),
         ctbTimingV1: sanitizeCtbTimingConfig(template.ctbTimingV1),
+        resinQuantity: sanitizeResinQuantity(template.resinQuantity),
+        uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(template.uncuredDensityGPerMl),
         id: createDefaultMaterialIdFromTemplateName(template.name),
         printerProfileId: primaryPrinterId,
         officialTemplateId: typeof (template as any).templateId === 'string' && (template as any).templateId.trim().length > 0
@@ -1079,6 +1086,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     platformBadge: sanitizePlatformBadge((profile as any).platformBadge) ?? sanitizePlatformBadge((matchedPreset as any)?.platformBadge),
                     pixelSize: resolvedPixelSize,
                     bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
+                    ctbMotionCapability: sanitizeCtbMotionCapability((profile as any).ctbMotionCapability),
                     buildDimensionMode: resolvedBuildDimensionMode,
                     officialPresetId,
                     officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
@@ -1182,6 +1190,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         currencyCode: typeof (profile as any).currencyCode === 'string' ? (profile as any).currencyCode.toUpperCase() : 'USD',
                         bottlePrice: Number((profile as any).bottlePrice) || 0,
                         bottleCapacityMl: Number((profile as any).bottleCapacityMl) || 1000,
+                        resinQuantity: sanitizeResinQuantity(materialProfile.resinQuantity),
+                        uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(materialProfile.uncuredDensityGPerMl),
                         resinFamily: (profile.resinFamily ?? 'standard') as MaterialProfile['resinFamily'],
                         scaleCompensationPct: {
                             x: Number((profile as any).scaleCompensationPct?.x) || 0,
@@ -1589,6 +1599,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
         platformBadge: sanitizePlatformBadge(partial?.platformBadge),
         pixelSize: resolvedPixelSize,
         bitDepth: sanitizeBitDepth(partial?.bitDepth),
+        ctbMotionCapability: sanitizeCtbMotionCapability(partial?.ctbMotionCapability),
         buildDimensionMode: resolvedBuildDimensionMode,
         officialPresetId: partial?.officialPresetId?.trim(),
         officialPresetVersion: Number.isFinite(Number((partial as any)?.officialPresetVersion))
@@ -1731,6 +1742,8 @@ export function addMaterialProfile(
         currencyCode: partial?.currencyCode?.trim().toUpperCase() || 'USD',
         bottlePrice: partial?.bottlePrice ?? 0,
         bottleCapacityMl: partial?.bottleCapacityMl ?? 1000,
+        resinQuantity: sanitizeResinQuantity(partial?.resinQuantity),
+        uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(partial?.uncuredDensityGPerMl),
         resinFamily: partial?.resinFamily ?? 'standard',
         scaleCompensationPct: {
             x: partial?.scaleCompensationPct?.x ?? 0,
@@ -1874,6 +1887,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
             bitDepth: appliedUpdates.bitDepth !== undefined
                 ? sanitizeBitDepth(appliedUpdates.bitDepth)
                 : profile.bitDepth,
+            ctbMotionCapability: Object.prototype.hasOwnProperty.call(appliedUpdates, 'ctbMotionCapability')
+                ? sanitizeCtbMotionCapability(appliedUpdates.ctbMotionCapability)
+                : profile.ctbMotionCapability,
             buildDimensionMode: hasBuildDimensionModeUpdate
                 ? (normalizeBuildDimensionMode((appliedUpdates as any).buildDimensionMode) ?? 'manual')
                 : (profile.buildDimensionMode ?? 'manual'),
@@ -2058,6 +2074,12 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
                 ? normalizeMaterialColorHex(updates.colorHex)
                 : profile.colorHex,
             currencyCode: updates.currencyCode !== undefined ? updates.currencyCode.toUpperCase() : profile.currencyCode,
+            resinQuantity: Object.prototype.hasOwnProperty.call(updates, 'resinQuantity')
+                ? sanitizeResinQuantity(updates.resinQuantity)
+                : profile.resinQuantity,
+            uncuredDensityGPerMl: Object.prototype.hasOwnProperty.call(updates, 'uncuredDensityGPerMl')
+                ? sanitizeUncuredDensityGPerMl(updates.uncuredDensityGPerMl)
+                : profile.uncuredDensityGPerMl,
             name: updates.name !== undefined ? updates.name : profile.name,
             localSettingsByOutput: updates.localSettingsByOutput !== undefined
                 ? sanitizeLocalSettingsByOutput(updates.localSettingsByOutput)
@@ -2117,6 +2139,7 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
         name: duplicateName,
         isOfficial: false,
         isCustom: true,
+        ctbMotionCapability: sanitizeCtbMotionCapability(source.ctbMotionCapability),
     };
 
     const sourceMaterials = state.materialProfiles.filter((material) => material.printerProfileId === source.id);
@@ -2131,6 +2154,8 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
             ctbTimingV1: sanitizeCtbTimingConfig(material.ctbTimingV1),
+            resinQuantity: sanitizeResinQuantity(material.resinQuantity),
+            uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(material.uncuredDensityGPerMl),
         }))
         : [
             {
@@ -2215,6 +2240,8 @@ export function createMaterialColorVariantDraft(source: MaterialProfile): Omit<M
         currencyCode: source.currencyCode,
         bottlePrice: source.bottlePrice,
         bottleCapacityMl: source.bottleCapacityMl,
+        resinQuantity: sanitizeResinQuantity(source.resinQuantity),
+        uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(source.uncuredDensityGPerMl),
         resinFamily: source.resinFamily,
         scaleCompensationPct: { ...source.scaleCompensationPct },
         layerHeightMm: source.layerHeightMm,
@@ -2270,6 +2297,7 @@ export function importPrinterBundle(payload: unknown): string {
         platformBadge: sanitizePlatformBadge(sourcePrinter.platformBadge),
         pixelSize: sanitizePixelSize(sourcePrinter.pixelSize),
         bitDepth: sanitizeBitDepth(sourcePrinter.bitDepth),
+        ctbMotionCapability: sanitizeCtbMotionCapability(sourcePrinter.ctbMotionCapability),
         buildDimensionMode: normalizeBuildDimensionMode(sourcePrinter.buildDimensionMode) ?? 'manual',
         officialPresetId: undefined,
         officialPresetVersion: undefined,
@@ -2327,6 +2355,8 @@ export function importPrinterBundle(payload: unknown): string {
                 : 'USD',
             bottlePrice: Number.isFinite(Number(material.bottlePrice)) ? Number(material.bottlePrice) : 0,
             bottleCapacityMl: Number.isFinite(Number(material.bottleCapacityMl)) ? Number(material.bottleCapacityMl) : 1000,
+            resinQuantity: sanitizeResinQuantity(material.resinQuantity),
+            uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(material.uncuredDensityGPerMl),
             resinFamily: material.resinFamily ?? 'standard',
             scaleCompensationPct: {
                 x: Number(material.scaleCompensationPct?.x ?? 0),
@@ -2727,6 +2757,7 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
                     platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
                     pixelSize: sanitizePixelSize((preset as any).pixelSize),
                     bitDepth: sanitizeBitDepth((preset as any).bitDepth),
+                    ctbMotionCapability: sanitizeCtbMotionCapability(item.ctbMotionCapability),
                     buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode) ?? 'manual',
                     officialPresetId: preset.presetId,
                     officialPresetVersion: latestVersion,
@@ -2811,6 +2842,8 @@ export function applyOfficialMaterialProfileUpdate(materialProfileId: string): A
                 currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : item.currencyCode,
                 bottlePrice: Number((template as any).bottlePrice) || item.bottlePrice,
                 bottleCapacityMl: Number((template as any).bottleCapacityMl) || item.bottleCapacityMl,
+                resinQuantity: sanitizeResinQuantity(template.resinQuantity),
+                uncuredDensityGPerMl: sanitizeUncuredDensityGPerMl(template.uncuredDensityGPerMl),
                 resinFamily: (template.resinFamily ?? item.resinFamily) as MaterialProfile['resinFamily'],
                 scaleCompensationPct: {
                     x: Number((template as any).scaleCompensationPct?.x) || 0,
