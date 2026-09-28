@@ -1,6 +1,6 @@
 # Phase 0.4 acceptance: resin quantity and CTB motion/PWM
 
-**Status:** Implemented and ready for user testing; acceptance pending. The user has not accepted Phase 0.4, and no Phase 0.4 release has been published. Phase 0.5 remains outside this phase. See the [Phase 0.4 screenshots](phase-4-screenshots.md) for the synthetic UI fixtures.
+**Status:** Accepted by the user on 2026-09-28. The verification below records the checks actually performed and the remaining limits; acceptance does not imply physical printer validation. See the [verified 0.4.0 package details](releases/0.4.0.md) and [Phase 0.4 screenshots](phase-4-screenshots.md). Phase 0.5 remains outside this phase.
 
 ## Behavior to review
 
@@ -30,6 +30,10 @@
 
 - Twenty-one focused frontend tests passed. Frontend layer plans were generated without a firmware declaration, and the native fixture test encoded and decoded all 16 CTB variants. Scoped core and Timing editor lint passed; the two larger edited settings files retain 63 pre-existing whole-file diagnostics with none introduced on changed lines. The full TypeScript check and optimized frontend/native Windows build passed.
 - In the native Windows UI, the Printer Output panel had no firmware identification or confirmation controls. A synthetic Simple CTB V5 encrypted profile with no capability metadata saved model-layer range 2–3 lift 3 mm, lift speed 45 mm/min, and retract speed 150 mm/min, then exported a 41-layer CTB file. Independent UVtools decoding matched lift distance, lift speed, retract speed, and PWM on every file layer (164 comparisons). Lift distance/speed/retract speed/PWM were 0.1/30/180/1 for the dummy, 2/30/180/204 for model layer 1, 3/45/150/128 and 3/45/150/0 for layers 2–3, and 1/60/240/153 for layers 4–40 (mm and mm/min for motion). The file-backed inspector's file layer 3/model layer 2 showed 3/0 mm lift, 45/0 mm/min lift speed, 3/0 mm retract, 150/0 mm/min retract speed, and PWM 128/255. The [screenshots](phase-4-screenshots.md) show the UI. This verifies encoded file values for the tested Simple/V5 encrypted case, not behavior on a physical printer.
+
+### Windows package verification
+
+The full optimized frontend, TypeScript, Windows native, and NSIS builds passed with exit code 0; native compilation took 3 minutes 18 seconds. A silent upgrade from 0.3.0 to 0.4.0 passed. The installed executable ProductVersion and uninstall DisplayVersion were `0.4.0`, the publisher was `stickninja`, and the installed app opened with About showing version `0.4.0`. All 12 existing fork localStorage files were byte-identical before the first post-upgrade launch. The official DragonFruit executable hash, uninstall metadata, and `.voxl` registry entry remained unchanged. The installer checksum and size are in the [0.4.0 release notes](releases/0.4.0.md).
 
 ### Earlier verification
 
