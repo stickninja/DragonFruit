@@ -19,7 +19,7 @@ import {
   isCtbTimingPlanSupported,
   validateCtbMotion,
 } from '@/features/slicing/ctbLayerTiming';
-import { getCtbMotionCapabilityError, type CtbMotionCapability } from '@/features/slicing/ctbMotionCapability';
+import { getCtbMotionSupportError } from '@/features/slicing/ctbMotionCapability';
 
 const LABELS: Record<keyof CtbLayerTimingValues, string> = {
   lightOffDelaySec: 'Raw light-off delay (s)',
@@ -45,7 +45,6 @@ type Props = {
   adapter: PluginLocalMaterialSettingsAdapterContract | null;
   settingsMode: string;
   formatVersion: string;
-  motionCapability?: CtbMotionCapability;
 };
 
 function legacyNumber(values: Record<string, string | number | boolean>, key: string, fallback: number): number {
@@ -143,7 +142,7 @@ function PwmNumber({ value, onChange }: {
   </label>;
 }
 
-export function CtbTimingEditor({ draft, onDraftChange, outputValues, adapter, settingsMode, formatVersion, motionCapability }: Props) {
+export function CtbTimingEditor({ draft, onDraftChange, outputValues, adapter, settingsMode, formatVersion }: Props) {
   const values = outputValues['.ctb'] ?? {};
   const config = draft.ctbTimingV1 ?? deriveLegacyConfig(values);
   const supported = isCtbTimingPlanSupported(formatVersion, settingsMode);
@@ -183,7 +182,7 @@ export function CtbTimingEditor({ draft, onDraftChange, outputValues, adapter, s
   const staleCalculation = lastApplied?.target === applyTarget && lastApplied.signature !== signature;
   let motionError: string | null = rangeMotionError;
   try { validateCtbMotion(motion, 'Selected motion'); } catch (error) { motionError = error instanceof Error ? error.message : String(error); }
-  const capabilityError = getCtbMotionCapabilityError(formatVersion, settingsMode, motionCapability);
+  const motionSupportError = getCtbMotionSupportError(formatVersion, settingsMode);
   const computedLod = motionError || mixedMotion ? null : calculateLightOffDelaySec(targetRestSec, motion, motionCorrectionSec);
   const travel = (distance: number, speed: number) => distance > 0 && speed > 0 ? 60 * distance / speed : 0;
   const lift1Sec = travel(motion.liftDistanceMm, motion.liftSpeedMmMin);
@@ -269,7 +268,7 @@ export function CtbTimingEditor({ draft, onDraftChange, outputValues, adapter, s
         </div>
         <div className="border-t pt-2 space-y-2" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="text-xs font-semibold">Lift and retract</div>
-          {capabilityError && <p role="status" className="text-xs" style={{ color: 'var(--text-muted)' }}>{capabilityError}</p>}
+          {motionSupportError && <p role="status" className="text-xs" style={{ color: 'var(--text-muted)' }}>{motionSupportError}</p>}
           {CTB_MOTION_KEYS.some((key) => rule.motion?.[key] !== undefined) && <button type="button" className="ui-button ui-button-secondary text-xs" onClick={() => updateRule(rule.id, (item) => ({ ...item, motion: undefined }))}>
             Clear this range’s motion overrides
           </button>}
@@ -285,7 +284,7 @@ export function CtbTimingEditor({ draft, onDraftChange, outputValues, adapter, s
               })}>Clear Two Stage values</button>
             </div>}
           {ruleMotionError && <p className="text-xs" role="alert" style={{ color: 'var(--danger, #f87171)' }}>{ruleMotionError}</p>}
-          {!capabilityError && <>
+          {!motionSupportError && <>
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
               Each blank field inherits the bottom or normal setting; later matching ranges win per field. Model layer 1 excludes the startup dummy.
               {settingsMode.trim().toLowerCase() === 'simple' && ' Retract travel equals total lift travel in Simple mode.'}

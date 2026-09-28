@@ -30,7 +30,7 @@ for (const version of ['v4', 'v5', 'v4enc', 'v5enc']) {
       } },
     ];
     const plan = buildCtbLayerPlan({ metadata, config, modelLayerCount: 4, layerHeightMm: 0.05,
-      settingsMode, formatVersion: version, motionCapability: { firmware: 'synthetic-test', confirmed: true } });
+      settingsMode, formatVersion: version });
     const name = `phase4-${version}-${settingsMode}-dummy-${dummy}`;
     writeFileSync(resolve(destination, `${name}.json`), JSON.stringify({
       version, settingsMode, dummy, expectedEstimateSeconds: Math.round(estimateCtbPlanSeconds(plan)),

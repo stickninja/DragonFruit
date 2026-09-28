@@ -15,7 +15,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 import { appendSliceExtension, resolveSliceOutputExtension } from './sliceFilenameFormat';
 import { buildCtbLayerPlan, isCtbTimingPlanSupported, type CtbLayerPlanV1 } from './ctbLayerTiming';
-import { getCtbMotionCapabilityError, hasCtbMotionOverrides } from './ctbMotionCapability';
+import { getCtbMotionSupportError, hasCtbMotionOverrides } from './ctbMotionCapability';
 import { sliceProfileFingerprint } from '@/features/printing/ctbArtifact';
 
 function resolvePngCompressionStrategy(
@@ -498,9 +498,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         throw new Error('CTB timing and startup dummy require CTB V4 or V5 with Simple, Two Stage, or All Fields settings. Select a supported CTB version or disable CTB timing.');
     }
     if (options.materialProfile.ctbTimingV1?.enabled && hasCtbMotionOverrides(options.materialProfile.ctbTimingV1)) {
-        const motionError = getCtbMotionCapabilityError(
+        const motionError = getCtbMotionSupportError(
             format.outputFormat.toLowerCase().includes('ctb') ? formatVersion ?? '' : '',
-            settingsMode ?? '', options.printerProfile.ctbMotionCapability,
+            settingsMode ?? '',
         );
         if (motionError) throw new Error(motionError);
     }
@@ -760,7 +760,6 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     const ctbLayerPlan = ctbTimingConfig ? buildCtbLayerPlan({
         metadata: mergedMetadata, config: ctbTimingConfig, modelLayerCount: solidMesh.totalLayers,
         layerHeightMm: solidMesh.layerHeightMm, settingsMode: settingsMode ?? '', formatVersion: formatVersion ?? '',
-        motionCapability: options.printerProfile.ctbMotionCapability,
     }) : undefined;
     if (ctbLayerPlan) {
         mergedMetadata.ctb = { ...(mergedMetadata.ctb as Record<string, unknown> ?? {}), layerPlanV1: ctbLayerPlan };

@@ -49,15 +49,15 @@ test('phase 3 settings edits require reslice; legacy ID fingerprint stays compat
   assert.notEqual(original, sliceProfileFingerprint(printer, { ...material, id: 'other-material' }));
 });
 
-test('range motion artifacts invalidate when firmware support changes, timing-only artifacts retain their fingerprint', () => {
+test('legacy firmware declarations do not invalidate motion or timing artifacts', () => {
   const printer = { id: 'p', display: { outputFormat: '.ctb', formatVersion: 'v4', settingsMode: 'simple' },
     ctbMotionCapability: { firmware: 'declared', confirmed: true } } as PrinterProfile;
   const timingOnly = { id: 'm', ctbTimingV1: config } as MaterialProfile;
   const material = { ...timingOnly, ctbTimingV1: { ...config, overrides: [{ id: 'motion', startLayer: 1, endLayer: 1, values: {}, motion: { liftDistanceMm: 3 } }] } };
   const original = sliceProfileFingerprint(printer, material);
-  for (const capability of [undefined, { firmware: 'declared', confirmed: false }, { firmware: 'changed', confirmed: true }]) {
+  for (const capability of [undefined, { firmware: '', confirmed: false }, { firmware: 'declared', confirmed: false }, { firmware: 'changed', confirmed: true }]) {
     const changed = { ...printer, ctbMotionCapability: capability };
-    assert.notEqual(original, sliceProfileFingerprint(changed, material));
+    assert.equal(original, sliceProfileFingerprint(changed, material));
     assert.equal(sliceProfileFingerprint(printer, timingOnly), sliceProfileFingerprint(changed, timingOnly));
   }
 });

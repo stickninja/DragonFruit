@@ -21,7 +21,6 @@ import {
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 import { convertResinQuantityUnit } from '@/features/profiles/resinQuantity';
 import { CtbTimingEditor } from './CtbTimingEditor';
-import type { CtbMotionCapability } from '@/features/slicing/ctbMotionCapability';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -2383,7 +2382,6 @@ type ReplacementMaterialEditorShellProps = {
     outputFormat: string;
     settingsMode?: string;
     formatVersion?: string;
-    motionCapability?: CtbMotionCapability;
     adapter: ReturnType<typeof getProfileLocalMaterialSettingsAdapter> | null;
     localSettingsByOutput: LocalSettingsByOutputDraft;
     onLocalSettingsByOutputChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
@@ -2400,7 +2398,6 @@ export function ReplacementMaterialEditorShell({
     activeTabStyle,
     settingsMode,
     formatVersion,
-    motionCapability,
     adapter,
     localSettingsByOutput,
     onLocalSettingsByOutputChange,
@@ -2412,8 +2409,7 @@ export function ReplacementMaterialEditorShell({
         if (tabId === 'ctb-timing') {
             return <CtbTimingEditor draft={draft} onDraftChange={onDraftChange}
                 outputValues={localSettingsByOutput} adapter={adapter}
-                settingsMode={settingsMode ?? 'simple'} formatVersion={formatVersion ?? 'v5'}
-                motionCapability={motionCapability} />;
+                settingsMode={settingsMode ?? 'simple'} formatVersion={formatVersion ?? 'v5'} />;
         }
         if (tabId === 'meta') {
             return <MaterialProfileIdentitySection draft={draft} onChange={onDraftChange} />;
@@ -2442,7 +2438,7 @@ export function ReplacementMaterialEditorShell({
                 ctbTimingEnabled={outputFormat.trim().toLowerCase() === '.ctb' && draft.ctbTimingV1?.enabled === true}
             />
         );
-    }, [adapter, draft, formatVersion, localSettingsByOutput, motionCapability, onDraftChange, onLocalSettingsByOutputChange, outputFormat, printerDitherBitDepth, settingsMode]);
+    }, [adapter, draft, formatVersion, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, printerDitherBitDepth, settingsMode]);
 
     React.useLayoutEffect(() => {
         const root = measureRootRef.current;

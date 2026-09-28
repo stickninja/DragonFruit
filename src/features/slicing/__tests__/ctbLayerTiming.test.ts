@@ -7,7 +7,7 @@ import {
   getCtbMotionGroupsForCalculator,
 } from '../ctbLayerTiming';
 import { createCtbTimingConfig, resolveCtbTimingValues, sanitizeCtbTimingConfig, type CtbMotion } from '../ctbTiming';
-import { getCtbMotionCapabilityError, sanitizeCtbMotionCapability } from '../ctbMotionCapability';
+import { getCtbMotionSupportError, sanitizeCtbMotionCapability } from '../ctbMotionCapability';
 import { estimateCtbPlanSeconds } from '../../printing/ctbArtifact';
 
 const metadata = {
@@ -154,17 +154,15 @@ test('export rejects unsupported version and invalid or out-of-range overrides',
   assert.equal(sanitizeCtbTimingConfig(undefined), undefined);
 });
 
-const capability = { firmware: 'user-declared firmware', confirmed: true };
 const motionConfig = { ...config, startupDummy: true, overrides: [
   { id: 'first', startLayer: 1, endLayer: 4, values: {}, motion: { liftDistanceMm: 4, liftSpeedMmMin: 40 } },
   { id: 'second', startLayer: 3, endLayer: 3, values: { lightOffDelaySec: 17 }, motion: { liftSpeedMmMin: 20, retractSpeedMmMin: 30 } },
 ] };
 const motionPlan = (settingsMode = 'twostage', formatVersion = 'v5enc') => buildCtbLayerPlan({
   metadata, config: motionConfig, modelLayerCount: 5, layerHeightMm: 0.05, settingsMode, formatVersion,
-  motionCapability: capability,
 });
 
-test('motion inheritance, later per-field precedence, boundaries and dummy exclusion cover every CTB variant and mode', () => {
+test('motion exports without a firmware declaration across every CTB variant and mode with inheritance, overlap, and dummy exclusion', () => {
   for (const mode of ['simple', 'twostage']) for (const version of ['v4', 'v5', 'v4enc', 'v5enc']) {
     const plan = motionPlan(mode, version);
     assert.deepEqual(plan.layers.map(l => l.liftDistanceMm), [0.1, 4, 4, 4, 4, 2]);
@@ -189,7 +187,7 @@ test('calculator splits a selected range at effective motion changes including b
 test('effective motion rejects impossible inherited splits and speeds without clamping overrides', () => {
   const build = (motion: Partial<CtbMotion>, settingsMode = 'twostage') => buildCtbLayerPlan({
     metadata, config: { ...config, overrides: [{ id: 'bad', startLayer: 3, endLayer: 3, values: {}, motion }] },
-    modelLayerCount: 5, layerHeightMm: 0.05, settingsMode, formatVersion: 'v4', motionCapability: capability,
+    modelLayerCount: 5, layerHeightMm: 0.05, settingsMode, formatVersion: 'v4',
   });
   for (const motion of [{ liftSpeedMmMin: 0 }, { retractSpeedMmMin: 0 }, { liftSpeed2MmMin: 0 }, { retractSpeed2MmMin: 0 }]) {
     assert.throws(() => build(motion), /positive speed/);
@@ -201,15 +199,22 @@ test('effective motion rejects impossible inherited splits and speeds without cl
   assert.doesNotThrow(() => build({ liftDistanceMm: 0, liftSpeedMmMin: 0, retractDistance2Mm: 4, retractSpeedMmMin: 0 }));
 });
 
-test('capability declaration requires supported format/mode and named firmware; timing-only stays available', () => {
-  assert.match(getCtbMotionCapabilityError('v4', 'simple')!, /firmware/);
-  assert.match(getCtbMotionCapabilityError('v3', 'simple', capability)!, /V4/);
-  assert.match(getCtbMotionCapabilityError('v5', 'allfields', capability)!, /Simple or Two Stage/);
-  assert.equal(getCtbMotionCapabilityError('v5enc', 'twostage', capability), null);
+test('motion support requires only a supported CTB format and mode; legacy declarations stay inert', () => {
+  for (const formatVersion of ['v4', 'v5', 'v4enc', 'v5enc']) for (const settingsMode of ['simple', 'twostage']) {
+    assert.equal(getCtbMotionSupportError(formatVersion, settingsMode), null);
+    assert.doesNotThrow(() => validateCtbTimingConfigForExport(motionConfig, 5, formatVersion, settingsMode));
+  }
+  for (const formatVersion of ['', 'v2', 'v3', 'v3enc']) {
+    assert.match(getCtbMotionSupportError(formatVersion, 'simple')!, /V4/);
+    assert.throws(() => motionPlan('simple', formatVersion), /V4\/V5/);
+  }
+  for (const settingsMode of ['allfields', 'tilting', 'unknown']) {
+    assert.match(getCtbMotionSupportError('v5', settingsMode)!, /Simple or Two Stage/);
+    assert.throws(() => motionPlan(settingsMode, 'v5'), /Simple/);
+  }
   assert.deepEqual(sanitizeCtbMotionCapability({ firmware: '  ', confirmed: true }), { firmware: '', confirmed: false });
   assert.equal(sanitizeCtbMotionCapability(undefined), undefined);
-  assert.throws(() => validateCtbTimingConfigForExport(motionConfig, 5, 'v4', 'simple'), /firmware/);
-  assert.doesNotThrow(() => validateCtbTimingConfigForExport(config, 5, 'v4', 'simple'));
+  assert.doesNotThrow(() => validateCtbTimingConfigForExport(config, 5, 'v4', 'allfields'));
 });
 
 test('motion persistence is optional, roundtrips fields, and retains invalid imported input for export rejection', () => {
@@ -218,13 +223,13 @@ test('motion persistence is optional, roundtrips fields, and retains invalid imp
   for (const rawValue of [-1, null, '', 'invalid']) {
     const sanitized = sanitizeCtbTimingConfig({ ...config, overrides: [{ id: 'bad', startLayer: 1, endLayer: 1, values: {}, motion: { liftDistanceMm: rawValue } }] })!;
     const reloaded = sanitizeCtbTimingConfig(JSON.parse(JSON.stringify(sanitized)))!;
-    assert.throws(() => validateCtbTimingConfigForExport(reloaded, 5, 'v4', 'simple', capability), /nonnegative/);
+    assert.throws(() => validateCtbTimingConfigForExport(reloaded, 5, 'v4', 'simple'), /nonnegative/);
   }
 });
 
 test('estimate uses effective overridden travel while preserving raw LOD and explicit waits', () => {
   const slow = { ...config, startupDummy: false, overrides: [{ id: 'slow', startLayer: 3, endLayer: 3, values: {}, motion: { liftSpeedMmMin: 1 } }] };
-  const input = { metadata, modelLayerCount: 5, layerHeightMm: 0.05, settingsMode: 'simple', formatVersion: 'v4', motionCapability: capability };
+  const input = { metadata, modelLayerCount: 5, layerHeightMm: 0.05, settingsMode: 'simple', formatVersion: 'v4' };
   const before = buildCtbLayerPlan({ ...input, config });
   const after = buildCtbLayerPlan({ ...input, config: slow });
   assert.equal(after.layers[2].lightOffDelaySec, before.layers[2].lightOffDelaySec);

@@ -4775,7 +4775,6 @@ export function ProfileSettingsModal({
                     outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
                     settingsMode={selectedResolvedSettingsMode}
                     formatVersion={selectedResolvedFormatVersion}
-                    motionCapability={selectedPrinter?.ctbMotionCapability}
                     adapter={selectedLocalMaterialSettingsAdapter}
                     localSettingsByOutput={editMaterialLocalSettingsByOutput}
                     onLocalSettingsByOutputChange={setEditMaterialLocalSettingsByOutput}
@@ -5186,38 +5185,6 @@ export function ProfileSettingsModal({
                       />
                     )}
 
-                    {selectedPrinter.display.outputFormat.trim().toLowerCase() === '.ctb' && (
-                      <div className="md:col-span-3 rounded-lg border p-2.5 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                        <div className="text-xs font-semibold">Per-layer motion capability · user declared</div>
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                          Range lift and retract overrides depend on the printer firmware as well as CTB version. Enter the firmware and confirm support only after checking this printer. This declaration is not verified by the app. Bottom and normal motion settings remain available without it.
-                        </p>
-                        {isSelectedPrinterOfficial && <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Make a custom copy of this official printer profile to declare firmware support.</p>}
-                        <label className="block text-xs space-y-1">
-                          <span>Firmware version</span>
-                          <input type="text" className="h-8 w-full rounded-md border px-2 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                            value={selectedPrinter.ctbMotionCapability?.firmware ?? ''} disabled={isSelectedPrinterOfficial}
-                            placeholder="Enter the installed firmware version"
-                            onChange={(event) => updatePrinterProfile(selectedPrinter.id, {
-                              ctbMotionCapability: { firmware: event.target.value, confirmed: false },
-                            })} />
-                        </label>
-                        <label className="flex items-start gap-2 text-xs">
-                          <input type="checkbox" className="mt-0.5" disabled={isSelectedPrinterOfficial || !selectedPrinter.ctbMotionCapability?.firmware.trim()}
-                            checked={selectedPrinter.ctbMotionCapability?.confirmed === true}
-                            onChange={(event) => updatePrinterProfile(selectedPrinter.id, {
-                              ctbMotionCapability: { firmware: selectedPrinter.ctbMotionCapability?.firmware ?? '', confirmed: event.target.checked },
-                            })} />
-                          <span>I have confirmed that this printer firmware supports per-layer lift and retract motion in CTB output.</span>
-                        </label>
-                        <p className="text-xs" style={{ color: selectedPrinter.ctbMotionCapability?.confirmed ? 'var(--text-muted)' : 'var(--danger, #f87171)' }}>
-                          {selectedPrinter.ctbMotionCapability?.confirmed && selectedPrinter.ctbMotionCapability.firmware.trim()
-                            ? `Declared available for firmware ${selectedPrinter.ctbMotionCapability.firmware}. Verify exported motion and hardware behavior separately.`
-                            : 'Range motion unavailable until a firmware version and confirmation are saved.'}
-                        </p>
-                      </div>
-                    )}
-
                     <LabeledToggleInput
                       label="Mirror X"
                       disabled={isSelectedPrinterOfficial}
@@ -5517,7 +5484,6 @@ export function ProfileSettingsModal({
                     outputFormat={selectedPrinter.display.outputFormat}
                     settingsMode={selectedResolvedSettingsMode}
                     formatVersion={selectedResolvedFormatVersion}
-                    motionCapability={selectedPrinter.ctbMotionCapability}
                     adapter={selectedLocalMaterialSettingsAdapter}
                     localSettingsByOutput={newMaterialLocalSettingsByOutput}
                     onLocalSettingsByOutputChange={setNewMaterialLocalSettingsByOutput}

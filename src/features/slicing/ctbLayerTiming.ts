@@ -6,7 +6,7 @@ import {
   type CtbLayerTimingValues,
   type CtbMotion,
 } from './ctbTiming';
-import { getCtbMotionCapabilityError, hasCtbMotionOverrides, type CtbMotionCapability } from './ctbMotionCapability';
+import { getCtbMotionSupportError, hasCtbMotionOverrides } from './ctbMotionCapability';
 export type { CtbMotion } from './ctbTiming';
 
 export type CtbResolvedLayer = {
@@ -44,7 +44,6 @@ export type CtbLayerPlanInput = {
   layerHeightMm: number;
   settingsMode: string;
   formatVersion: string;
-  motionCapability?: CtbMotionCapability;
 };
 
 const object = (value: unknown): Record<string, unknown> =>
@@ -102,14 +101,13 @@ export function validateCtbTimingConfigForExport(
   modelLayerCount: number,
   formatVersion: string,
   settingsMode: string,
-  motionCapability?: CtbMotionCapability,
 ): void {
   if (!config.enabled) throw new Error('CTB timing plan is disabled for this material.');
   if (!isCtbTimingPlanSupported(formatVersion, settingsMode)) {
     throw new Error(`CTB timing requires V4/V5 and Simple, Two Stage, or All Fields mode (selected: ${formatVersion}, ${settingsMode}).`);
   }
   if (hasCtbMotionOverrides(config)) {
-    const error = getCtbMotionCapabilityError(formatVersion, settingsMode, motionCapability);
+    const error = getCtbMotionSupportError(formatVersion, settingsMode);
     if (error) throw new Error(error);
   }
   if (!Number.isSafeInteger(modelLayerCount) || modelLayerCount < 1 || modelLayerCount > 1_000_000) {
@@ -242,7 +240,7 @@ export function getCtbMotionForCalculator(metadata: Record<string, unknown>, set
 export function buildCtbLayerPlan(input: CtbLayerPlanInput): CtbLayerPlanV1 {
   const { metadata, config, modelLayerCount, layerHeightMm } = input;
   const mode = input.settingsMode.trim().toLowerCase();
-  validateCtbTimingConfigForExport(config, modelLayerCount, input.formatVersion, mode, input.motionCapability);
+  validateCtbTimingConfigForExport(config, modelLayerCount, input.formatVersion, mode);
   if (!Number.isFinite(layerHeightMm) || layerHeightMm <= 0) {
     throw new Error('CTB timing requires a positive layer height.');
   }

@@ -62,6 +62,9 @@ fields inherit independently from bottom/normal motion. Invalid entered
 motion values remain invalid after draft/profile sanitization so export can
 reject them with an actionable error; they are not silently clamped to a valid
 value. The startup dummy is not in the one-based model-layer range.
+Range motion uses the enabled CTB V4/V5 timing support gate, including encrypted
+variants, in Simple and Two Stage only. All Fields retains its motion override
+validation. Motion does not require firmware identification or confirmation.
 
 The same `ctbTimingV1.overrides` entries may also carry an optional
 `pwmPercent` number from 0 to 100. Omitted PWM leaves any earlier matching PWM
@@ -74,8 +77,9 @@ per-layer timing plan rounds percentage to the nearest 0–255 byte; legacy
 native defaults outside that plan retain their existing encoding. The startup
 dummy remains fixed at byte 1. Simple CTB profiles retain separate bottom and
 normal PWM defaults, as Two Stage and All Fields already do. Range PWM uses the
-existing enabled timing gate for plain or encrypted CTB V4/V5 and does not
-depend on `ctbMotionCapability`. No new storage key is used.
+existing enabled timing gate for plain or encrypted CTB V4/V5 in Simple, Two
+Stage, and All Fields; it does not depend on firmware metadata. No new storage
+key is used.
 
 Phase 0.4 material quantity stays in that same material profile. The optional
 `resinQuantity` object stores a positive bottle `value` and its entered `unit`
@@ -90,10 +94,11 @@ assuming density. An invalid entered weight cannot fall back to that legacy
 capacity. Color variants, duplication, and bundle import copy each quantity
 and density independently. No new storage key or migration is needed.
 
-Printer profiles may include optional `ctbMotionCapability` with a firmware
-string and an explicit `confirmed` boolean. Missing or unconfirmed capability
-keeps per-layer CTB motion disabled. This metadata shares the profile envelope
-and is sanitized on load and bundle import; duplication copies it independently.
+Older printer profiles may include optional `ctbMotionCapability` with a
+firmware string and `confirmed` boolean. This metadata remains in the profile
+envelope for backward-compatible load, save, duplication, and bundle import,
+but is inert: it does not determine range motion eligibility or artifact
+freshness. No replacement capability field or migration is required.
 
 ## Slicing and printing keys
 

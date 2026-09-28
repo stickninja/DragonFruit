@@ -58,15 +58,14 @@ byte 0. A legacy bottom/normal default of 0 keeps its full-power fallback.
 With per-layer timing enabled, the percentage is rounded to a 0–255 byte; the
 inspector shows that stored byte and its percentage. Legacy native defaults
 outside the per-layer plan retain their existing encoding. Range PWM follows
-the enabled CTB timing gate for plain or encrypted V4/V5 and does not need a
-motion firmware declaration.
+the enabled CTB timing gate for plain or encrypted V4/V5 in Simple, Two Stage,
+and All Fields.
 
-For Phase 0.4, a range can also override lift and retract motion. Set the
-printer's firmware version under **Printer Settings → Output**, then confirm
-per-layer motion support for that firmware before editing range motion. This is
-a user declaration, not a hardware check by DragonFruit. Printers without that
-declaration retain bottom and normal motion controls. For an official printer
-profile, make a custom copy before declaring support.
+For Phase 0.4, a range can also override lift and retract motion when enabled
+CTB timing uses V4/V5, plain or encrypted, in Simple or Two Stage. All Fields
+still rejects range motion overrides. No firmware identification or
+confirmation is required. The encoded file and inspector show the written
+values; confirm behavior on the intended printer separately.
 
 In the Timing tab, blank motion fields inherit independently from the bottom
 or normal settings; later matching ranges win per field. Simple mode exposes
