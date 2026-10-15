@@ -7,8 +7,45 @@ use std::path::Path;
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use dragonfruit_slicing_engine::geometry::{parse_triangles, Triangle};
-use dragonfruit_islands::model::{ComponentInfo, RleLabels, RleMask};
+use dragonfruit_slicing_engine::geometry::Triangle;
+#[cfg(test)]
+use dragonfruit_slicing_engine::geometry::parse_triangles;
+use dragonfruit_islands::model::{RleLabels, RleMask};
+
+// ---------------------------------------------------------------------------
+// Slice job
+// ---------------------------------------------------------------------------
+
+/// Builds a slice job from the payload the app hands the native slicer
+/// (`toNativeMetadataPayload` in `nativeSlicerBridge.ts`), with the mesh from
+/// the input file instead of the app's staging buffer.
+///
+/// The payload's own fields win, the layer count included. Its mesh transport
+/// fields (`output_path`, `mesh_encoding`, `mesh_quantization`) describe the
+/// app's buffer and are ignored. A zero `model_triangle_count` means the
+/// payload did not know the mesh, and the input file's count is used.
+pub fn slice_job_from_json(
+    text: &str,
+    triangles_xyz: Vec<f32>,
+    file_model_triangle_count: u32,
+) -> Result<dragonfruit_slicing_engine::types::SliceJobV3, String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("Invalid slice job JSON: {e}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or("The slice job must be a JSON object")?;
+    if object.contains_key("triangles_xyz") {
+        return Err("The slice job must not carry triangles_xyz; the mesh comes from the input file".into());
+    }
+    object.insert("triangles_xyz".into(), serde_json::Value::Array(Vec::new()));
+    let mut job: dragonfruit_slicing_engine::types::SliceJobV3 =
+        serde_json::from_value(value).map_err(|e| format!("Invalid slice job: {e}"))?;
+    job.triangles_xyz = triangles_xyz;
+    if job.model_triangle_count == 0 {
+        job.model_triangle_count = file_model_triangle_count;
+    }
+    Ok(job)
+}
 
 // ---------------------------------------------------------------------------
 // STL Loading
@@ -441,11 +478,547 @@ pub fn write_3mf(path: &Path, positions: &[f32]) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// VOXL Loading (V2 binary + ORIG full-res chunk preference)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct VoxlChunkEntry {
+    type_tag: [u8; 4],
+    index: u16,
+    compression: u16,
+    offset: usize,
+    compressed_size: usize,
+    uncompressed_size: usize,
+}
+
+/// Helper function to parse binary STL buffer from memory.
+pub fn parse_binary_stl_bytes(data: &[u8]) -> Result<Vec<f32>, String> {
+    if data.len() < 84 {
+        return Err("STL byte buffer too small (< 84 bytes)".into());
+    }
+    let num_triangles = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
+    let expected = 84 + num_triangles * 50;
+    if data.len() < expected {
+        return Err(format!(
+            "STL bytes truncated: expected {} bytes for {} triangles, got {}",
+            expected, num_triangles, data.len()
+        ));
+    }
+    let mut flat = Vec::with_capacity(num_triangles * 9);
+    let mut offset = 84;
+    for _ in 0..num_triangles {
+        offset += 12; // skip normal
+        for _ in 0..3 {
+            flat.push(f32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]));
+            flat.push(f32::from_le_bytes([
+                data[offset + 4],
+                data[offset + 5],
+                data[offset + 6],
+                data[offset + 7],
+            ]));
+            flat.push(f32::from_le_bytes([
+                data[offset + 8],
+                data[offset + 9],
+                data[offset + 10],
+                data[offset + 11],
+            ]));
+            offset += 12;
+        }
+        offset += 2; // attribute byte count
+    }
+    Ok(flat)
+}
+
+/// Check if file starts with VOXL V2 binary header.
+pub fn is_voxl_file(path: &Path) -> bool {
+    if let Ok(mut file) = std::fs::File::open(path) {
+        let mut header = [0u8; 6];
+        if std::io::Read::read_exact(&mut file, &mut header).is_ok() {
+            if &header[0..4] == b"VOXL" {
+                let ver = u16::from_le_bytes([header[4], header[5]]);
+                return ver >= 2;
+            }
+        }
+    }
+    false
+}
+
+/// Load triangles from a VOXL binary file.
+/// Prefers `ORIG` (full-resolution) chunks over `MESH` (preview) chunks.
+/// Returns `(positions_f32, used_orig_chunk)`.
+pub fn load_voxl_triangles(path: &Path) -> Result<(Vec<f32>, bool), String> {
+    use flate2::read::ZlibDecoder;
+
+    let data = std::fs::read(path).map_err(|e| format!("Failed to read VOXL file: {e}"))?;
+    if data.len() < 16 {
+        return Err("VOXL file too small (< 16 bytes)".into());
+    }
+    if &data[0..4] != b"VOXL" {
+        return Err("Invalid VOXL magic header".into());
+    }
+    let ver = u16::from_le_bytes([data[4], data[5]]);
+    if ver < 2 {
+        return Err(unsupported_voxl_version_error(ver));
+    }
+    let chunk_count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+    let dir_end = 16 + chunk_count * 20;
+    if data.len() < dir_end {
+        return Err("VOXL file truncated: incomplete chunk directory".into());
+    }
+
+    let mut entries = Vec::with_capacity(chunk_count);
+    for i in 0..chunk_count {
+        let b = 16 + i * 20;
+        let mut type_tag = [0u8; 4];
+        type_tag.copy_from_slice(&data[b..b + 4]);
+        let index = u16::from_le_bytes([data[b + 4], data[b + 5]]);
+        let compression = u16::from_le_bytes([data[b + 6], data[b + 7]]);
+        let offset = u32::from_le_bytes([data[b + 8], data[b + 9], data[b + 10], data[b + 11]]) as usize;
+        let compressed_size = u32::from_le_bytes([data[b + 12], data[b + 13], data[b + 14], data[b + 15]]) as usize;
+        let uncompressed_size = u32::from_le_bytes([data[b + 16], data[b + 17], data[b + 18], data[b + 19]]) as usize;
+
+        if offset + compressed_size > data.len() {
+            return Err("VOXL chunk extends beyond file boundary".into());
+        }
+
+        entries.push(VoxlChunkEntry {
+            type_tag,
+            index,
+            compression,
+            offset,
+            compressed_size,
+            uncompressed_size,
+        });
+    }
+
+    let read_chunk_data = |entry: &VoxlChunkEntry| -> Result<Vec<u8>, String> {
+        let raw = &data[entry.offset..entry.offset + entry.compressed_size];
+        match entry.compression {
+            0 => Ok(raw.to_vec()),
+            1 => {
+                let mut decoder = ZlibDecoder::new(raw);
+                let mut out = Vec::with_capacity(entry.uncompressed_size);
+                std::io::Read::read_to_end(&mut decoder, &mut out)
+                    .map_err(|e| format!("Decompress chunk failed: {e}"))?;
+                Ok(out)
+            }
+            c => Err(format!("Unsupported compression mode {c}")),
+        }
+    };
+
+    let orig_chunk_indices: Vec<u16> = entries.iter().filter(|e| &e.type_tag == b"ORIG").map(|e| e.index).collect();
+    let mesh_chunk_indices: Vec<u16> = entries.iter().filter(|e| &e.type_tag == b"MESH").map(|e| e.index).collect();
+
+    // 1. If embedded ORIG chunks are present, load them
+    if !orig_chunk_indices.is_empty() {
+        let mut idxs = orig_chunk_indices;
+        idxs.sort();
+        idxs.dedup();
+        let mut all_positions = Vec::new();
+        for &idx in &idxs {
+            if let Some(entry) = entries.iter().find(|e| &e.type_tag == b"ORIG" && e.index == idx) {
+                let chunk_bytes = read_chunk_data(entry)?;
+                let pos = parse_binary_stl_bytes(&chunk_bytes)?;
+                all_positions.extend_from_slice(&pos);
+            }
+        }
+        return Ok((all_positions, true));
+    }
+
+    // 2. Check for originalRef / sidecar file references in MODL chunk if no embedded ORIG chunk exists
+    if let Some(modl_entry) = entries.iter().find(|e| &e.type_tag == b"MODL") {
+        if let Ok(modl_bytes) = read_chunk_data(modl_entry) {
+            if let Ok(modl_str) = std::str::from_utf8(&modl_bytes) {
+                if let Ok(models) = serde_json::from_str::<serde_json::Value>(modl_str) {
+                    if let Some(model_list) = models.as_array() {
+                        let mut sidecar_positions = Vec::new();
+                        let mut loaded_sidecars = 0;
+
+                        for model in model_list {
+                            let file_name = model.get("originalRef")
+                                .and_then(|r| r.get("fileName"))
+                                .and_then(|v| v.as_str())
+                                .or_else(|| model.get("sourcePath").and_then(|v| v.as_str()));
+
+                            if let Some(fname) = file_name {
+                                let fname_trimmed = fname.trim();
+                                if !fname_trimmed.is_empty() {
+                                    let rel_path = Path::new(fname_trimmed);
+                                    let sidecar_path = if rel_path.is_absolute() {
+                                        rel_path.to_path_buf()
+                                    } else {
+                                        path.parent().unwrap_or_else(|| Path::new("")).join(rel_path)
+                                    };
+
+                                    if sidecar_path.exists() {
+                                        if let Ok(pos) = load_binary_stl(&sidecar_path) {
+                                            sidecar_positions.extend_from_slice(&pos);
+                                            loaded_sidecars += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if loaded_sidecars > 0 && !sidecar_positions.is_empty() {
+                            return Ok((sidecar_positions, true));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Fallback: load MESH chunks (decimated preview)
+    let mut idxs = mesh_chunk_indices;
+    idxs.sort();
+    idxs.dedup();
+
+    if idxs.is_empty() {
+        return Err("No MESH or ORIG geometry chunks found in VOXL file".into());
+    }
+
+    let mut all_positions = Vec::new();
+
+    for &idx in &idxs {
+        if let Some(entry) = entries.iter().find(|e| &e.type_tag == b"MESH" && e.index == idx) {
+            let chunk_bytes = read_chunk_data(entry)?;
+            let pos = parse_binary_stl_bytes(&chunk_bytes)?;
+            all_positions.extend_from_slice(&pos);
+        }
+    }
+
+    Ok((all_positions, false))
+}
+
+// ---------------------------------------------------------------------------
 // Ensure directory exists
 // ---------------------------------------------------------------------------
 
 pub fn ensure_dir(path: &Path) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|e| format!("Failed to create {}: {e}", path.display()))
+}
+
+// ---------------------------------------------------------------------------
+// VOXL File Loading & Support Routing
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct VoxlOriginalRef {
+    #[serde(rename = "fileName")]
+    pub file_name: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct VoxlModelEntry {
+    pub id: String,
+    pub name: Option<String>,
+    pub visible: Option<bool>,
+    #[serde(rename = "polygonCount")]
+    pub polygon_count: Option<u32>,
+    #[serde(rename = "isSupportGeometry")]
+    pub is_support_geometry: Option<bool>,
+    pub mesh: Option<VoxlMeshRef>,
+    #[serde(rename = "originalRef")]
+    pub original_ref: Option<VoxlOriginalRef>,
+    #[serde(rename = "sourcePath")]
+    pub source_path: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct VoxlMeshRef {
+    pub mode: Option<String>,
+    #[serde(rename = "chunkIndex")]
+    pub chunk_index: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VoxlLoadedMesh {
+    pub triangles_xyz: Vec<f32>,
+    pub model_triangle_count: usize,
+    pub total_triangle_count: usize,
+    pub mesh_encoding: String,
+}
+
+pub fn load_binary_stl_from_bytes(data: &[u8]) -> Result<Vec<f32>, String> {
+    if data.len() < 84 {
+        return Err("STL data too small (< 84 bytes)".into());
+    }
+
+    let num_triangles = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
+    let expected = 84 + num_triangles * 50;
+    if data.len() < expected {
+        return Err(format!(
+            "STL data truncated: expected {} bytes for {} triangles, got {}",
+            expected, num_triangles, data.len()
+        ));
+    }
+
+    let mut flat = Vec::with_capacity(num_triangles * 9);
+    let mut offset = 84;
+    for _ in 0..num_triangles {
+        offset += 12; // skip normal
+        for _ in 0..3 {
+            flat.push(f32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]));
+            flat.push(f32::from_le_bytes([
+                data[offset + 4],
+                data[offset + 5],
+                data[offset + 6],
+                data[offset + 7],
+            ]));
+            flat.push(f32::from_le_bytes([
+                data[offset + 8],
+                data[offset + 9],
+                data[offset + 10],
+                data[offset + 11],
+            ]));
+            offset += 12;
+        }
+        offset += 2; // attribute byte count
+    }
+    Ok(flat)
+}
+
+pub fn parse_mesh_bytes(data: &[u8]) -> Result<Vec<f32>, String> {
+    if data.len() >= 84 {
+        let num_triangles = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
+        let expected_stl = 84 + num_triangles * 50;
+        if data.len() == expected_stl || (data.len() >= expected_stl && data.len() % 4 != 0) {
+            return load_binary_stl_from_bytes(data);
+        }
+    }
+    if data.len() % 36 == 0 {
+        return read_positions_bin_from_bytes(data);
+    }
+    load_binary_stl_from_bytes(data)
+}
+
+pub fn read_positions_bin_from_bytes(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    if bytes.len() % 4 != 0 {
+        return Err(format!("positions.bin size {} not multiple of 4", bytes.len()));
+    }
+    let count = bytes.len() / 4;
+    let mut floats = vec![0.0f32; count];
+    #[cfg(target_endian = "little")]
+    {
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), floats.as_mut_ptr() as *mut u8, bytes.len());
+        }
+    }
+    #[cfg(not(target_endian = "little"))]
+    {
+        for (i, chunk) in bytes.chunks_exact(4).enumerate() {
+            floats[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
+    }
+    Ok(floats)
+}
+
+/// Error text for a VOXL container below the supported binary floor.
+pub const VOXL_V1_UNSUPPORTED: &str = "VOXL V1 (legacy JSON scene) files are no longer supported; \
+re-export the scene with a current DragonFruit build to get a VOXL V2 binary container.";
+
+fn unsupported_voxl_version_error(version: u16) -> String {
+    format!("Unsupported VOXL binary version {version}. {VOXL_V1_UNSUPPORTED}")
+}
+
+pub fn load_voxl(path: &Path) -> Result<VoxlLoadedMesh, String> {
+    let data = std::fs::read(path).map_err(|e| format!("Failed to read VOXL file: {e}"))?;
+    load_voxl_from_bytes_with_path(&data, path)
+}
+
+pub fn load_voxl_from_bytes(data: &[u8]) -> Result<VoxlLoadedMesh, String> {
+    load_voxl_from_bytes_with_path(data, Path::new(""))
+}
+
+pub fn load_voxl_from_bytes_with_path(data: &[u8], path: &Path) -> Result<VoxlLoadedMesh, String> {
+    if data.len() >= 4 && &data[0..4] == b"VOXL" {
+        if data.len() >= 6 {
+            let ver = u16::from_le_bytes([data[4], data[5]]);
+            if ver < 2 {
+                return Err(unsupported_voxl_version_error(ver));
+            }
+        }
+        if data.len() >= 16 {
+            return load_voxl_v2_from_bytes_with_path(data, path);
+        }
+        return Err(format!(
+            "VOXL binary container is truncated ({} bytes, need at least 16)",
+            data.len()
+        ));
+    }
+    Err(format!(
+        "Not a VOXL binary container (missing VOXL magic header). {VOXL_V1_UNSUPPORTED}"
+    ))
+}
+
+struct VoxlChunkHeader {
+    tag: [u8; 4],
+    index: u16,
+    compression: u16,
+    offset: usize,
+    comp_size: usize,
+    raw_size: usize,
+}
+
+fn decompress_chunk_bytes(data: &[u8], chunk: &VoxlChunkHeader) -> Result<Vec<u8>, String> {
+    if data.len() < chunk.offset + chunk.comp_size {
+        return Err("Truncated chunk data in VOXL file".into());
+    }
+    let slice = &data[chunk.offset..chunk.offset + chunk.comp_size];
+    if chunk.compression == 0 {
+        Ok(slice.to_vec())
+    } else if chunk.compression == 1 {
+        let mut decompressed = vec![0u8; chunk.raw_size];
+        let mut decompressor = libdeflater::Decompressor::new();
+        decompressor.zlib_decompress(slice, &mut decompressed)
+            .map_err(|e| format!("Decompress chunk failed: {e:?}"))?;
+        Ok(decompressed)
+    } else {
+        Err(format!("Unsupported chunk compression: {}", chunk.compression))
+    }
+}
+
+fn load_voxl_v2_from_bytes_with_path(data: &[u8], path: &Path) -> Result<VoxlLoadedMesh, String> {
+    let chunk_count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+    let mut dir_offset = 16;
+    if data.len() < 16 + chunk_count * 20 {
+        return Err("Truncated VOXL header/directory".into());
+    }
+
+    let mut chunks = Vec::with_capacity(chunk_count);
+    for _ in 0..chunk_count {
+        let tag = [data[dir_offset], data[dir_offset + 1], data[dir_offset + 2], data[dir_offset + 3]];
+        let index = u16::from_le_bytes([data[dir_offset + 4], data[dir_offset + 5]]);
+        let compression = u16::from_le_bytes([data[dir_offset + 6], data[dir_offset + 7]]);
+        let offset = u32::from_le_bytes([data[dir_offset + 8], data[dir_offset + 9], data[dir_offset + 10], data[dir_offset + 11]]) as usize;
+        let comp_size = u32::from_le_bytes([data[dir_offset + 12], data[dir_offset + 13], data[dir_offset + 14], data[dir_offset + 15]]) as usize;
+        let raw_size = u32::from_le_bytes([data[dir_offset + 16], data[dir_offset + 17], data[dir_offset + 18], data[dir_offset + 19]]) as usize;
+        dir_offset += 20;
+
+        chunks.push(VoxlChunkHeader { tag, index, compression, offset, comp_size, raw_size });
+    }
+
+    let modl_chunk = chunks.iter().find(|c| &c.tag == b"MODL")
+        .ok_or_else(|| "VOXL container missing MODL chunk".to_string())?;
+
+    let modl_raw_bytes = decompress_chunk_bytes(data, modl_chunk)?;
+    let modl_json_str = std::str::from_utf8(&modl_raw_bytes)
+        .map_err(|e| format!("Invalid UTF-8 in MODL chunk: {e}"))?;
+
+    let models: Vec<VoxlModelEntry> = serde_json::from_str(modl_json_str)
+        .map_err(|e| format!("Failed to parse MODL JSON: {e}"))?;
+
+    let has_orig_chunks = chunks.iter().any(|c| &c.tag == b"ORIG");
+
+    let mut used_orig = false;
+    let mut model_triangles = Vec::new();
+    let mut support_triangles = Vec::new();
+
+    if has_orig_chunks {
+        used_orig = true;
+        for (i, m) in models.iter().enumerate() {
+            if !m.visible.unwrap_or(true) {
+                continue;
+            }
+            let is_support = m.is_support_geometry.unwrap_or(false);
+            let target_chunk_index = m.mesh.as_ref()
+                .and_then(|mesh| mesh.chunk_index)
+                .unwrap_or(i as u16);
+
+            if let Some(c) = chunks.iter().find(|c| &c.tag == b"ORIG" && c.index == target_chunk_index) {
+                let chunk_bytes = decompress_chunk_bytes(data, c)?;
+                let tris = parse_mesh_bytes(&chunk_bytes)?;
+                if is_support {
+                    support_triangles.extend(tris);
+                } else {
+                    model_triangles.extend(tris);
+                }
+            }
+        }
+    } else {
+        let mut loaded_sidecars = 0;
+        for m in &models {
+            if !m.visible.unwrap_or(true) {
+                continue;
+            }
+            let is_support = m.is_support_geometry.unwrap_or(false);
+            let file_name = m.original_ref.as_ref()
+                .and_then(|r| r.file_name.as_ref())
+                .map(|s| s.as_str())
+                .or_else(|| m.source_path.as_deref());
+
+            if let Some(fname) = file_name {
+                let fname_trimmed = fname.trim();
+                if !fname_trimmed.is_empty() {
+                    let rel_path = Path::new(fname_trimmed);
+                    let sidecar_path = if rel_path.is_absolute() {
+                        rel_path.to_path_buf()
+                    } else {
+                        path.parent().unwrap_or_else(|| Path::new("")).join(rel_path)
+                    };
+
+                    if sidecar_path.exists() {
+                        if let Ok(tris) = load_binary_stl(&sidecar_path) {
+                            if is_support {
+                                support_triangles.extend(tris);
+                            } else {
+                                model_triangles.extend(tris);
+                            }
+                            loaded_sidecars += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if loaded_sidecars > 0 {
+            used_orig = true;
+        } else {
+            for (i, m) in models.iter().enumerate() {
+                if !m.visible.unwrap_or(true) {
+                    continue;
+                }
+                let is_support = m.is_support_geometry.unwrap_or(false);
+                let target_chunk_index = m.mesh.as_ref()
+                    .and_then(|mesh| mesh.chunk_index)
+                    .unwrap_or(i as u16);
+
+                if let Some(c) = chunks.iter().find(|c| &c.tag == b"MESH" && c.index == target_chunk_index) {
+                    let chunk_bytes = decompress_chunk_bytes(data, c)?;
+                    let tris = parse_mesh_bytes(&chunk_bytes)?;
+                    if is_support {
+                        support_triangles.extend(tris);
+                    } else {
+                        model_triangles.extend(tris);
+                    }
+                }
+            }
+        }
+    }
+
+    let model_triangle_count = model_triangles.len() / 9;
+    let mut triangles_xyz = model_triangles;
+    triangles_xyz.extend(support_triangles);
+    let total_triangle_count = triangles_xyz.len() / 9;
+    let mesh_encoding = if used_orig { "voxl_orig" } else { "voxl_mesh" };
+
+    Ok(VoxlLoadedMesh {
+        triangles_xyz,
+        model_triangle_count,
+        total_triangle_count,
+        mesh_encoding: mesh_encoding.to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -888,5 +1461,211 @@ mod tests {
         let job: SliceJobV3 = serde_json::from_str(job_json).unwrap();
         assert_eq!(job.format_version, None);
         assert!(job.minimum_aa_alpha_percent >= 0.0);
+    }
+
+    // -- Slice job from the app's payload --
+
+    /// The shape `toNativeMetadataPayload` emits, mesh transport fields included.
+    const APP_JOB: &str = r#"{
+        "output_format": ".ctb", "format_version": "v5enc", "output_path": null,
+        "source_width_px": 120, "source_height_px": 80, "width_px": 40, "height_px": 80,
+        "x_packing_mode": "rgb8_div3", "png_compression_strategy": "balanced",
+        "anti_aliasing_level": "8x", "anti_aliasing_mode": "Vertical2",
+        "blur_brush_radius_px": 2, "blur_brush_kernel": "gaussian",
+        "blur_brush_sigma_x": 0.5, "blur_brush_sigma_y": 0.5,
+        "z_blur_radius_layers": 1, "z_blur_kernel": "box", "z_blur_sigma": 0.5,
+        "aa_on_supports": false, "minimum_aa_alpha_percent": 35,
+        "mirror_x": true, "mirror_y": false,
+        "z_blend_look_back": 5, "z_blend_minimum_alpha_percent": 35, "z_blend_max_alpha_percent": 90,
+        "z_blend_custom_lut": [0, 120, 255], "zaa_kernel": "perturb", "zaa_pattern": "halton",
+        "model_triangle_count": 0, "container_compression_level": 3,
+        "build_width_mm": 60, "build_depth_mm": 40, "layer_height_mm": 0.05, "total_layers": 123,
+        "export_thumbnail_png_base64": null, "mesh_encoding": "raw_f32", "mesh_quantization": null,
+        "metadata_json": "{\"version\":2}",
+        "dither_enabled": false, "dither_bit_depth": null, "dither_device_gamma": 2.2
+    }"#;
+
+    #[test]
+    fn slice_job_from_json_keeps_every_field_the_app_sends() {
+        let job = slice_job_from_json(APP_JOB, vec![0.0; 18], 2).unwrap();
+        assert_eq!(job.output_format, ".ctb");
+        assert_eq!(job.format_version.as_deref(), Some("v5enc"));
+        assert_eq!(job.x_packing_mode, "rgb8_div3");
+        assert_eq!((job.width_px, job.height_px), (40, 80));
+        assert_eq!(job.anti_aliasing_mode, "Vertical2");
+        assert_eq!(job.z_blend_look_back, 5);
+        assert_eq!(job.z_blend_custom_lut.as_deref(), Some(&[0u8, 120, 255][..]));
+        assert_eq!(job.zaa_pattern.as_deref(), Some("halton"));
+        assert_eq!(job.container_compression_level, 3);
+        assert_eq!(job.total_layers, 123, "the payload's layer count wins");
+        assert!(job.mirror_x);
+        assert_eq!(job.metadata_json, "{\"version\":2}");
+        assert_eq!(job.triangles_xyz.len(), 18);
+        assert_eq!(job.model_triangle_count, 2, "zero means the file's count");
+    }
+
+    #[test]
+    fn slice_job_from_json_keeps_a_known_model_triangle_count() {
+        let text = APP_JOB.replace("\"model_triangle_count\": 0", "\"model_triangle_count\": 1");
+        let job = slice_job_from_json(&text, vec![0.0; 18], 2).unwrap();
+        assert_eq!(job.model_triangle_count, 1);
+    }
+
+    #[test]
+    fn slice_job_from_json_refuses_inline_triangles() {
+        let text = APP_JOB.replacen('{', "{ \"triangles_xyz\": [0,0,0,0,0,0,0,0,0],", 1);
+        let err = slice_job_from_json(&text, Vec::new(), 0).unwrap_err();
+        assert!(err.contains("triangles_xyz"), "{err}");
+    }
+
+    #[test]
+    fn slice_job_from_json_reports_a_missing_field() {
+        let err = slice_job_from_json(r#"{ "output_format": ".ctb" }"#, Vec::new(), 0).unwrap_err();
+        assert!(err.starts_with("Invalid slice job"), "{err}");
+    }
+
+    #[test]
+    fn voxl_load_rejects_legacy_v1_json_scene() {
+        // Shape of a pre-release V1 JSON scene; no VOXL magic anywhere.
+        let voxl_json = serde_json::json!({
+            "version": 1,
+            "models": [
+                {
+                    "id": "m1",
+                    "visible": true,
+                    "isSupportGeometry": false,
+                    "mesh": { "mode": "base64-raw", "dataBase64": "AAAAAA==" }
+                }
+            ]
+        })
+        .to_string();
+
+        let err = load_voxl_from_bytes(voxl_json.as_bytes()).unwrap_err();
+        assert!(err.contains("Not a VOXL binary container"), "{err}");
+        assert!(err.contains("VOXL V1"), "{err}");
+        assert!(err.contains("no longer supported"), "{err}");
+    }
+
+    #[test]
+    fn voxl_load_names_the_version_of_a_binary_below_the_floor() {
+        // Magic present but version 1: the legacy binary/JSON hybrid the old
+        // reader used to probe.
+        let mut data = Vec::new();
+        data.extend_from_slice(b"VOXL");
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&[0u8; 10]);
+
+        let err = load_voxl_from_bytes(&data).unwrap_err();
+        assert!(err.contains("Unsupported VOXL binary version 1"), "{err}");
+        assert!(err.contains("VOXL V1"), "{err}");
+
+        // Same version through the triangles entry point.
+        let dir = TempDir::new();
+        let path = dir.join("v1.voxl");
+        std::fs::write(&path, &data).unwrap();
+        let err = load_voxl_triangles(&path).unwrap_err();
+        assert!(err.contains("Unsupported VOXL binary version 1"), "{err}");
+        assert!(!is_voxl_file(&path), "V1 must not be accepted as a VOXL file");
+    }
+
+    #[test]
+    fn voxl_load_rejects_a_truncated_binary_header() {
+        let data = b"VOXL\x02\x00\x00\x00";
+        let err = load_voxl_from_bytes(data).unwrap_err();
+        assert!(err.contains("truncated"), "{err}");
+    }
+
+    #[test]
+    fn voxl_v2_priority_and_classification_loading() {
+        // Let's create two meshes
+        // Tri 1 (model): z=1.0. 9 floats = 36 bytes. We will use raw positions binary (since parse_mesh_bytes accepts it if multiple of 36)
+        let tri1_xyz = vec![0.0f32, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0];
+        let mut tri1_bytes = Vec::new();
+        for &f in &tri1_xyz {
+            tri1_bytes.extend_from_slice(&f.to_le_bytes());
+        }
+
+        // Tri 2 (support): z=5.0. 36 bytes.
+        let tri2_xyz = vec![0.0f32, 0.0, 5.0, 1.0, 0.0, 5.0, 0.0, 1.0, 5.0];
+        let mut tri2_bytes = Vec::new();
+        for &f in &tri2_xyz {
+            tri2_bytes.extend_from_slice(&f.to_le_bytes());
+        }
+
+        // MODL JSON
+        let modl_json = serde_json::json!([
+            {
+                "id": "m1",
+                "visible": true,
+                "isSupportGeometry": false,
+                "mesh": { "chunkIndex": 0 }
+            },
+            {
+                "id": "s1",
+                "visible": true,
+                "isSupportGeometry": true,
+                "mesh": { "chunkIndex": 1 }
+            }
+        ]).to_string();
+        let modl_bytes = modl_json.into_bytes();
+
+        // Let's assemble a VOXL V2 file.
+        // We have 3 chunks: MODL (index 0), MESH (index 0), MESH (index 1)
+        // Chunks layout:
+        // Header: 16 bytes
+        // Directory: 3 chunks * 20 bytes = 60 bytes
+        // Total header/dir: 76 bytes
+        let modl_offset = 76;
+        let modl_len = modl_bytes.len();
+        let mesh0_offset = modl_offset + modl_len;
+        let mesh0_len = tri1_bytes.len();
+        let mesh1_offset = mesh0_offset + mesh0_len;
+        let mesh1_len = tri2_bytes.len();
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"VOXL"); // magic
+        data.extend_from_slice(&2u16.to_le_bytes()); // version
+        data.extend_from_slice(&0u16.to_le_bytes()); // flags
+        data.extend_from_slice(&3u32.to_le_bytes()); // chunk count
+        data.extend_from_slice(&0u32.to_le_bytes()); // reserved
+
+        // Chunk 1: MODL, index 0, compression 0
+        data.extend_from_slice(b"MODL");
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&(modl_offset as u32).to_le_bytes());
+        data.extend_from_slice(&(modl_len as u32).to_le_bytes());
+        data.extend_from_slice(&(modl_len as u32).to_le_bytes());
+
+        // Chunk 2: MESH, index 0, compression 0
+        data.extend_from_slice(b"MESH");
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&(mesh0_offset as u32).to_le_bytes());
+        data.extend_from_slice(&(mesh0_len as u32).to_le_bytes());
+        data.extend_from_slice(&(mesh0_len as u32).to_le_bytes());
+
+        // Chunk 3: MESH, index 1, compression 0
+        data.extend_from_slice(b"MESH");
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&(mesh1_offset as u32).to_le_bytes());
+        data.extend_from_slice(&(mesh1_len as u32).to_le_bytes());
+        data.extend_from_slice(&(mesh1_len as u32).to_le_bytes());
+
+        // Append payloads
+        data.extend_from_slice(&modl_bytes);
+        data.extend_from_slice(&tri1_bytes);
+        data.extend_from_slice(&tri2_bytes);
+
+        // Load V2 mesh and check classification
+        let voxl = load_voxl_from_bytes(&data).unwrap();
+        assert_eq!(voxl.model_triangle_count, 1);
+        assert_eq!(voxl.total_triangle_count, 2);
+        assert_eq!(voxl.mesh_encoding, "voxl_mesh");
+        // Model tri first (z=1.0)
+        assert_eq!(voxl.triangles_xyz[2], 1.0);
+        // Support tri second (z=5.0)
+        assert_eq!(voxl.triangles_xyz[11], 5.0);
     }
 }

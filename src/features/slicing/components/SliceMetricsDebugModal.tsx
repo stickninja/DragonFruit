@@ -1,5 +1,6 @@
 import React from 'react';
 import { Activity, Cpu, Layers3, Timer, X } from 'lucide-react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import type { SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 
 type SliceMetricsDebugModalProps = {
@@ -66,6 +67,8 @@ export function SliceMetricsDebugModal({
   outputName,
   outputSizeLabel,
 }: SliceMetricsDebugModalProps) {
+  useEscapeToClose(isOpen, onClose);
+
   const [copyState, setCopyState] = React.useState<'idle' | 'copied' | 'error'>('idle');
 
   const copyPayload = React.useMemo(() => {
@@ -353,13 +356,11 @@ export function SliceMetricsDebugModal({
                   <RuntimeStat label="Build area" value={`${benchmark.jobConfig.buildWidthMm.toFixed(2)} × ${benchmark.jobConfig.buildDepthMm.toFixed(2)} mm`} />
                   <RuntimeStat label="Layer height" value={`${benchmark.jobConfig.layerHeightMm.toFixed(4)} mm`} />
                   <RuntimeStat label="AA level" value={benchmark.jobConfig.antiAliasingLevel} />
-                  <RuntimeStat label="Compute backend" value={benchmark.jobConfig.computeBackend} />
                   <RuntimeStat label="PNG strategy" value={benchmark.jobConfig.pngCompressionStrategy} />
                   <RuntimeStat label="Container compression" value={String(benchmark.jobConfig.containerCompressionLevel)} />
                   <RuntimeStat label="X packing mode" value={benchmark.jobConfig.xPackingMode} />
                   <RuntimeStat label="Mesh transfer mode" value={benchmark.jobConfig.meshTransferMode} />
                   <RuntimeStat label="Mesh encoding" value={benchmark.jobConfig.meshEncoding} />
-                  <RuntimeStat label="BVH accel requested" value={benchmark.jobConfig.bvhAccelerationEnabled ? 'true' : 'false'} />
                   <RuntimeStat label="Initial staging reserve" value={formatBytes(benchmark.jobConfig.initialMeshStagingBytes)} />
                   <RuntimeStat label="Target chunk size" value={formatBytes(benchmark.jobConfig.meshChunkTargetBytes)} />
                 </div>

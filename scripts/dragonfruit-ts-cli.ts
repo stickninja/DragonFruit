@@ -3,7 +3,8 @@
  * DragonFruit TS CLI — headless scene & support operations.
  *
  * Works at the VOXL file level (.voxl) — the same interchange format the GUI
- * uses. Reads/writes VoxlDocumentV1 JSON, so the CLI and GUI share the same
+ * uses. Reads the binary container into the normalised VoxlDocumentV1 shape and
+ * writes it back with the V2 binary codec, so the CLI and GUI share the same
  * state format. No THREE.js or React dependencies.
  *
  * Usage:
@@ -16,18 +17,15 @@
 
 import { readFileSync, writeFileSync, statSync } from 'fs';
 import { basename, resolve, dirname } from 'path';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
+import { createRequire } from 'module';
 import { v4 as uuidv4 } from 'uuid';
-import {
-  parseVoxlAuto,
-  parseVoxlDocument,
-  serializeVoxlDocument,
-  buildVoxlDocumentV1,
-} from '../src/features/scene/voxl/codec';
+import { parseVoxlAuto } from '../src/features/scene/voxl/codec';
+import { serializeVoxlDocumentV2 } from '../src/features/scene/voxl/codec-v2';
 import type {
+  BuildVoxlDocumentInput,
   VoxlDocumentV1,
   VoxlModelEntry,
-  VoxlModelRuntimeLike,
 } from '../src/features/scene/voxl/types';
 import type {
   DragonfruitImportFormat,
@@ -40,20 +38,64 @@ import type {
   Vec3,
   SupportEntity,
 } from '../src/supports/types';
+import type { AaPreset } from '../src/features/slicing/autoAaPhysics';
+import type { SceneSliceModelInput } from './cli/sceneSliceMesh';
+import type { RaftSettings } from '../src/supports/Rafts/Crenelated/RaftTypes';
 
 // ---------------------------------------------------------------------------
 // VOXL File I/O
 // ---------------------------------------------------------------------------
 
+// Pre-decoded embedded mesh bytes (STL) from the most recently loaded VOXL,
+// keyed by model id. Populated by loadVoxl for `embedded-chunk`/`embedded-file`
+// models; the slice path prefers these over hitting the filesystem.
+let LOADED_MESH_BYTES = new Map<string, Uint8Array>();
+// Pre-decoded full-resolution original mesh bytes (ORIG chunk), keyed by model
+// id. Present only for VOXLs saved with "Save original model along with
+// decimated"; the slice path prefers these over the decimated MESH bytes so it
+// slices the same geometry the GUI would.
+let LOADED_ORIG_BYTES = new Map<string, Uint8Array>();
 function loadVoxl(path: string): VoxlDocumentV1 {
   const raw = readFileSync(path);
   const result = parseVoxlAuto(raw);
+  LOADED_MESH_BYTES = result.meshBytes;
+  LOADED_ORIG_BYTES = result.originalMeshBytes ?? new Map();
   return result.document;
 }
 
-function saveVoxl(path: string, doc: VoxlDocumentV1): void {
-  const json = serializeVoxlDocument(doc, true, { compression: 'auto' });
-  writeFileSync(path, json, 'utf-8');
+/**
+ * Adapt the in-memory V1-shaped document to the V2 writer's input.
+ *
+ * The writer keys pre-decoded mesh bytes by model *index*; `loadVoxl` holds
+ * them by model *id*. A model with no loaded bytes keeps its `mesh` ref
+ * unchanged (the writer emits no MESH chunk for its index).
+ */
+function toBuildInput(doc: VoxlDocumentV1): { input: BuildVoxlDocumentInput; meshBytes: Map<number, Uint8Array> } {
+  const meshBytes = new Map<number, Uint8Array>();
+  doc.models.forEach((model, index) => {
+    const bytes = LOADED_MESH_BYTES.get(model.id);
+    if (bytes) meshBytes.set(index, bytes);
+  });
+
+  const input: BuildVoxlDocumentInput = {
+    models: doc.models,
+    activeModelId: doc.scene.activeModelId,
+    selectedModelIds: doc.scene.selectedModelIds,
+    supports: doc.supports,
+    extensions: doc.extensions,
+    meta: {
+      generator: doc.meta.generator,
+      generatorVersion: doc.meta.generatorVersion,
+    },
+  };
+
+  return { input, meshBytes };
+}
+
+async function saveVoxl(path: string, doc: VoxlDocumentV1): Promise<void> {
+  const { input, meshBytes } = toBuildInput(doc);
+  const bytes = await serializeVoxlDocumentV2(input, meshBytes);
+  writeFileSync(path, bytes);
 }
 
 function createEmptyDoc(): VoxlDocumentV1 {
@@ -68,13 +110,21 @@ function createEmptyDoc(): VoxlDocumentV1 {
     knots: [],
   };
 
-  return buildVoxlDocumentV1({
+  const now = new Date().toISOString();
+  return {
+    magic: 'VOXL',
+    version: 1,
+    meta: {
+      generator: 'dragonfruit-ts-cli',
+      createdAt: now,
+      updatedAt: now,
+      units: 'mm',
+      coordinateSystem: 'right-handed-z-up',
+    },
+    scene: { activeModelId: null, selectedModelIds: [] },
     models: [],
-    activeModelId: null,
-    selectedModelIds: [],
     supports: emptySupports,
-    meta: { generator: 'dragonfruit-ts-cli' },
-  });
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +181,17 @@ function optionalFlag(flags: Record<string, string | boolean>, key: string): str
   return val as string;
 }
 
+/** Reads and parses the JSON file a flag names, if the flag was given. */
+function readJsonFlag(flags: Record<string, string | boolean>, key: string): unknown {
+  const path = optionalFlag(flags, key);
+  if (path === undefined) return undefined;
+  try {
+    return JSON.parse(readFileSync(resolve(path), 'utf-8')) as unknown;
+  } catch (err) {
+    throw new Error(`--${key} ${path}: ${(err as Error).message}`);
+  }
+}
+
 function jsonOutput(flags: Record<string, string | boolean>): boolean {
   return flags['json'] === true;
 }
@@ -139,10 +200,10 @@ function jsonOutput(flags: Record<string, string | boolean>): boolean {
 // Scene commands
 // ---------------------------------------------------------------------------
 
-function sceneCreate(args: ReturnType<typeof parseArgs>): void {
+async function sceneCreate(args: ReturnType<typeof parseArgs>): Promise<void> {
   const output = requireFlag(args.flags, 'o');
   const doc = createEmptyDoc();
-  saveVoxl(output, doc);
+  await saveVoxl(output, doc);
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ created: output }, null, 2));
   } else {
@@ -150,7 +211,7 @@ function sceneCreate(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function sceneAddModel(args: ReturnType<typeof parseArgs>): void {
+async function sceneAddModel(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: scene add-model <scene.voxl> --mesh <path>');
 
@@ -181,7 +242,7 @@ function sceneAddModel(args: ReturnType<typeof parseArgs>): void {
 
   doc.models.push(model);
   doc.scene.activeModelId = model.id;
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify(model, null, 2));
@@ -190,7 +251,7 @@ function sceneAddModel(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function sceneRemoveModel(args: ReturnType<typeof parseArgs>): void {
+async function sceneRemoveModel(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: scene remove-model <scene.voxl> --id <id>');
 
@@ -211,7 +272,7 @@ function sceneRemoveModel(args: ReturnType<typeof parseArgs>): void {
   if (doc.scene.activeModelId === id) doc.scene.activeModelId = null;
   doc.scene.selectedModelIds = doc.scene.selectedModelIds.filter((sid) => sid !== id);
 
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ removed: id, models_before: before, models_after: doc.models.length }, null, 2));
@@ -247,7 +308,7 @@ function sceneListModels(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function sceneTransformModel(args: ReturnType<typeof parseArgs>): void {
+async function sceneTransformModel(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: scene transform-model <scene.voxl> --id <id>');
 
@@ -264,7 +325,7 @@ function sceneTransformModel(args: ReturnType<typeof parseArgs>): void {
   if (rotStr) model.transform.rotation = parseVec3(rotStr);
   if (scaleStr) model.transform.scale = parseVec3(scaleStr);
 
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ id, transform: model.transform }, null, 2));
@@ -273,7 +334,7 @@ function sceneTransformModel(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function sceneDuplicate(args: ReturnType<typeof parseArgs>): void {
+async function sceneDuplicate(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: scene duplicate <scene.voxl> --id <id>');
 
@@ -298,7 +359,7 @@ function sceneDuplicate(args: ReturnType<typeof parseArgs>): void {
     newIds.push(copy.id);
   }
 
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ duplicated: newIds }, null, 2));
@@ -311,7 +372,7 @@ function sceneDuplicate(args: ReturnType<typeof parseArgs>): void {
 // Support commands — manipulates DragonfruitImportFormat inside VOXL
 // ---------------------------------------------------------------------------
 
-function supportAddTrunk(args: ReturnType<typeof parseArgs>): void {
+async function supportAddTrunk(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support add-trunk <scene.voxl> --model-id <id> --position x,y,z');
 
@@ -348,7 +409,7 @@ function supportAddTrunk(args: ReturnType<typeof parseArgs>): void {
 
   doc.supports.roots.push(root);
   doc.supports.trunks.push(trunk);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ trunk_id: trunkId, root_id: rootId, position: pos }, null, 2));
@@ -357,7 +418,7 @@ function supportAddTrunk(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function supportAddBranch(args: ReturnType<typeof parseArgs>): void {
+async function supportAddBranch(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support add-branch <scene.voxl> --model-id <id> --parent-knot-id <id>');
 
@@ -382,7 +443,7 @@ function supportAddBranch(args: ReturnType<typeof parseArgs>): void {
   };
 
   doc.supports.branches.push(branch);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ branch_id: branchId }, null, 2));
@@ -391,7 +452,7 @@ function supportAddBranch(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function supportAddLeaf(args: ReturnType<typeof parseArgs>): void {
+async function supportAddLeaf(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support add-leaf <scene.voxl> --model-id <id> --parent-knot-id <id> --contact x,y,z --normal x,y,z');
 
@@ -418,7 +479,7 @@ function supportAddLeaf(args: ReturnType<typeof parseArgs>): void {
   };
 
   doc.supports.leaves.push(leaf);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ leaf_id: leafId }, null, 2));
@@ -427,7 +488,7 @@ function supportAddLeaf(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function supportAddBrace(args: ReturnType<typeof parseArgs>): void {
+async function supportAddBrace(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support add-brace <scene.voxl> --model-id <id> --start-knot <id> --end-knot <id>');
 
@@ -447,7 +508,7 @@ function supportAddBrace(args: ReturnType<typeof parseArgs>): void {
   };
 
   doc.supports.braces.push(brace);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ brace_id: braceId }, null, 2));
@@ -456,7 +517,7 @@ function supportAddBrace(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function supportAddKnot(args: ReturnType<typeof parseArgs>): void {
+async function supportAddKnot(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support add-knot <scene.voxl> --parent-shaft-id <id> --position x,y,z');
 
@@ -474,7 +535,7 @@ function supportAddKnot(args: ReturnType<typeof parseArgs>): void {
   };
 
   doc.supports.knots.push(knot);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ knot_id: knotId }, null, 2));
@@ -483,7 +544,7 @@ function supportAddKnot(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function supportRemove(args: ReturnType<typeof parseArgs>): void {
+async function supportRemove(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support remove <scene.voxl> --id <id>');
 
@@ -532,7 +593,7 @@ function supportRemove(args: ReturnType<typeof parseArgs>): void {
       (k.kickstand?.id ?? k.id) !== id);
   }
 
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ removed: id }, null, 2));
@@ -595,7 +656,7 @@ function sceneLoad(args: ReturnType<typeof parseArgs>): void {
 // Support update — patch fields on any support element by ID
 // ---------------------------------------------------------------------------
 
-function supportUpdate(args: ReturnType<typeof parseArgs>): void {
+async function supportUpdate(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support update <scene.voxl> --id <id> [--diameter N] [--position x,y,z] [--tip-diameter N]');
 
@@ -655,7 +716,7 @@ function supportUpdate(args: ReturnType<typeof parseArgs>): void {
 
   if (!found) throw new Error(`Support element '${id}' not found`);
 
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ updated: id }, null, 2));
   } else {
@@ -678,7 +739,7 @@ function setGroups(doc: VoxlDocumentV1, groups: VoxlGroup[]): void {
   (doc.extensions as any).groups = groups;
 }
 
-function sceneGroup(args: ReturnType<typeof parseArgs>): void {
+async function sceneGroup(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: scene group <scene.voxl> --ids id1,id2 [--name "Group"]');
 
@@ -691,7 +752,7 @@ function sceneGroup(args: ReturnType<typeof parseArgs>): void {
   const groups = getGroups(doc);
   groups.push({ id: groupId, name, modelIds });
   setGroups(doc, groups);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ group_id: groupId, name, modelIds }, null, 2));
@@ -700,7 +761,7 @@ function sceneGroup(args: ReturnType<typeof parseArgs>): void {
   }
 }
 
-function sceneUngroup(args: ReturnType<typeof parseArgs>): void {
+async function sceneUngroup(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: scene ungroup <scene.voxl> --group-id <id>');
 
@@ -708,7 +769,7 @@ function sceneUngroup(args: ReturnType<typeof parseArgs>): void {
   const groupId = requireFlag(args.flags, 'group-id');
   const groups = getGroups(doc).filter((g) => g.id !== groupId);
   setGroups(doc, groups);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ ungrouped: groupId }, null, 2));
@@ -738,7 +799,7 @@ function sceneListGroups(args: ReturnType<typeof parseArgs>): void {
 // Scene center-xy — wraps useModelTransform.ts centerXY logic
 // ---------------------------------------------------------------------------
 
-function sceneCenterXY(args: ReturnType<typeof parseArgs>): void {
+async function sceneCenterXY(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: scene center-xy <scene.voxl> --id <model-id>');
 
@@ -752,7 +813,7 @@ function sceneCenterXY(args: ReturnType<typeof parseArgs>): void {
   model.transform.position.x = 0;
   model.transform.position.y = 0;
 
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({
@@ -769,7 +830,7 @@ function sceneCenterXY(args: ReturnType<typeof parseArgs>): void {
 // Support straighten-segment — bezier→straight (wraps toggleSegmentCurve logic)
 // ---------------------------------------------------------------------------
 
-function supportStraightenSegment(args: ReturnType<typeof parseArgs>): void {
+async function supportStraightenSegment(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support straighten-segment <scene.voxl> --id <segment-id>');
 
@@ -803,7 +864,7 @@ function supportStraightenSegment(args: ReturnType<typeof parseArgs>): void {
 
   if (!found) throw new Error(`Segment '${segId}' not found`);
 
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ straightened: segId }, null, 2));
   } else {
@@ -815,7 +876,7 @@ function supportStraightenSegment(args: ReturnType<typeof parseArgs>): void {
 // Support add-twig — model-to-model contact via disks
 // ---------------------------------------------------------------------------
 
-function supportAddTwig(args: ReturnType<typeof parseArgs>): void {
+async function supportAddTwig(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support add-twig <scene.voxl> --model-id <id> --contact-a x,y,z --contact-b x,y,z');
 
@@ -844,7 +905,7 @@ function supportAddTwig(args: ReturnType<typeof parseArgs>): void {
 
   if (!doc.supports.twigs) (doc.supports as any).twigs = [];
   (doc.supports as any).twigs.push(twig);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ twig_id: twigId }, null, 2));
@@ -857,7 +918,7 @@ function supportAddTwig(args: ReturnType<typeof parseArgs>): void {
 // Support add-stick — model-to-model contact via cones
 // ---------------------------------------------------------------------------
 
-function supportAddStick(args: ReturnType<typeof parseArgs>): void {
+async function supportAddStick(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support add-stick <scene.voxl> --model-id <id> --contact-a x,y,z --contact-b x,y,z');
 
@@ -885,7 +946,7 @@ function supportAddStick(args: ReturnType<typeof parseArgs>): void {
 
   if (!doc.supports.sticks) (doc.supports as any).sticks = [];
   (doc.supports as any).sticks.push(stick);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ stick_id: stickId }, null, 2));
@@ -898,7 +959,7 @@ function supportAddStick(args: ReturnType<typeof parseArgs>): void {
 // Support add-kickstand / remove-kickstand
 // ---------------------------------------------------------------------------
 
-function supportAddKickstand(args: ReturnType<typeof parseArgs>): void {
+async function supportAddKickstand(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: support add-kickstand <scene.voxl> --model-id <id> --base x,y,z --host-knot-id <id> --host-segment-id <id>');
 
@@ -941,7 +1002,7 @@ function supportAddKickstand(args: ReturnType<typeof parseArgs>): void {
 
   if (!doc.supports.kickstands) (doc.supports as any).kickstands = [];
   (doc.supports as any).kickstands.push(kickstand);
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ kickstand_id: kickstandId, root_id: rootId }, null, 2));
@@ -954,7 +1015,7 @@ function supportAddKickstand(args: ReturnType<typeof parseArgs>): void {
 // Scene place-on-platform — needs STL bbox Z
 // ---------------------------------------------------------------------------
 
-function scenePlace(args: ReturnType<typeof parseArgs>): void {
+async function scenePlace(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: scene place-on-platform <scene.voxl> --id <model-id> --mesh-dir <dir>');
 
@@ -980,7 +1041,7 @@ function scenePlace(args: ReturnType<typeof parseArgs>): void {
 
   const oldZ = model.transform.position.z;
   model.transform.position.z = -minZ;
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({ id, position: model.transform.position, mesh_min_z: minZ }, null, 2));
@@ -1070,7 +1131,7 @@ function geometryFromPositions(positions: Float32Array): THREE.BufferGeometry {
   return geom;
 }
 
-function sceneArrange(args: ReturnType<typeof parseArgs>): void {
+async function sceneArrange(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) throw new Error('Usage: scene arrange <scene.voxl> [--spacing 2] [--build-width-mm 218] [--build-depth-mm 122] [--mesh-dir <dir>]');
 
@@ -1157,7 +1218,7 @@ function sceneArrange(args: ReturnType<typeof parseArgs>): void {
     model.transform.rotation.z = update.transform.rotation.z;
   }
 
-  saveVoxl(voxlPath, doc);
+  await saveVoxl(voxlPath, doc);
 
   if (jsonOutput(args.flags)) {
     const result = updates.map((u) => ({
@@ -1184,7 +1245,10 @@ function sceneArrange(args: ReturnType<typeof parseArgs>): void {
  * Same logic as cli.rs load_binary_stl.
  */
 function loadBinaryStl(path: string): Float32Array {
-  const data = readFileSync(path);
+  return parseBinaryStl(readFileSync(path));
+}
+
+function parseBinaryStl(data: Buffer): Float32Array {
   if (data.length < 84) throw new Error(`STL file too small: ${data.length} bytes`);
 
   const numTriangles = data.readUInt32LE(80);
@@ -1282,16 +1346,88 @@ function writePositionsBin(path: string, positions: Float32Array): void {
   writeFileSync(path, Buffer.from(positions.buffer, positions.byteOffset, positions.byteLength));
 }
 
-function sceneSlice(args: ReturnType<typeof parseArgs>): void {
+/** Shared zero-length array to overwrite a reference we want dropped without a fresh alloc. */
+const EMPTY_F32 = new Float32Array(0);
+
+/**
+ * Best-effort hand of freed memory back to V8/OS. Only actually does anything when
+ * node was started with --expose-gc (the benchmark driver sets that via NODE_OPTIONS);
+ * otherwise it's a no-op and V8 reclaims dropped references on its own under pressure.
+ * Used to keep the CLI's heap small on low-resource machines — geometry buffers are
+ * released the moment the slicing engine no longer needs them.
+ */
+function releaseHeap(): void {
+  const g = (globalThis as { gc?: () => void }).gc;
+  if (typeof g === 'function') g();
+}
+
+// `scene slice` builds its job with the app's own code, which reads the plugin
+// registry. Load it only for this command, so the others keep working on a
+// checkout where the registry has not been generated.
+function loadSceneSliceJob(): typeof import('./cli/sceneSliceJob') {
+  try {
+    return createRequire(import.meta.url)('./cli/sceneSliceJob');
+  } catch (err) {
+    if (/generated/i.test(String((err as Error).message))) {
+      throw new Error(
+        'scene slice needs the generated plugin registry. Run '
+        + '`npm run generate:plugin-registry && npm run generate:builtin-simple-plugins` first.\n'
+        + `(${(err as Error).message})`,
+      );
+    }
+    throw err;
+  }
+}
+
+// Assembling the slice mesh pulls in THREE and the slicing stores, so load it
+// only for `scene slice` (keeps the header's "no THREE" promise for every other
+// command).
+function loadSceneSliceMesh(): typeof import('./cli/sceneSliceMesh') {
+  return createRequire(import.meta.url)('./cli/sceneSliceMesh');
+}
+
+async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
-  if (!voxlPath) throw new Error('Usage: scene slice <scene.voxl> --o <output.nanodlp> [--mesh-dir <dir>]');
+  if (!voxlPath) {
+    throw new Error(
+      'Usage: scene slice <scene.voxl> --o <output> [--mesh-dir <dir>]\n'
+      + '  [--printer <profile.json>] [--printer-id <id>]  preset, profile or app-exported bundle; builds the job the app would\n'
+      + '  [--material <profile.json>]                      default: the bundle\'s first material, else the app\'s default\n'
+      + '  [--aa-preset sharp|balanced|smooth|raw]          the panel\'s auto AA preset (default: balanced)\n'
+      + '  [--aa-settings <aa.json>]                        AA settings on top of the material\'s, like a session override\n'
+      + '  [--lut-curves <curves.json>]                     the curve library a custom LUT is looked up in\n'
+      + '  [--dither on|off] [--dither-bit-depth N] [--dither-device-gamma G]\n'
+      + '  [--raft off|solid|line]                          bake a raft under rooted supports (default: off)\n'
+      + '  [--raft-settings <raft.json>]                    full raft settings, as the app stores them (merged over defaults)\n'
+      + '  [--layer-height N] [--build-width-mm N] [--build-depth-mm N]  override the material / printer',
+    );
+  }
 
   const output = requireFlag(args.flags, 'o');
   const meshDir = optionalFlag(args.flags, 'mesh-dir') ?? dirname(resolve(voxlPath));
-  const layerHeight = optionalFlag(args.flags, 'layer-height') ?? '0.05';
-  const buildWidth = optionalFlag(args.flags, 'build-width-mm') ?? '218.0';
-  const buildDepth = optionalFlag(args.flags, 'build-depth-mm') ?? '122.0';
-
+  const raftMode = optionalFlag(args.flags, 'raft') as 'off' | 'solid' | 'line' | undefined;
+  if (raftMode !== undefined && raftMode !== 'off' && raftMode !== 'solid' && raftMode !== 'line') {
+    throw new Error(`--raft must be off, solid or line (got '${raftMode}')`);
+  }
+  const raftSettings = readJsonFlag(args.flags, 'raft-settings') as Partial<RaftSettings> | undefined;
+  const aaPreset = optionalFlag(args.flags, 'aa-preset') as AaPreset | 'raw' | undefined; // sharp|balanced|smooth|raw
+  const printerPath = optionalFlag(args.flags, 'printer');
+  const materialPath = printerPath ? optionalFlag(args.flags, 'material') : undefined;
+  const sliceJob = loadSceneSliceJob();
+  const job = sliceJob.resolveSceneSliceJob({
+    printer: printerPath ? JSON.parse(readFileSync(resolve(printerPath), 'utf-8')) : undefined,
+    printerId: optionalFlag(args.flags, 'printer-id'),
+    material: materialPath ? JSON.parse(readFileSync(resolve(materialPath), 'utf-8')) : undefined,
+    layerHeight: optionalFlag(args.flags, 'layer-height'),
+    buildWidthMm: optionalFlag(args.flags, 'build-width-mm'),
+    buildDepthMm: optionalFlag(args.flags, 'build-depth-mm'),
+    aaPreset,
+    aaSettings: readJsonFlag(args.flags, 'aa-settings'),
+    lutCurves: readJsonFlag(args.flags, 'lut-curves'),
+    dither: optionalFlag(args.flags, 'dither'), // 'on' | 'off' | undefined
+    ditherBitDepth: optionalFlag(args.flags, 'dither-bit-depth'),
+    ditherDeviceGamma: optionalFlag(args.flags, 'dither-device-gamma'),
+  });
   const doc = loadVoxl(voxlPath);
   const visibleModels = doc.models.filter((m) => m.visible);
 
@@ -1299,26 +1435,56 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
 
   console.error(`scene slice: ${visibleModels.length} visible models`);
 
-  // Phase 1: Load each model's STL, apply translation, collect all positions
-  const allPositions: Float32Array[] = [];
-  let totalTriangles = 0;
+  // Phase 1: Load each model's STL and bake its scene transform into world
+  // space. The vertices go to the orchestrator as-is (identity transform), so
+  // the model triangles match the CLI's validated world output.
+  const modelInputs: SceneSliceModelInput[] = [];
 
   for (const model of visibleModels) {
-    const meshFileName = model.mesh.fileName ?? model.name + '.stl';
-    // Try mesh-dir, then absolute path, then cwd
-    let meshPath: string | null = null;
-    const candidates = [
-      resolve(meshDir, meshFileName),
-      meshFileName,
-      resolve(meshFileName),
-    ];
-    for (const c of candidates) {
-      try { statSync(c); meshPath = c; break; } catch { /* try next */ }
-    }
-    if (!meshPath) throw new Error(`Mesh file not found for model '${model.name}': tried ${candidates.join(', ')}`);
+    let positions: Float32Array;
 
-    console.error(`  loading ${model.name}: ${meshPath}`);
-    const positions = loadBinaryStl(meshPath);
+    // Mesh modifiers (hollowing / hole punches) are reconstructed by the codec
+    // from the MODL JSON + the HSRC/CAVT/PSRC snapshot chunks. Only a modifier
+    // that is *baked into geometry* affects what we slice — its result already
+    // lives in the MESH chunk, so we slice MESH as-is and never re-apply the
+    // snapshot chunks. Unbaked hollowing / hole punches are ignored (the GUI
+    // bakes those via desktop IPC before slicing; headless we take the stored
+    // geometry as given).
+    const mm = model.meshModifiers;
+    const hollow = mm?.hollowing;
+    const modifiersBaked = Boolean((hollow?.enabled && hollow.bakedIntoGeometry) || mm?.holePunchesBakedIntoGeometry);
+
+    // Geometry source: prefer the full-res ORIG chunk, EXCEPT when a modifier is
+    // baked in — ORIG is the pristine pre-modifier original and would slice the
+    // solid / un-punched shape, so a baked model reads the modified MESH chunk.
+    const meshBytes = LOADED_MESH_BYTES.get(model.id);
+    const origBytes = LOADED_ORIG_BYTES.get(model.id);
+    const embedded = modifiersBaked ? (meshBytes ?? origBytes) : (origBytes ?? meshBytes);
+    if (embedded) {
+      // `embedded-chunk`/`embedded-file`: the codec already decoded the geometry
+      // to STL bytes — no filesystem lookup needed.
+      positions = parseBinaryStl(Buffer.from(embedded.buffer, embedded.byteOffset, embedded.byteLength));
+      const src = embedded === origBytes ? 'orig' : 'mesh';
+      console.error(`  loading ${model.name}: <embedded ${src}${modifiersBaked ? ', baked-modifiers' : ''}>`);
+    } else if (model.mesh.mode === 'external-file' || model.mesh.fileName) {
+      const meshFileName = model.mesh.fileName ?? model.name + '.stl';
+      // Try mesh-dir, then absolute path, then cwd
+      let meshPath: string | null = null;
+      const candidates = [
+        resolve(meshDir, meshFileName),
+        meshFileName,
+        resolve(meshFileName),
+      ];
+      for (const c of candidates) {
+        try { statSync(c); meshPath = c; break; } catch { /* try next */ }
+      }
+      if (!meshPath) throw new Error(`Mesh file not found for model '${model.name}': tried ${candidates.join(', ')}`);
+
+      console.error(`  loading ${model.name}: ${meshPath}`);
+      positions = loadBinaryStl(meshPath);
+    } else {
+      throw new Error(`Model '${model.name}' has mesh.mode='${model.mesh.mode}' but no embedded bytes and no fileName`);
+    }
 
     // Apply full scene transform (position + rotation + scale)
     applyVoxlTransform(positions, model.transform);
@@ -1330,41 +1496,110 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
       console.error(`    transform: pos=(${t.position.x.toFixed(1)},${t.position.y.toFixed(1)},${t.position.z.toFixed(1)}) rot=(${t.rotation.x.toFixed(3)},${t.rotation.y.toFixed(3)},${t.rotation.z.toFixed(3)}) scale=(${t.scale.x},${t.scale.y},${t.scale.z})`);
     }
 
-    allPositions.push(positions);
-    totalTriangles += positions.length / 9;
+    modelInputs.push({
+      id: model.id,
+      name: model.name,
+      color: model.color,
+      polygonCount: model.polygonCount,
+      isSupportGeometry: model.isSupportGeometry ?? false,
+      positions,
+    });
   }
 
-  // Phase 2: Merge into single positions buffer
-  const totalFloats = allPositions.reduce((sum, p) => sum + p.length, 0);
-  const merged = new Float32Array(totalFloats);
-  let writeOffset = 0;
-  for (const p of allPositions) {
-    merged.set(p, writeOffset);
-    writeOffset += p.length;
+  // Phase 2: Assemble the slice mesh. With a printer, the app's own orchestrator
+  // merges models + supports + raft, splits model from support triangles, and
+  // derives the layer count — one shared path keeps `scene slice` in parity with
+  // the GUI slice. Without a printer (raw engine defaults) only the model
+  // geometry is sliced.
+  let meshPositions: Float32Array;
+  let modelTriangleCount: number;
+  let maxZMm = 0;
+  const raftOn = Boolean(raftSettings) || (raftMode !== undefined && raftMode !== 'off');
+  if (job.printer && job.material) {
+    const mesh = await loadSceneSliceMesh().buildSceneSliceMesh({
+      models: modelInputs,
+      supports: doc.supports,
+      printerProfile: job.printer,
+      materialProfile: job.material,
+      raftMode,
+      raftSettings,
+    });
+    meshPositions = mesh.trianglesXYZ;
+    modelTriangleCount = mesh.modelTriangleCount;
+    maxZMm = mesh.meshBounds.maxZ;
+    const supportTriangles = meshPositions.length / 9 - modelTriangleCount;
+    console.error(`scene slice: ${modelTriangleCount} model + ${supportTriangles} support${raftOn ? '+raft' : ''} triangles`);
+  } else {
+    if (raftOn) throw new Error('--raft / --raft-settings need a printer; pass --printer');
+    const totalFloats = modelInputs.reduce((sum, m) => sum + m.positions.length, 0);
+    meshPositions = new Float32Array(totalFloats);
+    let writeOffset = 0;
+    for (const m of modelInputs) {
+      meshPositions.set(m.positions, writeOffset);
+      writeOffset += m.positions.length;
+      for (let i = 2; i < m.positions.length; i += 3) {
+        if (m.positions[i] > maxZMm) maxZMm = m.positions[i];
+      }
+    }
+    modelTriangleCount = totalFloats / 9;
+    console.error(`scene slice: ${modelTriangleCount} model triangles (no printer: supports not sliced)`);
   }
+  // The per-model buffers are now consumed; drop them before writing out.
+  modelInputs.length = 0;
+  releaseHeap();
 
-  // Phase 3: Write merged positions.bin
+  // Phase 3: Write positions.bin
   const tmpDir = `/tmp/df-scene-slice-${Date.now()}`;
   execSync(`mkdir -p ${tmpDir}`);
   const mergedPath = resolve(tmpDir, 'positions.bin');
-  writePositionsBin(mergedPath, merged);
-  console.error(`  merged: ${totalTriangles} triangles -> ${mergedPath}`);
+  const totalTriangles = meshPositions.length / 9;
+  writePositionsBin(mergedPath, meshPositions);
+  console.error(`  mesh: ${totalTriangles} triangles -> ${mergedPath}`);
+
+  // Hand-off complete: positions.bin on disk now owns the geometry, and the
+  // slicing engine (Rust) reads it from there — node holds nothing the engine
+  // needs. Drop the mesh buffer (the last large buffer) before shelling out so
+  // the process sits near-idle in RAM during the blocking slice.
+  meshPositions = EMPTY_F32;
+  releaseHeap();
 
   // Phase 4: Shell out to Rust slicer
   const rustCli = resolve(dirname(new URL(import.meta.url).pathname), '../rust/dragonfruit-cli/target/release/dragonfruit-cli');
-  const sliceCmd = [
-    rustCli,
-    'slice', 'run',
-    mergedPath,
-    '-o', resolve(output),
-    '--layer-height', layerHeight,
-    '--build-width-mm', buildWidth,
-    '--build-depth-mm', buildDepth,
-    '--json',
-  ].join(' ');
+  const run = sliceJob.buildSceneSliceRun(job, {
+    maxZMm,
+    modelTriangleCount,
+    models: visibleModels.map((model) => ({
+      id: model.id,
+      name: model.name,
+      polygonCount: model.polygonCount,
+      transform: model.transform,
+    })),
+  }, mergedPath, resolve(output), resolve(tmpDir, 'job.json'));
+  if (run.jobJson) writeFileSync(resolve(tmpDir, 'job.json'), run.jobJson);
+  const { assembled } = run;
+  if (assembled && job.printer) {
+    console.error(
+      `scene slice: printer '${job.printer.name}' -> ${assembled.sourceWidthPx}x${assembled.sourceHeightPx} ${assembled.xPackingMode} `
+      + `build ${assembled.buildWidthMm}x${assembled.buildDepthMm}mm layer ${assembled.layerHeightMm}mm fmt ${assembled.outputFormat}`
+      + `${assembled.formatVersion ? ` ${assembled.formatVersion}` : ''}, material '${job.material?.name}'`,
+    );
+    console.error(
+      `scene slice: dither ${assembled.ditherEnabled ? `on (${assembled.ditherBitDepth}-bit, gamma ${assembled.ditherDeviceGamma})` : 'off'}`,
+    );
+  }
+  if (assembled && job.antiAliasing) {
+    const aa = assembled.antiAliasing;
+    console.error(
+      `scene slice: AA '${job.antiAliasing.preset}'${job.antiAliasing.override ? ' + settings' : ''} -> `
+      + `${aa.antiAliasingLevel} ${aa.antiAliasingMode} `
+      + `blur=${aa.blurBrushRadiusPx}px zblur=${aa.zBlurRadiusLayers} lookback=${aa.zBlendLookBack}`,
+    );
+  }
 
-  console.error(`  slicing: ${sliceCmd}`);
-  const result = execSync(sliceCmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+  const shown = run.args.map((arg, i) => (run.args[i - 1] === '--metadata-json' ? `<${arg.length} bytes>` : arg));
+  console.error(`  slicing: ${rustCli} ${shown.join(' ')}`);
+  // No shell: the metadata is JSON, and the paths may contain spaces.
+  const result = execFileSync(rustCli, run.args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
 
   // Cleanup temp
   execSync(`rm -rf ${tmpDir}`);
@@ -1372,6 +1607,11 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   if (jsonOutput(args.flags)) {
     // Parse and augment the Rust output with scene info
     const sliceResult = JSON.parse(result);
+    // Surface the named preset in the AA block — the Rust engine only knows the
+    // resolved level/mode, but the preset name is what a user reads in the log.
+    if (sliceResult.anti_aliasing && typeof sliceResult.anti_aliasing === 'object') {
+      sliceResult.anti_aliasing = { preset: job.antiAliasing?.preset ?? 'raw', ...sliceResult.anti_aliasing };
+    }
     sliceResult.scene = {
       voxl: resolve(voxlPath),
       models: visibleModels.length,
@@ -1429,7 +1669,7 @@ Each command operates on a .voxl file — the same format the DragonFruit GUI us
 /**
  * Wrap a command function with timing. Captures stdout JSON output and injects _perf.
  */
-function withTiming(fn: (args: ReturnType<typeof parseArgs>) => void, args: ReturnType<typeof parseArgs>): void {
+async function withTiming(fn: (args: ReturnType<typeof parseArgs>) => void | Promise<void>, args: ReturnType<typeof parseArgs>): Promise<void> {
   const t0 = performance.now();
   const commandLabel = `${args.command} ${args.subcommand}`;
 
@@ -1443,7 +1683,7 @@ function withTiming(fn: (args: ReturnType<typeof parseArgs>) => void, args: Retu
     };
   }
 
-  fn(args);
+  await fn(args);
 
   const elapsed_ms = +(performance.now() - t0).toFixed(2);
 
@@ -1463,7 +1703,7 @@ function withTiming(fn: (args: ReturnType<typeof parseArgs>) => void, args: Retu
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
   if (rawArgs.length === 0 || rawArgs[0] === '--help' || rawArgs[0] === '-h') {
     console.log(USAGE);
@@ -1472,51 +1712,56 @@ function main(): void {
 
   const args = parseArgs(rawArgs);
 
-  const dispatch = (fn: (a: ReturnType<typeof parseArgs>) => void) => withTiming(fn, args);
+  // Each case sets `pending` to the (possibly async) handler; it is awaited once
+  // the switch has picked one, so an async command such as `scene slice`
+  // finishes — and its errors surface — inside this try/catch.
+  let pending: void | Promise<void> = undefined;
+  const dispatch = (fn: (a: ReturnType<typeof parseArgs>) => void | Promise<void>) => { pending = withTiming(fn, args); };
 
   try {
     if (args.command === 'scene') {
       switch (args.subcommand) {
-        case 'create': dispatch(sceneCreate); break;
-        case 'add-model': dispatch(sceneAddModel); break;
-        case 'remove-model': dispatch(sceneRemoveModel); break;
-        case 'list-models': dispatch(sceneListModels); break;
-        case 'transform-model': dispatch(sceneTransformModel); break;
-        case 'duplicate': dispatch(sceneDuplicate); break;
-        case 'arrange': dispatch(sceneArrange); break;
-        case 'slice': dispatch(sceneSlice); break;
-        case 'group': dispatch(sceneGroup); break;
-        case 'ungroup': dispatch(sceneUngroup); break;
-        case 'list-groups': dispatch(sceneListGroups); break;
-        case 'center-xy': dispatch(sceneCenterXY); break;
-        case 'place-on-platform': dispatch(scenePlace); break;
-        case 'export-stl': dispatch(sceneExportStl); break;
-        case 'load': dispatch(sceneLoad); break;
+        case 'create': await dispatch(sceneCreate); break;
+        case 'add-model': await dispatch(sceneAddModel); break;
+        case 'remove-model': await dispatch(sceneRemoveModel); break;
+        case 'list-models': await dispatch(sceneListModels); break;
+        case 'transform-model': await dispatch(sceneTransformModel); break;
+        case 'duplicate': await dispatch(sceneDuplicate); break;
+        case 'arrange': await dispatch(sceneArrange); break;
+        case 'slice': await dispatch(sceneSlice); break;
+        case 'group': await dispatch(sceneGroup); break;
+        case 'ungroup': await dispatch(sceneUngroup); break;
+        case 'list-groups': await dispatch(sceneListGroups); break;
+        case 'center-xy': await dispatch(sceneCenterXY); break;
+        case 'place-on-platform': await dispatch(scenePlace); break;
+        case 'export-stl': await dispatch(sceneExportStl); break;
+        case 'load': await dispatch(sceneLoad); break;
         default: throw new Error(`Unknown scene subcommand: ${args.subcommand}`);
       }
     } else if (args.command === 'support') {
       switch (args.subcommand) {
-        case 'add-trunk': dispatch(supportAddTrunk); break;
-        case 'add-branch': dispatch(supportAddBranch); break;
-        case 'add-leaf': dispatch(supportAddLeaf); break;
-        case 'add-brace': dispatch(supportAddBrace); break;
-        case 'add-knot': dispatch(supportAddKnot); break;
-        case 'add-twig': dispatch(supportAddTwig); break;
-        case 'add-stick': dispatch(supportAddStick); break;
-        case 'add-kickstand': dispatch(supportAddKickstand); break;
-        case 'update': dispatch(supportUpdate); break;
-        case 'remove': dispatch(supportRemove); break;
-        case 'straighten-segment': dispatch(supportStraightenSegment); break;
-        case 'list': dispatch(supportList); break;
+        case 'add-trunk': await dispatch(supportAddTrunk); break;
+        case 'add-branch': await dispatch(supportAddBranch); break;
+        case 'add-leaf': await dispatch(supportAddLeaf); break;
+        case 'add-brace': await dispatch(supportAddBrace); break;
+        case 'add-knot': await dispatch(supportAddKnot); break;
+        case 'add-twig': await dispatch(supportAddTwig); break;
+        case 'add-stick': await dispatch(supportAddStick); break;
+        case 'add-kickstand': await dispatch(supportAddKickstand); break;
+        case 'update': await dispatch(supportUpdate); break;
+        case 'remove': await dispatch(supportRemove); break;
+        case 'straighten-segment': await dispatch(supportStraightenSegment); break;
+        case 'list': await dispatch(supportList); break;
         default: throw new Error(`Unknown support subcommand: ${args.subcommand}`);
       }
     } else {
       throw new Error(`Unknown command: ${args.command}\n\n${USAGE}`);
     }
+    await pending;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
     process.exit(1);
   }
 }
 
-main();
+void main();

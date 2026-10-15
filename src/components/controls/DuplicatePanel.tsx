@@ -1,7 +1,9 @@
 import React from 'react';
-import { CopyPlus, Loader2 } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { CopyPlus } from 'lucide-react';
+import { Button, Card, CardHeader, Spinner } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import { MiniStepperField } from '@/components/ui/miniStepperField';
 import type { ArrangePrecisionMode } from '@/components/controls/ArrangePanel';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
@@ -147,25 +149,7 @@ export function DuplicatePanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded((prev) => !prev)}
-              className="!p-0.5"
-              title={expanded ? 'Collapse card' : 'Expand card'}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded((prev) => !prev)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Duplicate</h3>
           </>
         )}
@@ -190,24 +174,26 @@ export function DuplicatePanel({
           <div className="rounded-md border p-2" style={panelDisabled ? accentCardStyleDisabled : accentCardStyle}>
             <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout Mode</div>
             <div className="grid grid-cols-2 gap-1 min-w-0">
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('auto')}
                 disabled={panelDisabled}
                 style={panelDisabled ? undefined : (layoutMode === 'auto' ? activeModeStyle : undefined)}
               >
                 Auto Layout 
-              </button>
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              </Button>
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('array')}
                 disabled={panelDisabled}
                 style={panelDisabled ? undefined : (layoutMode === 'array' ? activeModeStyle : undefined)}
               >
                 Array
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -215,26 +201,28 @@ export function DuplicatePanel({
             <div className="rounded-md border p-2" style={panelDisabled ? accentCardStyleDisabled : accentCardStyle}>
               <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Precision Mode</div>
               <div className="grid grid-cols-2 gap-1 min-w-0">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => onPrecisionModeChange('standard')}
                   disabled={panelDisabled}
                   style={panelDisabled ? undefined : (precisionMode === 'standard' ? activeModeStyle : undefined)}
                   title="Current duplicate auto-layout algorithm"
                 >
                   Standard
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => onPrecisionModeChange('high_precision')}
                   disabled={panelDisabled}
                   style={panelDisabled ? undefined : (precisionMode === 'high_precision' ? activeModeStyle : undefined)}
                   title="Use SAT-based fill-plate packing"
                 >
                   High-Precision
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -291,28 +279,21 @@ export function DuplicatePanel({
               ] as const).map(([axis, countValue, onCountChange, gapValue, onGapChange]) => (
                 <div key={axis} className="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)] gap-1 items-center mb-1 last:mb-0 min-w-0">
                   <span className="text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>{axis}:</span>
-                  <ScrollableNumberField
+                  <MiniStepperField
                     value={countValue}
                     onChange={(next) => setClampedArrayCount(onCountChange, next)}
                     min={1}
                     max={32}
-                    step={1}
                     disabled={panelDisabled}
                     ariaLabel={`${axis} array count`}
-                    decreaseTitle={`Decrease ${axis} count`}
-                    increaseTitle={`Increase ${axis} count`}
                   />
-                  <ScrollableNumberField
+                  <MiniStepperField
                     value={gapValue}
                     onChange={(next) => setClampedArrayGap(onGapChange, next)}
                     min={-120}
                     max={120}
-                    step={1}
-                    unit="mm"
                     disabled={panelDisabled}
                     ariaLabel={`${axis} array gap`}
-                    decreaseTitle={`Decrease ${axis} gap`}
-                    increaseTitle={`Increase ${axis} gap`}
                   />
                 </div>
               ))}
@@ -338,7 +319,7 @@ export function DuplicatePanel({
           >
             {isApplying && isHighPrecisionFillMode ? (
               <span className="inline-flex items-center gap-1.5">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Spinner />
                 Filling Plate…
               </span>
             ) : (
@@ -358,7 +339,7 @@ export function DuplicatePanel({
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Spinner />
                   Duplicating…
                 </span>
               ) : (

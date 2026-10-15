@@ -1,14 +1,17 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Trans } from '@lingui/react/macro';
 import { MATCAP_OPTIONS, MESH_SHADER_OPTIONS, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import { HexColorPicker } from 'react-colorful';
 import { MeshShaderPreviewSlot } from '@/components/settings/meshSettings/MeshShaderPreviewSlot';
 import { MeshShaderPreviewCanvas } from '@/components/settings/meshSettings/MeshShaderPreviewCanvas';
-import { SelectionHighlightDropdown } from '@/components/controls/SelectionHighlightDropdown';
-import type { SelectionHighlightMode } from '@/components/selection';
-import { Input, Select } from '@/components/ui/primitives';
-import { Layers, MousePointer2, SlidersHorizontal } from 'lucide-react';
+import { Button, ColorSwatchInput, Input, SegmentedControl, Select, SettingRow } from '@/components/atoms';
+import { Layers, MousePointer2, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 
 type PreviewModelConfig = {
   label: string;
@@ -20,14 +23,13 @@ type PreviewModelsManifest = {
 };
 
 type MeshSettingsTabProps = {
-  shaderType: MeshShaderType;
-  onShaderTypeChange: (shaderType: MeshShaderType) => void;
+  /** The type this tab is configuring. Independent of the camera dropdown's view mode. */
+  configuredShaderType: MeshShaderType;
+  onConfiguredShaderTypeChange: (shaderType: MeshShaderType) => void;
   matcapVariant: MatcapVariant;
   onMatcapVariantChange: (variant: MatcapVariant) => void;
   flatUseVertexColors: boolean;
   onFlatUseVertexColorsChange: (value: boolean) => void;
-  toonSteps: number;
-  onToonStepsChange: (value: number) => void;
   meshColor: string;
   onMeshColorChange: (color: string) => void;
   ambientIntensity: number;
@@ -35,36 +37,53 @@ type MeshSettingsTabProps = {
   directionalIntensity: number;
   onDirectionalIntensityChange: (value: number) => void;
   materialRoughness: number;
+  /** Multiplier on the baked occlusion's strength; 0 means the bake is off. */
+  bakedAoIntensity: number;
   onMaterialRoughnessChange: (value: number) => void;
+  onBakedAoIntensityChange: (value: number) => void;
   xrayOpacity: number;
   onXrayOpacityChange: (value: number) => void;
-  heatmapBlend: number;
-  onHeatmapBlendChange: (value: number) => void;
-  heatmapContrast: number;
-  onHeatmapContrastChange: (value: number) => void;
+  heatmapMinAngle: number;
+  onHeatmapMinAngleChange: (value: number) => void;
+  heatmapMaxAngle: number;
+  onHeatmapMaxAngleChange: (value: number) => void;
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
-  selectionColor: string;
-  onSelectionColorChange: (color: string) => void;
-  hoverColor: string;
-  onHoverColorChange: (color: string) => void;
-  selectionHighlightMode: SelectionHighlightMode;
-  onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
+  /**
+   * Selection/hover tint, owned by the active theme — these are
+   * `ThemeCustomColors.meshSelectionColor` / `meshHoverColor` mirrored into this
+   * tab, not separate appearance overrides.
+   */
+  meshSelectionColor: string;
+  onMeshSelectionColorChange: (color: string) => void;
+  meshHoverColor: string;
+  onMeshHoverColorChange: (color: string) => void;
   hoverTintStrength: number;
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
+  defaultMeshSelectionColor: string;
+  defaultMeshHoverColor: string;
 };
+type Translate = (descriptor: MessageDescriptor) => string;
+
+// Interpolating messages stay at module scope: React Compiler renames the locals they
+// read inside a component, which desyncs the ids from the compiled catalog.
+function formatHeatmapColorLabel(translate: Translate, index: number): string {
+  return translate(msg({ message: `Heatmap ${index}`, comment: 'Short label of one overhang heatmap color stop, numbered from 1.' }));
+}
+
+function formatHeatmapColorTitle(translate: Translate, index: number): string {
+  return translate(msg`Heatmap Color ${index}`);
+}
 
 export function MeshSettingsTab({
-  shaderType,
-  onShaderTypeChange,
+  configuredShaderType,
+  onConfiguredShaderTypeChange,
   matcapVariant,
   onMatcapVariantChange,
   flatUseVertexColors,
   onFlatUseVertexColorsChange,
-  toonSteps,
-  onToonStepsChange,
   meshColor,
   onMeshColorChange,
   ambientIntensity,
@@ -72,37 +91,35 @@ export function MeshSettingsTab({
   directionalIntensity,
   onDirectionalIntensityChange,
   materialRoughness,
+  bakedAoIntensity,
+  onBakedAoIntensityChange,
   onMaterialRoughnessChange,
   xrayOpacity,
   onXrayOpacityChange,
-  heatmapBlend,
-  onHeatmapBlendChange,
-  heatmapContrast,
-  onHeatmapContrastChange,
+  heatmapMinAngle,
+  onHeatmapMinAngleChange,
+  heatmapMaxAngle,
+  onHeatmapMaxAngleChange,
   heatmapColors,
   onHeatmapColorChange,
-  selectionColor,
-  onSelectionColorChange,
-  hoverColor,
-  onHoverColorChange,
-  selectionHighlightMode,
-  onSelectionHighlightModeChange,
+  meshSelectionColor,
+  onMeshSelectionColorChange,
+  meshHoverColor,
+  onMeshHoverColorChange,
   hoverTintStrength,
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
+  defaultMeshSelectionColor,
+  defaultMeshHoverColor,
 }: MeshSettingsTabProps) {
+  const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const [previewModel, setPreviewModel] = React.useState<string>('knot');
   const [stlPreviewModels, setStlPreviewModels] = React.useState<PreviewModelConfig[]>([]);
   const [activeColorIndex, setActiveColorIndex] = React.useState<number>(0);
   const [isPreviewHovered, setIsPreviewHovered] = React.useState(false);
   const [isPreviewSelected, setIsPreviewSelected] = React.useState(false);
-
-  React.useEffect(() => {
-    if (selectionHighlightMode === 'none') {
-      setIsPreviewSelected(false);
-    }
-  }, [selectionHighlightMode]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -128,20 +145,20 @@ export function MeshSettingsTab({
   const totalLight = ambientIntensity + directionalIntensity;
   const lightness = Math.min(4, Math.max(0, totalLight));
   const contrast = totalLight > 0 ? directionalIntensity / totalLight : 0.5;
-  const previewSelectedTintColor = selectionHighlightMode === 'spotlight' ? '#ffffff' : selectionColor;
-  const previewSelectedTintStrength = selectionHighlightMode === 'spotlight'
-    ? Math.max(selectedTintStrength, 0.94)
-    : selectedTintStrength;
+  const previewSelectedTintColor = meshSelectionColor;
+  const previewSelectedTintStrength = selectedTintStrength;
 
-  const showLighting = shaderType === 'soft_clay' || shaderType === 'toon' || shaderType === 'xray';
-  const showRoughness = shaderType === 'soft_clay' || shaderType === 'xray';
+  const showLighting = configuredShaderType === 'soft_clay' || configuredShaderType === 'xray';
+  const showRoughness = configuredShaderType === 'soft_clay' || configuredShaderType === 'xray';
+  // The baked occlusion only reaches the model through the Standard material.
+  const showBakedAo = configuredShaderType === 'soft_clay';
   const hasRenderingOptions =
-    shaderType === 'matcap' ||
-    shaderType === 'flat_unlit' ||
-    shaderType === 'toon' ||
+    configuredShaderType === 'matcap' ||
+    configuredShaderType === 'flat_unlit' ||
     showRoughness ||
+    showBakedAo ||
     showLighting ||
-    shaderType === 'overhang_heatmap';
+    configuredShaderType === 'overhang_heatmap';
 
   const activeHexColor = activeColorIndex === 0 ? meshColor : heatmapColors[activeColorIndex - 1];
   const onActiveHexChange = React.useCallback((c: string) => {
@@ -161,12 +178,16 @@ export function MeshSettingsTab({
     onDirectionalIntensityChange(next * t);
   }, [lightness, onAmbientIntensityChange, onDirectionalIntensityChange]);
 
+  const handleResetColors = React.useCallback(() => {
+    onMeshSelectionColorChange(defaultMeshSelectionColor);
+    onMeshHoverColorChange(defaultMeshHoverColor);
+  }, [onMeshSelectionColorChange, onMeshHoverColorChange, defaultMeshSelectionColor, defaultMeshHoverColor]);
   return (
     <div className="space-y-3">
 
       {/* ── Shader & Preview ─────────────────────────────────── */}
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}
       >
         <div className="flex items-start gap-2 mb-3">
@@ -177,43 +198,43 @@ export function MeshSettingsTab({
             <Layers className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Shader &amp; Preview
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              <Trans>Shader &amp; Preview</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Choose the active render shader and tune the mesh color.
+              <Trans>Pick the shader type to configure here, and tune the mesh color. The camera dropdown chooses what the viewport renders.</Trans>
             </p>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-            <label className="text-[11px] font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>
-              Shader Type
+            <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Shader Type</Trans>
             </label>
             <Select
-              value={shaderType}
-              onChange={(e) => onShaderTypeChange(e.target.value as MeshShaderType)}
+              value={configuredShaderType}
+              onChange={(e) => onConfiguredShaderTypeChange(e.target.value as MeshShaderType)}
               className="w-full !h-8"
             >
               {MESH_SHADER_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                <option key={opt.value} value={opt.value}>{_(opt.label)}</option>
               ))}
             </Select>
           </div>
 
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-            <label className="text-[11px] font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>
-              Preview Model
+            <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Preview Model</Trans>
             </label>
             <Select
               value={previewModel}
               onChange={(e) => setPreviewModel(e.target.value)}
               className="w-full !h-8"
             >
-              <option value="cube">Cube</option>
-              <option value="sphere">Sphere</option>
-              <option value="knot">Knot</option>
+              <option value="cube">{_(msg`Cube`)}</option>
+              <option value="sphere">{_(msg`Sphere`)}</option>
+              <option value="knot">{_(msg({ message: 'Knot', comment: 'A torus-knot preview shape.' }))}</option>
               {stlPreviewModels.map((m) => (
                 <option key={m.file} value={`stl:/mesh-preview-models/${m.file}`}>{m.label}</option>
               ))}
@@ -227,21 +248,20 @@ export function MeshSettingsTab({
             style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', aspectRatio: '10 / 7' }}
           >
             <MeshShaderPreviewSlot
-              shaderType={shaderType}
+              shaderType={configuredShaderType}
               matcapVariant={matcapVariant}
               flatUseVertexColors={flatUseVertexColors}
-              toonSteps={toonSteps}
               meshColor={meshColor}
               materialRoughness={materialRoughness}
               previewModel={previewModel}
               ambientIntensity={ambientIntensity}
               directionalIntensity={directionalIntensity}
               xrayOpacity={xrayOpacity}
-              heatmapBlend={heatmapBlend}
-              heatmapContrast={heatmapContrast}
+              heatmapMinAngle={heatmapMinAngle}
+              heatmapMaxAngle={heatmapMaxAngle}
               heatmapColors={heatmapColors}
               hoverTintStrength={0.5}
-              selectedTintStrength={0.75}
+              selectedTintStrength={0.7}
             />
           </div>
 
@@ -250,8 +270,8 @@ export function MeshSettingsTab({
             style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', aspectRatio: '10 / 7' }}
           >
             <div className="flex items-center gap-1.5">
-              <label className="text-[11px] font-medium whitespace-nowrap shrink-0" style={{ color: 'var(--text-muted)' }}>
-                {activeColorIndex === 0 ? 'Mesh Color' : `Heatmap ${activeColorIndex}`}
+              <label className="text-xs font-medium whitespace-nowrap shrink-0" style={{ color: 'var(--text-muted)' }}>
+                {activeColorIndex === 0 ? _(msg`Mesh Color`) : formatHeatmapColorLabel(_, activeColorIndex)}
               </label>
               <Input
                 type="text"
@@ -270,7 +290,7 @@ export function MeshSettingsTab({
               />
             </div>
 
-            {shaderType === 'overhang_heatmap' && (
+            {configuredShaderType === 'overhang_heatmap' && (
               <div className="flex items-center gap-1 pt-0.5">
                 <button
                   type="button"
@@ -281,7 +301,7 @@ export function MeshSettingsTab({
                     borderColor: activeColorIndex === 0 ? 'var(--text-strong)' : 'var(--border-strong)',
                     boxShadow: activeColorIndex === 0 ? '0 0 0 1px var(--accent)' : 'none',
                   }}
-                  title="Mesh Color"
+                  title={_(msg`Mesh Color`)}
                 />
                 <div className="w-px h-4 mx-0.5 shrink-0" style={{ background: 'var(--border-subtle)' }} />
                 {heatmapColors.map((color, idx) => (
@@ -295,7 +315,7 @@ export function MeshSettingsTab({
                       borderColor: activeColorIndex === idx + 1 ? 'var(--text-strong)' : 'var(--border-strong)',
                       boxShadow: activeColorIndex === idx + 1 ? '0 0 0 1px var(--accent)' : 'none',
                     }}
-                    title={`Heatmap Color ${idx + 1}`}
+                    title={formatHeatmapColorTitle(_, idx + 1)}
                   />
                 ))}
               </div>
@@ -307,18 +327,18 @@ export function MeshSettingsTab({
           <>
             <div className="flex items-center gap-2 mt-3">
               <div className="h-px flex-1" style={{ background: 'var(--border-subtle)' }} />
-              <span className="flex items-center gap-1.5 text-[11px] font-semibold shrink-0" style={{ color: 'var(--text-muted)' }}>
+              <span className="flex items-center gap-1.5 text-xs font-semibold shrink-0" style={{ color: 'var(--text-muted)' }}>
                 <SlidersHorizontal className="h-3 w-3" />
-                Rendering Options
+                <Trans>Rendering Options</Trans>
               </span>
               <div className="h-px flex-1" style={{ background: 'var(--border-subtle)' }} />
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-2">
-            {shaderType === 'matcap' && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <label className="text-[11px] font-medium block mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                  Matcap Style
+            {configuredShaderType === 'matcap' && (
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                  <Trans>Matcap Style</Trans>
                 </label>
                 <Select
                   value={matcapVariant}
@@ -326,147 +346,131 @@ export function MeshSettingsTab({
                   className="w-full !h-8"
                 >
                   {MATCAP_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    <option key={opt.value} value={opt.value}>{_(opt.label)}</option>
                   ))}
                 </Select>
               </div>
             )}
 
-            {shaderType === 'flat_unlit' && (
-              <div className="col-span-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Vertex Colors</div>
-                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Sample per-vertex color data when available.</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onFlatUseVertexColorsChange(!flatUseVertexColors)}
-                    className="h-9 min-w-[72px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                    style={flatUseVertexColors
-                      ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                        }
-                      : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                          color: 'var(--text-muted)',
-                        }}
-                  >
-                    {flatUseVertexColors ? 'ON' : 'OFF'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {shaderType === 'toon' && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <div className="flex items-center justify-between text-[11px] mb-1.5">
-                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Toon Steps</span>
-                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{toonSteps}</span>
-                </div>
-                <input
-                  type="range" min="2" max="16" step="1"
-                  value={toonSteps}
-                  onChange={(e) => onToonStepsChange(parseInt(e.target.value, 10))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+            {configuredShaderType === 'flat_unlit' && (
+              <SettingRow
+                bordered
+                className="col-span-2"
+                label={_(msg`Vertex Colors`)}
+                description={_(msg`Sample per-vertex color data when available.`)}
+              >
+                <SegmentedControl
+                  label={_(msg`Vertex Colors`)}
+                  value={flatUseVertexColors ? 'on' : 'off'}
+                  onChange={(next) => onFlatUseVertexColorsChange(next === 'on')}
+                  options={[
+                    { value: 'off', label: _(msg`OFF`) },
+                    { value: 'on', label: _(msg`ON`) },
+                  ]}
                 />
-              </div>
+              </SettingRow>
             )}
 
             {showRoughness && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <div className="flex items-center justify-between text-[11px] mb-1.5">
-                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Roughness</span>
-                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{materialRoughness.toFixed(2)}</span>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Roughness</Trans></span>
+                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{fmt.fixed(materialRoughness, 2)}</span>
                 </div>
                 <input
                   type="range" min="0.0" max="1.0" step="0.05"
                   value={materialRoughness}
                   onChange={(e) => onMaterialRoughnessChange(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
 
+
             {showLighting && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <div className="flex items-center justify-between text-[11px] mb-1.5">
-                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Lightness</span>
-                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{lightness.toFixed(2)}</span>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Lightness</Trans></span>
+                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{fmt.fixed(lightness, 2)}</span>
                 </div>
                 <input
                   type="range" min="0.2" max="3.0" step="0.05"
                   value={lightness}
                   onChange={(e) => onLightnessChange(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
 
             {showLighting && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <div className="flex items-center justify-between text-[11px] mb-1.5">
-                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Contrast</span>
-                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{contrast.toFixed(2)}</span>
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Contrast</Trans></span>
+                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{fmt.fixed(contrast, 2)}</span>
                 </div>
                 <input
                   type="range" min="0.05" max="0.95" step="0.01"
                   value={contrast}
                   onChange={(e) => onContrastChange(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
 
-            {shaderType === 'xray' && (
-              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                <div className="flex items-center justify-between text-[11px] mb-1.5">
-                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}>X-Ray Opacity</span>
-                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{xrayOpacity.toFixed(2)}</span>
+            {showBakedAo && (
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Ambient Occlusion</Trans></span>
+                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{fmt.fixed(bakedAoIntensity, 2)}</span>
+                </div>
+                <input
+                  type="range" min="0.0" max="2.0" step="0.05"
+                  value={bakedAoIntensity}
+                  onChange={(e) => onBakedAoIntensityChange(parseFloat(e.target.value))}
+                  className="ui-range w-full"
+                />
+              </div>
+            )}
+
+            {configuredShaderType === 'xray' && (
+              <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="font-medium" style={{ color: 'var(--text-muted)' }}><Trans>X-Ray Opacity</Trans></span>
+                  <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{fmt.fixed(xrayOpacity, 2)}</span>
                 </div>
                 <input
                   type="range" min="0.02" max="0.85" step="0.01"
                   value={xrayOpacity}
                   onChange={(e) => onXrayOpacityChange(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                  style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                  className="ui-range w-full"
                 />
               </div>
             )}
 
-            {shaderType === 'overhang_heatmap' && (
+            {configuredShaderType === 'overhang_heatmap' && (
               <>
-                <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                  <div className="flex items-center justify-between text-[11px] mb-1.5">
-                    <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Heatmap Blend</span>
-                    <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{heatmapBlend.toFixed(2)}</span>
+                <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <span className="font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Min Overhang</Trans></span>
+                    <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{heatmapMinAngle}°</span>
                   </div>
                   <input
-                    type="range" min="0.0" max="1.0" step="0.01"
-                    value={heatmapBlend}
-                    onChange={(e) => onHeatmapBlendChange(parseFloat(e.target.value))}
-                    className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                    style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                    type="range" min="0" max="90" step="1"
+                    value={heatmapMinAngle}
+                    onChange={(e) => onHeatmapMinAngleChange(Math.min(parseFloat(e.target.value), heatmapMaxAngle))}
+                    className="ui-range w-full"
                   />
                 </div>
-                <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                  <div className="flex items-center justify-between text-[11px] mb-1.5">
-                    <span className="font-medium" style={{ color: 'var(--text-muted)' }}>Heatmap Contrast</span>
-                    <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{heatmapContrast.toFixed(2)}</span>
+                <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <span className="font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Max Overhang</Trans></span>
+                    <span className="font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{heatmapMaxAngle}°</span>
                   </div>
                   <input
-                    type="range" min="0.5" max="3.0" step="0.05"
-                    value={heatmapContrast}
-                    onChange={(e) => onHeatmapContrastChange(parseFloat(e.target.value))}
-                    className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                    style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                    type="range" min="0" max="90" step="1"
+                    value={heatmapMaxAngle}
+                    onChange={(e) => onHeatmapMaxAngleChange(Math.max(parseFloat(e.target.value), heatmapMinAngle))}
+                    className="ui-range w-full"
                   />
                 </div>
               </>
@@ -478,7 +482,7 @@ export function MeshSettingsTab({
 
       {/* ── Selection ────────────────────────────────────────── */}
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}
       >
         <div className="flex items-start gap-2 mb-3">
@@ -489,67 +493,64 @@ export function MeshSettingsTab({
             <MousePointer2 className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Selection &amp; Hover
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              <Trans>Selection &amp; Hover</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              How selected and hovered models are emphasized throughout the app.
+              <Trans>
+                How selected and hovered models are emphasized throughout the app. These two colors come from the
+                current theme — editing them here changes the theme, exactly like UI &amp; Theme › Mesh Highlights.
+              </Trans>
             </p>
           </div>
         </div>
 
-        <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-stretch">
+        <div className="grid grid-cols-2 gap-2">
           <div className="min-w-0 space-y-2">
-            <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Highlight Mode</div>
-                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Visual style applied to selected and hovered meshes.</div>
-                </div>
-                <SelectionHighlightDropdown
-                  value={selectionHighlightMode}
-                  onChange={onSelectionHighlightModeChange}
-                  fullWidth={false}
-                />
+            <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Colors</Trans></div>
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  onClick={handleResetColors}
+                  title={_(msg`Reset colors to default`)}
+                  aria-label={_(msg`Reset selection and hover colors to default`)}
+                  className="!h-6 !w-6 !p-0 inline-flex shrink-0 items-center justify-center rounded-md"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                </Button>
               </div>
-            </div>
-
-            <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-              <div className="text-xs font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Colors</div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Selection Color</div>
+                  <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Selection Color</Trans></div>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={selectionColor}
-                      onChange={(e) => onSelectionColorChange(e.target.value)}
-                      className="h-8 w-10 shrink-0 rounded border"
-                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    <ColorSwatchInput
+                      value={meshSelectionColor}
+                      onChange={onMeshSelectionColorChange}
+                      className="h-8 w-10"
                     />
                     <input
                       type="text"
-                      value={selectionColor}
-                      onChange={(e) => onSelectionColorChange(e.target.value)}
+                      value={meshSelectionColor}
+                      onChange={(e) => onMeshSelectionColorChange(e.target.value)}
                       className="ui-input h-8 w-[7.5rem] min-w-0"
                       placeholder="#ec2a77"
                     />
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Hover Color</div>
+                  <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Hover Color</Trans></div>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={hoverColor}
-                      onChange={(e) => onHoverColorChange(e.target.value)}
-                      className="h-8 w-10 shrink-0 rounded border"
-                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    <ColorSwatchInput
+                      value={meshHoverColor}
+                      onChange={onMeshHoverColorChange}
+                      className="h-8 w-10"
                     />
                     <input
                       type="text"
-                      value={hoverColor}
-                      onChange={(e) => onHoverColorChange(e.target.value)}
+                      value={meshHoverColor}
+                      onChange={(e) => onMeshHoverColorChange(e.target.value)}
                       className="ui-input h-8 w-[7.5rem] min-w-0"
                       placeholder="#ec2a77"
                     />
@@ -558,104 +559,104 @@ export function MeshSettingsTab({
               </div>
             </div>
 
-            <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-              <div className="text-xs font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Tint Intensity</div>
+            <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="text-xs font-semibold mb-2" style={{ color: 'var(--text-strong)' }}><Trans>Tint Intensity</Trans></div>
               <div className="space-y-2">
                 <div>
-                  <div className="flex items-center justify-between text-[11px] mb-1">
-                    <span style={{ color: 'var(--text-muted)' }}>Hover</span>
-                    <span className="tabular-nums" style={{ color: 'var(--text-strong)' }}>{hoverTintStrength.toFixed(2)}</span>
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span style={{ color: 'var(--text-muted)' }}><Trans context="Tint intensity">Hover</Trans></span>
+                    <span className="tabular-nums" style={{ color: 'var(--text-strong)' }}>{fmt.fixed(hoverTintStrength, 2)}</span>
                   </div>
                   <input
                     type="range" min="0" max="1" step="0.01"
                     value={hoverTintStrength}
                     onChange={(e) => onHoverTintStrengthChange(parseFloat(e.target.value))}
-                    className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                    style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                    className="ui-range w-full"
                   />
                 </div>
                 <div>
-                  <div className="flex items-center justify-between text-[11px] mb-1">
-                    <span style={{ color: 'var(--text-muted)' }}>Selected</span>
-                    <span className="tabular-nums" style={{ color: 'var(--text-strong)' }}>{selectedTintStrength.toFixed(2)}</span>
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span style={{ color: 'var(--text-muted)' }}><Trans context="Tint intensity">Selected</Trans></span>
+                    <span className="tabular-nums" style={{ color: 'var(--text-strong)' }}>{fmt.fixed(selectedTintStrength, 2)}</span>
                   </div>
                   <input
                     type="range" min="0" max="1" step="0.01"
                     value={selectedTintStrength}
                     onChange={(e) => onSelectedTintStrengthChange(parseFloat(e.target.value))}
-                    className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                    style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                    className="ui-range w-full"
                   />
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="flex min-h-[16rem] lg:min-h-full lg:justify-self-end">
+          {/* The preview fills the row the Colors / Tint Intensity stack sets. It is
+              positioned absolutely so its own height never stretches that row: a
+              taller preview would otherwise leave the left column short and ragged. */}
+          <div className="relative min-w-0">
             <div
-              className="rounded-lg border p-2 w-full lg:w-[20rem] shrink-0 flex flex-col gap-2"
+              className="absolute inset-0 rounded-lg border p-2 flex flex-col gap-2"
               style={{
                 borderColor: 'var(--border-subtle)',
                 background: 'var(--surface-0)',
               }}
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Selection Preview</span>
-                <span
-                  className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors"
-                  style={
-                    isPreviewSelected && selectionHighlightMode !== 'none'
-                      ? {
-                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                          borderColor: 'color-mix(in srgb, var(--accent), white 12%)',
-                          background: 'color-mix(in srgb, var(--accent), transparent 22%)',
-                        }
-                      : isPreviewHovered
-                        ? {
-                            color: 'var(--text-strong)',
-                            borderColor: 'var(--border-strong)',
-                            background: 'var(--surface-2)',
-                          }
-                        : {
-                            color: 'var(--text-muted)',
-                            borderColor: 'var(--border-subtle)',
-                            background: 'transparent',
-                          }
-                  }
-                >
-                  {isPreviewSelected && selectionHighlightMode !== 'none'
-                    ? 'selected'
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Selection Preview</Trans></span>
+              <span
+                className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors"
+                style={
+                  isPreviewSelected
+                    ? {
+                        color: 'var(--text-strong)',
+                        borderColor: 'color-mix(in srgb, var(--accent), white 12%)',
+                        background: 'color-mix(in srgb, var(--accent), transparent 22%)',
+                      }
                     : isPreviewHovered
-                      ? 'hovered'
-                      : 'idle'}
-                </span>
-              </div>
-              <div className="flex-1 min-h-0">
-                <MeshShaderPreviewCanvas
-                  shaderType="soft_clay"
-                  matcapVariant="neutral"
-                  flatUseVertexColors={true}
-                  useVertexColors={false}
-                  toonSteps={5}
-                  meshColor="#a3a3a3"
-                  materialRoughness={0.65}
-                  previewModel="knot"
-                  ambientIntensity={0.6}
-                  directionalIntensity={0.8}
-                  xrayOpacity={0.25}
-                  heatmapBlend={0}
-                  heatmapContrast={1}
-                  hoverTintColor={hoverColor}
-                  selectedTintColor={previewSelectedTintColor}
-                  hoverTintStrength={hoverTintStrength}
-                  selectedTintStrength={previewSelectedTintStrength}
-                  isSelected={selectionHighlightMode !== 'none' && isPreviewSelected}
-                  isHovered={isPreviewHovered}
-                  onHoverChange={setIsPreviewHovered}
-                  onPress={() => setIsPreviewSelected((prev) => !prev)}
-                  onCanvasPress={() => setIsPreviewSelected(false)}
-                />
-              </div>
+                      ? {
+                          color: 'var(--text-strong)',
+                          borderColor: 'var(--border-strong)',
+                          background: 'var(--surface-2)',
+                        }
+                      : {
+                          color: 'var(--text-muted)',
+                          borderColor: 'var(--border-subtle)',
+                          background: 'transparent',
+                        }
+                }
+              >
+                {isPreviewSelected
+                  ? _(msg({ message: 'selected', context: 'Preview state' }))
+                  : isPreviewHovered
+                    ? _(msg({ message: 'hovered', context: 'Preview state' }))
+                    : _(msg({ message: 'idle', context: 'Preview state' }))}
+              </span>
+            </div>
+            <div className="flex-1 min-h-0">
+              <MeshShaderPreviewCanvas
+                shaderType="soft_clay"
+                matcapVariant="neutral"
+                flatUseVertexColors={true}
+                useVertexColors={false}
+                meshColor="#a3a3a3"
+                materialRoughness={0.55}
+                previewModel="knot"
+                ambientIntensity={0.28}
+                directionalIntensity={1.12}
+                xrayOpacity={0.25}
+                heatmapMinAngle={0}
+                heatmapMaxAngle={45}
+                hoverTintColor={meshHoverColor}
+                selectedTintColor={previewSelectedTintColor}
+                hoverTintStrength={hoverTintStrength}
+                selectedTintStrength={previewSelectedTintStrength}
+                isSelected={isPreviewSelected}
+                isHovered={isPreviewHovered}
+                onHoverChange={setIsPreviewHovered}
+                onPress={() => setIsPreviewSelected((prev) => !prev)}
+                onCanvasPress={() => setIsPreviewSelected(false)}
+              />
+            </div>
             </div>
           </div>
         </div>

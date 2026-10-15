@@ -11,18 +11,27 @@
 //!   optionally reorders model/support sections and returns a report JSON.
 //! - `mesh_repair_read_positions` — raw-binary response of the current staged
 //!   positions (little-endian f32, 9 per triangle), for frontend hydration.
+//! - `load_mesh_file` — parse `stl`/`obj`/`3mf` and return its bodies (one per
+//!   build item for 3MF, a decimated single body for an oversized STL) in the
+//!   `DFMX` wire format.
 
+use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dragonfruit_mesh_repair::{
-    analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair, HolePunchOptions,
+    analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair_with_progress,
+    HolePunchOptions,
     HollowOptions, HollowSession, IndexedMesh, RepairOptions, Vec3,
 };
+// The organic cut feature now lives in its own crate.
+use dragonfruit_organic_cut::{organic_cut, GeodesicSolver, OrganicCutOptions};
 use rayon::prelude::*;
 use serde::Deserialize;
 use tauri::ipc::Response;
+use tauri::Emitter;
 
 use crate::{
     staged_mesh, staged_mesh_file_appender, staged_mesh_file_path, staged_mesh_stats,
@@ -38,12 +47,29 @@ static HOLLOW_PREVIEW_REMOVED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>
 static HOLLOW_PREVIEW_REMOVED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> =
     OnceLock::new();
+static HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Cavity interior mesh from the staged hollow path.
 static HOLLOW_STAGED_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Cavity interior mesh from the preview hollow path.
 static HOLLOW_PREVIEW_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static PUNCH_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static PUNCH_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// Captured source mesh for repeated non-mutating organic-cut runs.
+static ORGANIC_CUT_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// All parts of the most recent organic cut (LE f32 soup each), in order — read
+/// back by index via `mesh_organic_cut_read_part`. A multi-loop cut that frees
+/// several pieces has >2 entries.
+static ORGANIC_CUT_PARTS_BYTES: OnceLock<Mutex<Vec<Vec<u8>>>> = OnceLock::new();
+/// Most recent geodesic loop polyline (LE f32 positions, 3 per point).
+static ORGANIC_CUT_GEODESIC_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// Cached geodesic solver (mesh + topology + vertex graph) for the captured
+/// source. Built once per source so dragging a waypoint re-queries the loop
+/// without rebuilding the O(mesh) graphs each call. Cleared on (re)capture.
+static ORGANIC_CUT_GEODESIC_SOLVER: OnceLock<Mutex<Option<Arc<GeodesicSolver>>>> = OnceLock::new();
+/// Most recent contour-cut membrane preview (LE f32 triangle soup, 9 per tri).
+static ORGANIC_CUT_MEMBRANE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// Most recent registration-tenon preview (LE f32 triangle soup, tenon + mortise).
+static ORGANIC_CUT_TENON_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 
 fn hollow_preview_source_mesh() -> &'static Mutex<Option<Arc<IndexedMesh>>> {
     HOLLOW_PREVIEW_SOURCE_MESH.get_or_init(|| Mutex::new(None))
@@ -73,6 +99,10 @@ fn hollow_preview_blocked_voxel_center_bytes() -> &'static Mutex<Option<Vec<u8>>
     HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES.get_or_init(|| Mutex::new(None))
 }
 
+fn hollow_preview_blocked_voxel_index_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES.get_or_init(|| Mutex::new(None))
+}
+
 fn hollow_staged_cavity_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     HOLLOW_STAGED_CAVITY_RESULT_BYTES.get_or_init(|| Mutex::new(None))
 }
@@ -89,6 +119,69 @@ fn punch_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     PUNCH_RESULT_BYTES.get_or_init(|| Mutex::new(None))
 }
 
+fn organic_cut_source_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    ORGANIC_CUT_SOURCE_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn organic_cut_parts_bytes() -> &'static Mutex<Vec<Vec<u8>>> {
+    ORGANIC_CUT_PARTS_BYTES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn organic_cut_geodesic_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    ORGANIC_CUT_GEODESIC_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn organic_cut_geodesic_solver() -> &'static Mutex<Option<Arc<GeodesicSolver>>> {
+    ORGANIC_CUT_GEODESIC_SOLVER.get_or_init(|| Mutex::new(None))
+}
+
+fn organic_cut_membrane_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    ORGANIC_CUT_MEMBRANE_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn organic_cut_tenon_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    ORGANIC_CUT_TENON_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+/// Clears every hollow-preview buffer derived from the captured source mesh
+/// (session cache, all result/removed/blocked/cavity byte buffers). Called
+/// whenever a new source mesh is captured so stale data from a previous
+/// model/session can never be served alongside a fresh one.
+fn reset_hollow_preview_derived_state() -> Result<(), String> {
+    *hollow_preview_session()
+        .lock()
+        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? = None;
+    *hollow_preview_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = None;
+    *hollow_preview_infill_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? = None;
+    *hollow_preview_removed_voxel_center_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_removed_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_blocked_voxel_center_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_blocked_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = None;
+    *hollow_staged_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = None;
+    Ok(())
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct RepairOptionsDto {
@@ -97,19 +190,19 @@ struct RepairOptionsDto {
     keep_largest_n_components: Option<usize>,
     repair_orientation: Option<bool>,
     resolve_self_intersections: Option<bool>,
-    solidify_fragmented_components: Option<bool>,
-    solidify_component_threshold: Option<usize>,
-    solidify_self_intersection_threshold: Option<usize>,
+    #[serde(alias = "assume_support_geometry")]
+    assume_support_geometry: Option<bool>,
 }
 
 impl From<RepairOptionsDto> for RepairOptions {
     fn from(dto: RepairOptionsDto) -> Self {
         let defaults = RepairOptions::default();
         RepairOptions {
-            weld_epsilon: dto.weld_epsilon.unwrap_or(defaults.weld_epsilon),
-            fill_holes_max_edges: dto
-                .fill_holes_max_edges
-                .unwrap_or(defaults.fill_holes_max_edges),
+            // Passed through as they arrive, `None` and all: the engine derives a tolerance the
+            // caller did not name. The frontend is not better placed to pick these than the crate
+            // is — it has no mesh in hand when it builds them.
+            weld_epsilon: dto.weld_epsilon,
+            fill_holes_max_edges: dto.fill_holes_max_edges,
             keep_largest_n_components: dto
                 .keep_largest_n_components
                 .or(defaults.keep_largest_n_components),
@@ -119,42 +212,171 @@ impl From<RepairOptionsDto> for RepairOptions {
             resolve_self_intersections: dto
                 .resolve_self_intersections
                 .unwrap_or(defaults.resolve_self_intersections),
-            solidify_fragmented_components: dto
-                .solidify_fragmented_components
-                .unwrap_or(defaults.solidify_fragmented_components),
-            solidify_component_threshold: dto
-                .solidify_component_threshold
-                .unwrap_or(defaults.solidify_component_threshold),
-            solidify_self_intersection_threshold: dto
-                .solidify_self_intersection_threshold
-                .unwrap_or(defaults.solidify_self_intersection_threshold),
+            assume_support_geometry: dto
+                .assume_support_geometry
+                .or(defaults.assume_support_geometry),
         }
     }
 }
 
-fn parse_options(options_json: &str) -> RepairOptions {
+fn parse_options(options_json: &str) -> Result<RepairOptions, String> {
     if options_json.trim().is_empty() {
-        return RepairOptions::default();
+        return Ok(RepairOptions::default());
     }
     serde_json::from_str::<RepairOptionsDto>(options_json)
-        .unwrap_or_default()
-        .into()
+        .map(RepairOptions::from)
+        .map_err(|e| format!("invalid repair options JSON: {e}"))
 }
 
-fn parse_hollow_options(options_json: &str) -> HollowOptions {
+fn parse_hollow_options(options_json: &str) -> Result<HollowOptions, String> {
     if options_json.trim().is_empty() {
-        return HollowOptions::default();
+        return Ok(HollowOptions::default());
     }
-
-    serde_json::from_str::<HollowOptions>(options_json).unwrap_or_default()
+    serde_json::from_str::<HollowOptions>(options_json)
+        .map_err(|e| format!("invalid hollow options JSON: {e}"))
 }
 
-fn parse_hole_punch_options(options_json: &str) -> HolePunchOptions {
+fn parse_hole_punch_options(options_json: &str) -> Result<HolePunchOptions, String> {
     if options_json.trim().is_empty() {
-        return HolePunchOptions::default();
+        return Ok(HolePunchOptions::default());
+    }
+    serde_json::from_str::<HolePunchOptions>(options_json)
+        .map_err(|e| format!("invalid hole punch options JSON: {e}"))
+}
+
+fn parse_organic_cut_options(options_json: &str) -> OrganicCutOptions {
+    if options_json.trim().is_empty() {
+        return OrganicCutOptions::default();
     }
 
-    serde_json::from_str::<HolePunchOptions>(options_json).unwrap_or_default()
+    serde_json::from_str::<OrganicCutOptions>(options_json).unwrap_or_default()
+}
+
+#[derive(Deserialize)]
+struct GeodesicWaypointDto {
+    position: [f32; 3],
+}
+
+fn default_smoothing_half() -> f32 {
+    0.5
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeodesicRequestDto {
+    #[serde(default)]
+    points: Vec<GeodesicWaypointDto>,
+    #[serde(default)]
+    close: bool,
+    /// Seam smoothing 0..1 (line corner-rounding). Default 0.5.
+    #[serde(default = "default_smoothing_half")]
+    smoothing: f32,
+    /// Membrane smoothing 0..1 (cutter-surface relaxation). Default 0.5.
+    #[serde(default = "default_smoothing_half")]
+    membrane_smoothing: f32,
+    /// Cut resolution multiplier (1..4). Default 1.0. Lets the preview reflect
+    /// the cut density live.
+    #[serde(default = "default_density_one")]
+    density: f32,
+    /// Extra clearance in mm for the mortise-and-tenon joint, on top of the tenon's
+    /// own tolerance. Zero — the default — means the halves meet exactly. Previewed
+    /// with the same number the cut spends, or the preview lies about the fit. Was
+    /// `thicknessMm` when the cut was a wafer whose thickness was structural.
+    #[serde(default, alias = "thicknessMm")]
+    joint_clearance_mm: f32,
+    /// When true, the preview also builds the registration tenon (tenon + mortise) the
+    /// cut would place, so the user sees it before cutting. Default off.
+    #[serde(default)]
+    generate_tenon: bool,
+    /// Tenon base width in mm (model units are mm). Default 2.
+    #[serde(default = "default_tenon_width")]
+    tenon_width_mm: f32,
+    /// Tenon depth in mm — how far the tenon pokes in. Default 2.5.
+    #[serde(default = "default_tenon_depth")]
+    tenon_depth_mm: f32,
+    /// Requested tenon shape: "frustum" (default) or "dome". Default "frustum".
+    #[serde(default = "default_tenon_shape")]
+    tenon_shape: String,
+    /// Edge fillet radius in mm (rounds the frustum corners + tip). Default 0.
+    #[serde(default)]
+    tenon_fillet_mm: f32,
+    /// Tenon/mortise fit tolerance in mm — how much larger the mortise is carved on
+    /// every face. 0 = press fit. Default 0.1 (slide fit).
+    #[serde(default = "default_tenon_tolerance")]
+    tenon_tolerance_mm: f32,
+    /// Where the tenon sits on the cut face: the model-local point the user put the
+    /// crosshair on. Absent = the natural middle of the cut.
+    #[serde(default)]
+    tenon_anchor: Option<[f32; 3]>,
+    /// Flat-cut only: the plane the tenon is framed on, as `dot(normal, p) == offset`
+    /// in model-local space — the exact plane the frontend previewed. Absent for a
+    /// contour preview, which frames the tenon on the membrane instead.
+    #[serde(default)]
+    plane_normal: [f32; 3],
+    #[serde(default)]
+    plane_offset: f32,
+    /// Flip which half gets the tenon vs the mortise (preview reflects the direction).
+    #[serde(default)]
+    tenon_swap_sides: bool,
+    /// Tenon tilt (radians) — polar lean off the cut normal. Base stays glued; the
+    /// body shears to lean. Default 0.
+    #[serde(default)]
+    tenon_tilt_rad: f32,
+    /// Tenon roll (radians) — spin about the tenon's own axis. Default 0.
+    #[serde(default)]
+    tenon_roll_rad: f32,
+}
+
+fn default_density_one() -> f32 {
+    1.0
+}
+
+fn default_tenon_width() -> f32 {
+    2.0
+}
+
+fn default_tenon_depth() -> f32 {
+    2.5
+}
+
+fn default_tenon_shape() -> String {
+    "frustum".to_string()
+}
+
+fn default_tenon_tolerance() -> f32 {
+    0.1
+}
+
+impl Default for GeodesicRequestDto {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            close: false,
+            smoothing: 0.5,
+            membrane_smoothing: 0.5,
+            density: 1.0,
+            joint_clearance_mm: 0.0,
+            generate_tenon: false,
+            tenon_width_mm: 2.0,
+            tenon_depth_mm: 2.5,
+            tenon_shape: "frustum".to_string(),
+            tenon_fillet_mm: 0.0,
+            tenon_tolerance_mm: 0.1,
+            tenon_anchor: None,
+            plane_normal: [0.0; 3],
+            plane_offset: 0.0,
+            tenon_swap_sides: false,
+            tenon_tilt_rad: 0.0,
+            tenon_roll_rad: 0.0,
+        }
+    }
+}
+
+fn parse_geodesic_request(json: &str) -> GeodesicRequestDto {
+    if json.trim().is_empty() {
+        return GeodesicRequestDto::default();
+    }
+    serde_json::from_str::<GeodesicRequestDto>(json).unwrap_or_default()
 }
 
 #[tauri::command]
@@ -175,10 +397,56 @@ pub async fn mesh_analyze_from_path(file_path: String) -> Result<String, String>
     serde_json::to_string(&analysis).map_err(|e| format!("serialize analysis: {e}"))
 }
 
+/// Registers a cancel flag for this run, and returns it.
+///
+/// The frontend's token is what keeps two repairs from writing into each other's progress
+/// display, and what a cancel is addressed to.
+fn register_cancel(token: Option<&String>) -> Option<Arc<AtomicBool>> {
+    token.map(|token| {
+        let flag = Arc::new(AtomicBool::new(false));
+        if let Ok(mut registry) = cancels().lock() {
+            registry.insert(token.clone(), flag.clone());
+        }
+        flag
+    })
+}
+
+/// Forgets a finished run's cancel flag.
+fn release_cancel(token: Option<&String>) {
+    if let Some(token) = token {
+        if let Ok(mut registry) = cancels().lock() {
+            registry.remove(token);
+        }
+    }
+}
+
+/// The sink a repair runs with: it announces each stage to the frontend, and says no when
+/// this run has been asked to stop.
+fn progress_sink(
+    token: Option<String>,
+    cancel: Option<Arc<AtomicBool>>,
+    app: crate::DragonFruitAppHandle,
+) -> impl FnMut(&str, usize) -> bool + Send + 'static {
+    move |name: &str, index: usize| {
+        if let Some(token) = token.as_deref() {
+            let _ = app.emit(
+                "mesh-repair-progress",
+                serde_json::json!({ "token": token, "name": name, "index": index }),
+            );
+        }
+        cancel
+            .as_ref()
+            .map(|flag| !flag.load(Ordering::SeqCst))
+            .unwrap_or(true)
+    }
+}
+
 #[tauri::command]
 pub async fn mesh_repair_from_path(
     file_path: String,
     options_json: String,
+    progress_token: Option<String>,
+    app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let path = PathBuf::from(&file_path);
     if !path.exists() {
@@ -187,31 +455,93 @@ pub async fn mesh_repair_from_path(
             path.display()
         ));
     }
-    let options = parse_options(&options_json);
+    let options = parse_options(&options_json)?;
     let source_path = file_path.clone();
+    let cancel = register_cancel(progress_token.as_ref());
+    let token = progress_token.clone();
     let (mesh, mut report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::load_mesh_from_path(&path).map_err(|e| e.to_string())?;
-        let outcome = repair(mesh, &options);
+        let mut sink = progress_sink(token, cancel, app);
+        let outcome = repair_with_progress(mesh, &options, Some(&mut sink));
         Ok::<_, String>((outcome.mesh, outcome.report))
     })
     .await
     .map_err(|e| format!("repair task panicked: {e}"))??;
+    release_cancel(progress_token.as_ref());
     report.source_path = Some(source_path);
     replace_staging_with_mesh(&mesh)?;
     serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
 }
 
+/// Loads a mesh from a path and stages it, repairing nothing.
+///
+/// The webview refuses a `file://` fetch at the security boundary, so a model's file cannot be read
+/// back from the UI directly. This is the first half of [`mesh_repair_from_path`] on its own, for
+/// putting a model back to how it arrived.
 #[tauri::command]
-pub async fn mesh_repair_staged(options_json: String) -> Result<String, String> {
-    let options = parse_options(&options_json);
+pub async fn mesh_load_from_path(file_path: String) -> Result<(), String> {
+    let path = PathBuf::from(&file_path);
+    if !path.exists() {
+        return Err(format!(
+            "mesh_load_from_path: not found: {}",
+            path.display()
+        ));
+    }
+    let mesh = tauri::async_runtime::spawn_blocking(move || {
+        io::load_mesh_from_path(&path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("load task panicked: {e}"))??;
+    replace_staging_with_mesh(&mesh)
+}
+
+/// Repairs in flight, by progress token.
+///
+/// A cancel flips the flag and the repair reads it at its next stage boundary, so a
+/// cancel never lands halfway through a pass.
+fn cancels() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    static CANCELS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+    CANCELS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Asks the repair carrying this token to stop at its next stage boundary.
+///
+/// Returns whether a repair was actually carrying that token: a cancel that arrives
+/// after the repair finished is not an error, it is a no-op.
+#[tauri::command]
+pub async fn mesh_repair_cancel(progress_token: String) -> Result<bool, String> {
+    let registry = cancels().lock().map_err(|e| e.to_string())?;
+    Ok(registry
+        .get(&progress_token)
+        .map(|flag| {
+            flag.store(true, Ordering::SeqCst);
+            true
+        })
+        .unwrap_or(false))
+}
+
+#[tauri::command]
+pub async fn mesh_repair_staged(
+    options_json: String,
+    progress_token: Option<String>,
+    app: crate::DragonFruitAppHandle,
+) -> Result<String, String> {
+    let options = parse_options(&options_json)?;
     let bytes = read_staging_bytes()?;
+
+    let cancel = register_cancel(progress_token.as_ref());
+    let token = progress_token.clone();
+
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
-        let outcome = repair(mesh, &options);
+        let mut sink = progress_sink(token, cancel, app);
+        let outcome = repair_with_progress(mesh, &options, Some(&mut sink));
         Ok::<_, String>((outcome.mesh, outcome.report))
     })
     .await
     .map_err(|e| format!("repair task panicked: {e}"))??;
+    release_cancel(progress_token.as_ref());
+
     replace_staging_with_mesh(&mesh)?;
     serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
 }
@@ -219,11 +549,12 @@ pub async fn mesh_repair_staged(options_json: String) -> Result<String, String> 
 /// Runs a lightweight model/support section classifier over the current staged
 /// mesh without executing the heavy repair pipeline.
 #[tauri::command]
-pub async fn mesh_classify_staged() -> Result<String, String> {
+pub async fn mesh_classify_staged(options_json: Option<String>) -> Result<String, String> {
+    let options = parse_options(&options_json.unwrap_or_default())?;
     let bytes = read_staging_bytes()?;
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
-        let outcome = classify_support_split(mesh);
+        let outcome = classify_support_split(mesh, &options);
         Ok::<_, String>((outcome.mesh, outcome.report))
     })
     .await
@@ -251,7 +582,7 @@ pub async fn mesh_analyze_staged() -> Result<String, String> {
 /// Replaces staged positions with the hollowed result and returns a JSON report.
 #[tauri::command]
 pub async fn mesh_hollow_staged(options_json: String) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json);
+    let options = parse_hollow_options(&options_json)?;
     let bytes = read_staging_bytes()?;
     let (mesh, cavity_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
@@ -288,23 +619,7 @@ pub async fn mesh_hollow_preview_capture_staged_source() -> Result<(), String> {
         .lock()
         .map_err(|e| format!("hollow preview source lock poisoned: {e}"))? =
         Some(Arc::new(source_mesh));
-    *hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? = None;
-    *hollow_preview_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = None;
-    *hollow_preview_infill_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? = None;
-    *hollow_preview_removed_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_removed_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
-        None;
+    reset_hollow_preview_derived_state()?;
     Ok(())
 }
 
@@ -314,7 +629,7 @@ pub async fn mesh_hollow_preview_capture_staged_source() -> Result<(), String> {
 pub async fn mesh_hollow_preview_from_captured_source(
     options_json: String,
 ) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json);
+    let options = parse_hollow_options(&options_json)?;
     let source_mesh = hollow_preview_source_mesh()
         .lock()
         .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
@@ -380,6 +695,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
         removed_voxel_center_bytes,
         removed_voxel_index_bytes,
         blocked_voxel_center_bytes,
+        blocked_voxel_index_bytes,
         report,
     ) = tauri::async_runtime::spawn_blocking(move || {
         let outcome = session.run(&options);
@@ -399,6 +715,8 @@ pub async fn mesh_hollow_preview_from_captured_source(
             bytemuck::cast_slice::<u32, u8>(&outcome.removed_voxel_indices).to_vec();
         let blocked_voxel_center_bytes =
             bytemuck::cast_slice::<f32, u8>(&outcome.blocked_voxel_centers).to_vec();
+        let blocked_voxel_index_bytes =
+            bytemuck::cast_slice::<u32, u8>(&outcome.blocked_voxel_indices).to_vec();
         Ok::<_, String>((
             bytes,
             cavity_bytes,
@@ -406,6 +724,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
             removed_voxel_center_bytes,
             removed_voxel_index_bytes,
             blocked_voxel_center_bytes,
+            blocked_voxel_index_bytes,
             outcome.report,
         ))
     })
@@ -415,11 +734,9 @@ pub async fn mesh_hollow_preview_from_captured_source(
     *hollow_preview_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = Some(positions_bytes);
-    if let Some(cb) = cavity_bytes {
-        *hollow_preview_cavity_result_bytes()
-            .lock()
-            .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = Some(cb);
-    }
+    *hollow_preview_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = cavity_bytes;
     *hollow_preview_infill_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? =
@@ -436,6 +753,10 @@ pub async fn mesh_hollow_preview_from_captured_source(
         .lock()
         .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
         Some(blocked_voxel_center_bytes);
+    *hollow_preview_blocked_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
+        Some(blocked_voxel_index_bytes);
 
     serde_json::to_string(&report).map_err(|e| format!("serialize hollow preview report: {e}"))
 }
@@ -444,7 +765,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
 pub async fn mesh_hollow_apply_from_captured_source(
     options_json: String,
 ) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json);
+    let options = parse_hollow_options(&options_json)?;
     let source_mesh = hollow_preview_source_mesh()
         .lock()
         .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
@@ -589,6 +910,85 @@ pub async fn mesh_hollow_preview_read_blocked_voxel_centers() -> Result<Response
     Ok(Response::new(bytes))
 }
 
+#[tauri::command]
+pub async fn mesh_hollow_preview_read_blocked_voxel_indices() -> Result<Response, String> {
+    let bytes = hollow_preview_blocked_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No hollow preview blocked voxel index result — call mesh_hollow_preview_from_captured_source first"
+                .to_string()
+        })?;
+    Ok(Response::new(bytes))
+}
+
+/// Request payload for `mesh_hollow_preview_select_removed_voxels_in_polygon`.
+/// All fields are in the same spaces the frontend lasso resolver used before
+/// the projection moved to Rust: `polygon` in container pixels, `view_proj` a
+/// column-major `projectionMatrix * matrixWorldInverse`, and the model
+/// transform (`geometry_center`/`scale`/`rotation_quat`/`position`) matching
+/// `resolveBlockedHollowVoxelMarqueeSelection`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectRemovedVoxelsRequest {
+    polygon: Vec<[f32; 2]>,
+    view_proj: [f32; 16],
+    rect_width: f32,
+    rect_height: f32,
+    geometry_center: [f32; 3],
+    scale: [f32; 3],
+    rotation_quat: [f32; 4],
+    position: [f32; 3],
+    options: HollowOptions,
+}
+
+/// Selects the full through-depth set of removed (cavity) voxels whose
+/// projected screen point falls inside the lasso polygon, operating on the
+/// cached hollow-preview session so the result is immune to the boundary
+/// filter and viewport cap that narrow the rendered/exported voxel subset.
+/// Returns the grid indices as raw little-endian `u32` bytes.
+#[tauri::command]
+pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
+    request_json: String,
+) -> Result<Response, String> {
+    let request: SelectRemovedVoxelsRequest = serde_json::from_str(&request_json)
+        .map_err(|e| format!("invalid select-removed-voxels request JSON: {e}"))?;
+
+    let session = hollow_preview_session()
+        .lock()
+        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No hollow preview session — call mesh_hollow_preview_from_captured_source first"
+                .to_string()
+        })?;
+
+    let indices = tauri::async_runtime::spawn_blocking(move || {
+        let selected = session.select_removed_voxels_in_polygon(
+            &request.options,
+            &request.polygon,
+            &request.view_proj,
+            request.rect_width,
+            request.rect_height,
+            Vec3::new(
+                request.geometry_center[0],
+                request.geometry_center[1],
+                request.geometry_center[2],
+            ),
+            Vec3::new(request.scale[0], request.scale[1], request.scale[2]),
+            request.rotation_quat,
+            Vec3::new(request.position[0], request.position[1], request.position[2]),
+        );
+        Ok::<Vec<u32>, String>(selected)
+    })
+    .await
+    .map_err(|e| format!("hollow select task panicked: {e}"))??;
+
+    let bytes = bytemuck::cast_slice::<u32, u8>(&indices).to_vec();
+    Ok(Response::new(bytes))
+}
+
 /// Reads the cavity interior mesh positions from the last preview hollow operation.
 #[tauri::command]
 pub async fn mesh_hollow_preview_read_cavity_positions() -> Result<Response, String> {
@@ -619,7 +1019,7 @@ pub async fn mesh_hollow_staged_read_cavity_positions() -> Result<Response, Stri
 /// Applies manual cylindrical hole punches to the current staged mesh.
 #[tauri::command]
 pub async fn mesh_punch_staged(options_json: String) -> Result<String, String> {
-    let options = parse_hole_punch_options(&options_json);
+    let options = parse_hole_punch_options(&options_json)?;
     let bytes = read_staging_bytes()?;
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
@@ -651,7 +1051,7 @@ pub async fn mesh_punch_capture_staged_source() -> Result<(), String> {
 /// regular staged mesh buffer.
 #[tauri::command]
 pub async fn mesh_punch_from_captured_source(options_json: String) -> Result<String, String> {
-    let options = parse_hole_punch_options(&options_json);
+    let options = parse_hole_punch_options(&options_json)?;
     let source_bytes = punch_source_bytes()
         .lock()
         .map_err(|e| format!("punch source lock poisoned: {e}"))?
@@ -691,6 +1091,533 @@ pub async fn mesh_punch_read_positions() -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
+// --- organic cut ---------------------------------------------------------
+
+/// Writes the EXACT inputs of an organic cut to disk when `DF_CUT_DUMP` names a
+/// directory: the staged mesh as raw LE f32 soup (`cut-<n>.bin`) and the options
+/// JSON (`cut-<n>.json`), numbered so a session keeps every attempt. The pair is
+/// a complete, lossless replay of the cut — feed it to the `cut_replay` binary in
+/// `dragonfruit-organic-cut` to reproduce a bad cut outside the app. Off unless
+/// the variable is set; a write failure only warns (never breaks the cut).
+fn dump_organic_cut_inputs(bytes: &[u8], options_json: &str) {
+    let Some(dir) = std::env::var_os("DF_CUT_DUMP") else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("[cut] dump dir {}: {e}", dir.display());
+        return;
+    }
+    let n = (0u32..)
+        .find(|n| !dir.join(format!("cut-{n}.bin")).exists())
+        .unwrap_or(0);
+    if let Err(e) = std::fs::write(dir.join(format!("cut-{n}.bin")), bytes)
+        .and_then(|()| std::fs::write(dir.join(format!("cut-{n}.json")), options_json))
+    {
+        eprintln!("[cut] dump cut-{n}: {e}");
+        return;
+    }
+    eprintln!(
+        "\n--- cut-{n} ---\n[cut] dumped inputs to {}/cut-{n}.{{bin,json}} ({} bytes of mesh)",
+        dir.display(),
+        bytes.len()
+    );
+}
+
+/// Applies an organic cut to the current staged mesh, replacing the staged buffer
+/// with the first part and stashing ALL parts for read-back (via
+/// `mesh_organic_cut_read_part`). A multi-loop cut can produce more than two parts.
+#[tauri::command]
+pub async fn mesh_organic_cut_staged(options_json: String) -> Result<String, String> {
+    let options = parse_organic_cut_options(&options_json);
+    let bytes = read_staging_bytes()?;
+    dump_organic_cut_inputs(&bytes, &options_json);
+    let (parts, report) = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        let outcome = organic_cut(mesh, &options);
+        Ok::<_, String>((outcome.parts, outcome.report))
+    })
+    .await
+    .map_err(|e| format!("organic cut task panicked: {e}"))??;
+
+    let parts_soup: Vec<Vec<u8>> = parts
+        .iter()
+        .map(|p| bytemuck::cast_slice::<f32, u8>(&p.to_triangle_soup()).to_vec())
+        .collect();
+    *organic_cut_parts_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))? = parts_soup;
+
+    // Keep the staged buffer pointed at the first part so existing read paths stay
+    // valid (no-op cut → no parts → leave the staged mesh as-is).
+    if let Some(first) = parts.first() {
+        replace_staging_with_mesh(first)?;
+    }
+    serde_json::to_string(&report).map_err(|e| format!("serialize organic cut report: {e}"))
+}
+
+/// Captures the current staged mesh bytes as the source for repeated
+/// non-mutating organic-cut runs.
+#[tauri::command]
+pub async fn mesh_organic_cut_capture_staged_source() -> Result<(), String> {
+    let bytes = read_staging_bytes()?;
+    *organic_cut_source_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut source lock poisoned: {e}"))? = Some(bytes);
+    organic_cut_parts_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))?
+        .clear();
+    // Invalidate the cached geodesic solver — it belongs to the previous source.
+    // The next geodesic call rebuilds it lazily for the new mesh.
+    *organic_cut_geodesic_solver()
+        .lock()
+        .map_err(|e| format!("organic cut solver lock poisoned: {e}"))? = None;
+    Ok(())
+}
+
+/// Runs an organic cut against the captured source mesh without mutating the
+/// regular staged mesh buffer. Stashes ALL parts for read-back (via
+/// `mesh_organic_cut_read_part`, driven by the report's `partCount`).
+#[tauri::command]
+pub async fn mesh_organic_cut_from_captured_source(options_json: String) -> Result<String, String> {
+    let options = parse_organic_cut_options(&options_json);
+    let source_bytes = organic_cut_source_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No captured organic cut source — call mesh_organic_cut_capture_staged_source first"
+                .to_string()
+        })?;
+    dump_organic_cut_inputs(&source_bytes, &options_json);
+
+    let (parts_soup, report) = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
+        let outcome = organic_cut(mesh, &options);
+        let parts: Vec<Vec<u8>> = outcome
+            .parts
+            .iter()
+            .map(|p| bytemuck::cast_slice::<f32, u8>(&p.to_triangle_soup()).to_vec())
+            .collect();
+        Ok::<_, String>((parts, outcome.report))
+    })
+    .await
+    .map_err(|e| format!("organic cut task panicked: {e}"))??;
+
+    *organic_cut_parts_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))? = parts_soup;
+
+    serde_json::to_string(&report).map_err(|e| format!("serialize organic cut report: {e}"))
+}
+
+/// Returns the most recent organic-cut part at `index` as raw LE f32 soup bytes.
+/// Indices run `0..report.partCount`; a multi-loop cut that frees several pieces
+/// exposes each as its own part. Out-of-range indices error.
+#[tauri::command]
+pub async fn mesh_organic_cut_read_part(index: usize) -> Result<Response, String> {
+    let bytes = organic_cut_parts_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))?
+        .get(index)
+        .cloned()
+        .ok_or_else(|| format!("No organic cut part at index {index} — run a cut first"))?;
+    Ok(Response::new(bytes))
+}
+
+/// Computes a surface-following (Stage-1 edge-path) loop through the given
+/// waypoints against the captured organic-cut source mesh, and stores the
+/// resulting polyline for read-back. Returns the point count as JSON.
+///
+/// The frontend sends `{ points: [{position:[x,y,z]}...], close: bool }` in the
+/// model's local space (same space as the cut). The returned polyline is LE f32
+/// (3 floats per point) and can be rendered directly as the on-surface seam.
+#[tauri::command]
+pub async fn mesh_organic_cut_geodesic_loop(request_json: String) -> Result<String, String> {
+    let req = parse_geodesic_request(&request_json);
+    if req.points.len() < 2 {
+        // Not enough points yet — clear any stale polyline and report 0.
+        *organic_cut_geodesic_bytes()
+            .lock()
+            .map_err(|e| format!("geodesic lock poisoned: {e}"))? = None;
+        return Ok("{\"pointCount\":0}".to_string());
+    }
+
+    let (bytes, count) = compute_geodesic_loop_bytes(&req).await?;
+    *organic_cut_geodesic_bytes()
+        .lock()
+        .map_err(|e| format!("geodesic lock poisoned: {e}"))? = Some(bytes);
+    Ok(format!("{{\"pointCount\":{count}}}"))
+}
+
+/// Single-round-trip geodesic: computes the loop and returns the raw LE f32
+/// polyline bytes DIRECTLY as the response body, skipping the separate
+/// stash + read-back command pair. This is the hot path used while dragging a
+/// waypoint — one IPC hop per frame instead of two. Returns an empty body for
+/// <2 points. (Also stashes the bytes so a later `read_geodesic` still works.)
+#[tauri::command]
+pub async fn mesh_organic_cut_geodesic_loop_bytes(request_json: String) -> Result<Response, String> {
+    let req = parse_geodesic_request(&request_json);
+    if req.points.len() < 2 {
+        *organic_cut_geodesic_bytes()
+            .lock()
+            .map_err(|e| format!("geodesic lock poisoned: {e}"))? = None;
+        return Ok(Response::new(Vec::new()));
+    }
+
+    let (bytes, _count) = compute_geodesic_loop_bytes(&req).await?;
+    *organic_cut_geodesic_bytes()
+        .lock()
+        .map_err(|e| format!("geodesic lock poisoned: {e}"))? = Some(bytes.clone());
+    Ok(Response::new(bytes))
+}
+
+/// Fetches the cached geodesic solver, building it once from the captured source
+/// if absent. Building (parse + topology + vertex graph) is O(mesh) and dominates
+/// a single query, so caching it makes dragging a waypoint cheap — each query is
+/// then only Dijkstra + path straightening.
+async fn geodesic_solver_or_build() -> Result<Arc<GeodesicSolver>, String> {
+    let cached = organic_cut_geodesic_solver()
+        .lock()
+        .map_err(|e| format!("organic cut solver lock poisoned: {e}"))?
+        .clone();
+    if let Some(s) = cached {
+        return Ok(s);
+    }
+    let source_bytes = organic_cut_source_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No captured source — call mesh_organic_cut_capture_staged_source first".to_string()
+        })?;
+    let built = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
+        Ok::<_, String>(Arc::new(GeodesicSolver::build(mesh)))
+    })
+    .await
+    .map_err(|e| format!("geodesic solver build panicked: {e}"))??;
+    *organic_cut_geodesic_solver()
+        .lock()
+        .map_err(|e| format!("organic cut solver lock poisoned: {e}"))? = Some(built.clone());
+    Ok(built)
+}
+
+/// Computes the geodesic loop for a request against the cached solver, returning
+/// the flat LE f32 polyline bytes plus the point count. Shared by the JSON and
+/// raw-bytes command variants. Caller must have validated `points.len() >= 2`.
+async fn compute_geodesic_loop_bytes(req: &GeodesicRequestDto) -> Result<(Vec<u8>, usize), String> {
+    let solver = geodesic_solver_or_build().await?;
+    let waypoints: Vec<Vec3> = req
+        .points
+        .iter()
+        .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
+        .collect();
+    let close = req.close;
+    let smoothing = req.smoothing;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let loop_pts = solver
+            .surface_loop_smoothed(&waypoints, close, smoothing)
+            .ok_or_else(|| "geodesic loop could not be computed".to_string())?;
+        let flat: Vec<f32> = loop_pts.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&flat).to_vec();
+        Ok::<_, String>((bytes, loop_pts.len()))
+    })
+    .await
+    .map_err(|e| format!("geodesic task panicked: {e}"))?
+}
+
+/// Returns the most recent geodesic loop polyline as raw LE f32 bytes.
+#[tauri::command]
+pub async fn mesh_organic_cut_read_geodesic() -> Result<Response, String> {
+    let bytes = organic_cut_geodesic_bytes()
+        .lock()
+        .map_err(|e| format!("geodesic lock poisoned: {e}"))?
+        .clone()
+        .unwrap_or_default();
+    Ok(Response::new(bytes))
+}
+
+/// Builds the contour-cut MEMBRANE for the given loop and stashes it as a
+/// triangle soup for previewing. Uses the same loop the cut would (the dense
+/// geodesic points the frontend passes here), so what's rendered IS the cutter
+/// surface. Returns `{"triangleCount":N}`; read the bytes via
+/// `mesh_organic_cut_read_membrane`.
+#[tauri::command]
+pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<String, String> {
+    let req = parse_geodesic_request(&request_json);
+    if req.points.len() < 3 {
+        *organic_cut_membrane_bytes()
+            .lock()
+            .map_err(|e| format!("membrane lock poisoned: {e}"))? = None;
+        return Ok("{\"triangleCount\":0}".to_string());
+    }
+
+    let loop_pts: Vec<Vec3> = req
+        .points
+        .iter()
+        .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
+        .collect();
+    let membrane_smoothing = req.membrane_smoothing;
+    let density = req.density;
+    // The cutter preview draws the wafer, whose thickness is no longer a setting —
+    // it is sub-resolution either way, and the surface cut it now stands behind has
+    // no thickness at all.
+    let thickness_mm = dragonfruit_organic_cut::membrane::DEFAULT_CUTTER_THICKNESS_MM;
+    let joint_clearance_mm = req.joint_clearance_mm.max(0.0);
+    let generate_tenon = req.generate_tenon;
+    let tenon_width_mm = req.tenon_width_mm;
+    let tenon_depth_mm = req.tenon_depth_mm;
+    let tenon_shape = dragonfruit_organic_cut::TenonShape::from_str_or_default(&req.tenon_shape);
+    let tenon_fillet_mm = req.tenon_fillet_mm;
+    let tenon_tolerance_mm = req.tenon_tolerance_mm;
+    let tenon_at: dragonfruit_organic_cut::TenonAnchor = req
+        .tenon_anchor
+        .map(|p| Vec3::new(p[0], p[1], p[2]));
+    let tenon_swap_sides = req.tenon_swap_sides;
+    let tenon_tilt = dragonfruit_organic_cut::TenonTilt::new(req.tenon_tilt_rad, req.tenon_roll_rad);
+
+    // Use the captured cut SOURCE mesh so the preview can apply the real loop
+    // offset (needs surface normals) and show the REAL cutter slab — exactly what
+    // cuts. Falls back to the bare-membrane preview if no source is captured yet.
+    let source_bytes = organic_cut_source_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
+        .clone();
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // The tenon preview needs the real source mesh (to probe wall clearance);
+        // it's only available once the source is captured. Returns (soup, kind,
+        // detail) — empty soup when no tenon (too thin / degenerate / no source).
+        let mut tenon_soup: Vec<f32> = Vec::new();
+        // How many of tenon_soup's triangles are the TENON (the rest are the mortise),
+        // so the frontend can colour the two apart.
+        let mut tenon_tris = 0usize;
+        let mut tenon_kind = "none".to_string();
+        let mut tenon_detail = String::new();
+        // Whether the previewed tenon can actually be placed. A tenon that can't is
+        // still built and still framed — drawn in the won't-fit colour, with its
+        // gizmo — so `false` means "show it in red and refuse the cut", not "no
+        // tenon". Defaults true so a cut with no tenon requested never blocks.
+        let mut tenon_fits = true;
+        // Placement frame for the aim/roll gizmo (anchor, axis, u, v, tip), in
+        // model-local coords. None when no tenon is previewed.
+        let mut tenon_frame: Option<dragonfruit_organic_cut::TenonFrameInfo> = None;
+
+        let soup = if let Some(bytes) = source_bytes {
+            let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+            if generate_tenon {
+                if let Some(preview) =
+                    dragonfruit_organic_cut::build_tenon_preview_soup(
+                        &mesh,
+                        &loop_pts,
+                        membrane_smoothing,
+                        density,
+                        tenon_shape,
+                        tenon_swap_sides,
+                        tenon_tilt,
+                        tenon_width_mm,
+                        tenon_depth_mm,
+                        tenon_fillet_mm,
+                        // Same sum the cut spends, so the previewed fit is the real one.
+                        tenon_tolerance_mm + joint_clearance_mm,
+                        tenon_at,
+                    )
+                {
+                    tenon_tris = preview.tenon_triangles;
+                    tenon_soup = preview.soup;
+                    tenon_kind = preview.kind.as_str().to_string();
+                    tenon_fits = preview.fits;
+                    tenon_detail = preview.detail;
+                    tenon_frame = preview.frame;
+                }
+            }
+            dragonfruit_organic_cut::membrane::build_cutter_preview_soup(
+                &mesh,
+                &loop_pts,
+                thickness_mm,
+                membrane_smoothing,
+                density,
+            )
+            .ok_or_else(|| "cutter could not be built from the loop".to_string())?
+        } else {
+            // No captured source yet → bare membrane on the raw loop (no offset).
+            dragonfruit_organic_cut::membrane::build_membrane_preview_soup_full(
+                &loop_pts,
+                membrane_smoothing,
+                density,
+            )
+            .ok_or_else(|| "membrane could not be built from the loop".to_string())?
+        };
+        let tri_count = soup.len() / 9;
+        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
+        let tenon_bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&tenon_soup).to_vec();
+        let joint_tris = tenon_soup.len() / 9;
+        Ok::<_, String>((bytes, tri_count, tenon_bytes, joint_tris, tenon_tris, tenon_kind, tenon_fits, tenon_detail, tenon_frame))
+    })
+    .await
+    .map_err(|e| format!("membrane preview task panicked: {e}"))??;
+
+    let (bytes, tri_count, tenon_bytes, joint_tris, tenon_tris, tenon_kind, tenon_fits, tenon_detail, tenon_frame) = result;
+    *organic_cut_membrane_bytes()
+        .lock()
+        .map_err(|e| format!("membrane lock poisoned: {e}"))? = Some(bytes);
+    *organic_cut_tenon_bytes()
+        .lock()
+        .map_err(|e| format!("tenon lock poisoned: {e}"))? = Some(tenon_bytes);
+    // tenon_detail is plain ASCII status text; escape quotes/backslashes for JSON.
+    let tenon_detail_json = json_escape(&tenon_detail);
+    // The gizmo frame (anchor/axis/u/v/tip, model-local) so the frontend can place
+    // the aim + roll handles exactly on the previewed tenon. `null` when no tenon.
+    let tenon_frame_json = match tenon_frame {
+        Some(f) => format!(
+            "{{\"anchor\":[{},{},{}],\"axis\":[{},{},{}],\"u\":[{},{},{}],\"v\":[{},{},{}],\"tip\":[{},{},{}],\"depth\":{},\"maxTiltRad\":{},\"halfDiagMm\":{}}}",
+            f.anchor.x, f.anchor.y, f.anchor.z,
+            f.axis.x, f.axis.y, f.axis.z,
+            f.u.x, f.u.y, f.u.z,
+            f.v.x, f.v.y, f.v.z,
+            f.tip.x, f.tip.y, f.tip.z,
+            f.depth,
+            f.max_tilt,
+            f.half_diag,
+        ),
+        None => "null".to_string(),
+    };
+    Ok(format!(
+        "{{\"triangleCount\":{tri_count},\"jointTriangleCount\":{joint_tris},\"tenonTriangleCount\":{tenon_tris},\"tenonKind\":\"{tenon_kind}\",\"tenonFits\":{tenon_fits},\"tenonDetail\":\"{tenon_detail_json}\",\"tenonFrame\":{tenon_frame_json}}}"
+    ))
+}
+
+/// Preview the registration tenon a FLAT cut would place, framed on the cut plane.
+///
+/// The contour preview builds a membrane from the loop and frames the tenon on it;
+/// a flat cut has no membrane, so this takes the plane the frontend previewed and
+/// frames the tenon on the cross-section it carves. Same ladder and same build as
+/// the cut, so the preview is what lands. Writes the soup where
+/// `mesh_organic_cut_read_tenon` picks it up, and reports the same JSON shape as the
+/// membrane preview (with no membrane of its own: `triangleCount` is 0).
+#[tauri::command]
+pub async fn mesh_organic_cut_plane_tenon_preview(request_json: String) -> Result<String, String> {
+    let req = parse_geodesic_request(&request_json);
+    let normal = Vec3::new(req.plane_normal[0], req.plane_normal[1], req.plane_normal[2]);
+    let offset = req.plane_offset;
+    let generate_tenon = req.generate_tenon;
+    let tenon_shape = dragonfruit_organic_cut::TenonShape::from_str_or_default(&req.tenon_shape);
+    let tenon_tilt = dragonfruit_organic_cut::TenonTilt::new(req.tenon_tilt_rad, req.tenon_roll_rad);
+    let tenon_at: dragonfruit_organic_cut::TenonAnchor = req
+        .tenon_anchor
+        .map(|p| Vec3::new(p[0], p[1], p[2]));
+    let (tenon_width_mm, tenon_depth_mm, tenon_fillet_mm, tenon_tolerance_mm, tenon_swap_sides) = (
+        req.tenon_width_mm,
+        req.tenon_depth_mm,
+        req.tenon_fillet_mm,
+        req.tenon_tolerance_mm,
+        req.tenon_swap_sides,
+    );
+
+    let source_bytes = organic_cut_source_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
+        .clone();
+    let Some(bytes) = source_bytes else {
+        return Ok(NO_TENON_PREVIEW_JSON.to_string());
+    };
+    if !generate_tenon || normal.length() < 1e-6 {
+        return Ok(NO_TENON_PREVIEW_JSON.to_string());
+    }
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        let Some(frame) = dragonfruit_organic_cut::frame_from_plane(&mesh, normal, offset, tenon_at)
+        else {
+            return Ok::<_, String>(None);
+        };
+        let preview = dragonfruit_organic_cut::build_tenon_preview_at_frame(
+            &mesh,
+            frame,
+            tenon_shape,
+            tenon_swap_sides,
+            tenon_tilt,
+            tenon_width_mm,
+            tenon_depth_mm,
+            tenon_fillet_mm,
+            tenon_tolerance_mm,
+        );
+        Ok(Some((
+            preview.soup,
+            preview.tenon_triangles,
+            preview.kind.as_str().to_string(),
+            preview.fits,
+            preview.detail,
+            preview.frame,
+        )))
+    })
+    .await
+    .map_err(|e| format!("plane tenon preview task panicked: {e}"))??;
+
+    let Some((tenon_soup, tenon_tris, tenon_kind, tenon_fits, tenon_detail, tenon_frame)) = result else {
+        return Ok(NO_TENON_PREVIEW_JSON.to_string());
+    };
+    let joint_tris = tenon_soup.len() / 9;
+    *organic_cut_tenon_bytes()
+        .lock()
+        .map_err(|e| format!("tenon lock poisoned: {e}"))? =
+        Some(bytemuck::cast_slice::<f32, u8>(&tenon_soup).to_vec());
+    let tenon_detail_json = json_escape(&tenon_detail);
+    let tenon_frame_json = match tenon_frame {
+        Some(f) => format!(
+            "{{\"anchor\":[{},{},{}],\"axis\":[{},{},{}],\"u\":[{},{},{}],\"v\":[{},{},{}],\"tip\":[{},{},{}],\"depth\":{},\"maxTiltRad\":{},\"halfDiagMm\":{}}}",
+            f.anchor.x, f.anchor.y, f.anchor.z,
+            f.axis.x, f.axis.y, f.axis.z,
+            f.u.x, f.u.y, f.u.z,
+            f.v.x, f.v.y, f.v.z,
+            f.tip.x, f.tip.y, f.tip.z,
+            f.depth,
+            f.max_tilt,
+            f.half_diag,
+        ),
+        None => "null".to_string(),
+    };
+    Ok(format!(
+        "{{\"triangleCount\":0,\"jointTriangleCount\":{joint_tris},\"tenonTriangleCount\":{tenon_tris},\"tenonKind\":\"{tenon_kind}\",\"tenonFits\":{tenon_fits},\"tenonDetail\":\"{tenon_detail_json}\",\"tenonFrame\":{tenon_frame_json}}}"
+    ))
+}
+
+/// The empty answer for a tenon preview: no tenon, no frame, no membrane.
+const NO_TENON_PREVIEW_JSON: &str =
+    "{\"triangleCount\":0,\"jointTriangleCount\":0,\"tenonTriangleCount\":0,\"tenonKind\":\"none\",\"tenonFits\":true,\"tenonDetail\":\"\",\"tenonFrame\":null}";
+
+/// Returns the most recent registration-tenon preview as raw LE f32 triangle-soup
+/// bytes (tenon followed by mortise). Empty when no tenon was previewed.
+#[tauri::command]
+pub async fn mesh_organic_cut_read_tenon() -> Result<Response, String> {
+    let bytes = organic_cut_tenon_bytes()
+        .lock()
+        .map_err(|e| format!("tenon lock poisoned: {e}"))?
+        .clone()
+        .unwrap_or_default();
+    Ok(Response::new(bytes))
+}
+
+/// Minimal JSON string-body escaper for the short ASCII status messages we embed
+/// in hand-built response objects (quotes + backslashes only).
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Returns the most recent membrane preview as raw LE f32 triangle-soup bytes.
+#[tauri::command]
+pub async fn mesh_organic_cut_read_membrane() -> Result<Response, String> {
+    let bytes = organic_cut_membrane_bytes()
+        .lock()
+        .map_err(|e| format!("membrane lock poisoned: {e}"))?
+        .clone()
+        .unwrap_or_default();
+    Ok(Response::new(bytes))
+}
+
 /// Returns the current staged positions buffer as raw little-endian bytes.
 /// Used by the frontend to hydrate a `THREE.BufferGeometry` after a repair.
 #[tauri::command]
@@ -699,52 +1626,103 @@ pub async fn mesh_repair_read_positions() -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
-/// Parses a binary or ASCII STL file in Rust and returns the vertex positions
-/// and per-vertex normals as a flat byte buffer.
+/// The STL-only step of a native load.
 ///
-/// Byte layout: a 16-byte `DFST` header containing flags and the original/output
-/// triangle counts, followed by little-endian f32 positions and normals.
+/// A binary STL announces its triangle count in its 84-byte header, so a file
+/// too large to render can be found — and decimated — before the repair loader
+/// reads and indexes the whole thing. This is also where an oversized ASCII STL
+/// is refused, because its parser has to hold the file in memory.
 ///
-/// Processing the file in Rust avoids loading the entire raw STL into the
-/// webview's memory space, which can save ~1 GB for a large binary STL.
-#[tauri::command]
-pub async fn load_stl_file(file_path: String) -> Result<Response, String> {
+/// `Ok(Some(bytes))` when the preview path produced a `DFMX` payload,
+/// `Ok(None)` when the file is ordinary and the caller should load it normally,
+/// `Err` for an input the renderer cannot take.
+///
+/// `forced_model_triangle_count` skips classification with a count the caller
+/// already knows, re-decimating without repeating the classification pass; only
+/// tests pass it, so the trigger is otherwise the file size alone.
+fn stl_special_case_response(
+    path: &std::path::Path,
+    file_path: &str,
+    forced_model_triangle_count: Option<u32>,
+) -> Result<Option<Vec<u8>>, String> {
     use dragonfruit_mesh_repair::io;
 
-    let path = std::path::Path::new(&file_path);
-
-    log::info!("[load_stl_file] Starting native STL load: {file_path}");
-
-    // The current IPC format expands every triangle to positions plus normals
-    // (72 bytes/triangle), before Three.js builds its BVH and uploads buffers.
-    // Reject inputs that cannot fit that representation before the repair
-    // loader reads and indexes the entire STL in memory.
-    const MAX_NATIVE_STL_TRIANGLES: u64 = 6_000_000;
-    const PREVIEW_TARGET_TRIANGLES: usize = 2_000_000;
+    // The payload is 72 bytes/triangle before Three.js builds its BVH and
+    // uploads buffers, so reject inputs that cannot fit that representation
+    // before the repair loader reads and indexes the entire STL in memory.
+    const TRIGGER_TRIANGLES: u64 = 4_000_000;
     const MAX_NATIVE_ASCII_STL_BYTES: u64 = 300_000_000;
+
     let file_size = std::fs::metadata(path)
-        .map_err(|e| format!("Failed to inspect STL '{}': {e}", file_path))?
+        .map_err(|e| format!("Failed to inspect STL '{file_path}': {e}"))?
         .len();
     let mut header = [0u8; 84];
     let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("Failed to open STL '{}': {e}", file_path))?;
+        .map_err(|e| format!("Failed to open STL '{file_path}': {e}"))?;
     let header_len = file
         .read(&mut header)
-        .map_err(|e| format!("Failed to read STL header '{}': {e}", file_path))?;
+        .map_err(|e| format!("Failed to read STL header '{file_path}': {e}"))?;
 
     if header_len == header.len() {
         let triangle_count = u32::from_le_bytes(header[80..84].try_into().unwrap()) as u64;
         let expected_binary_size = 84u64.saturating_add(triangle_count.saturating_mul(50));
-        if expected_binary_size == file_size && triangle_count > MAX_NATIVE_STL_TRIANGLES {
+        let force_decimate = forced_model_triangle_count.is_some();
+        if expected_binary_size == file_size && (triangle_count > TRIGGER_TRIANGLES || force_decimate) {
+            let (bbox_min, bbox_max) = binary_stl_bounds(path, triangle_count as u32)?;
+            let bbox_diagonal_mm = bbox_max.sub(bbox_min).length() as f64;
             drop(file);
-            let preview =
-                load_binary_stl_preview(path, triangle_count as u32, PREVIEW_TARGET_TRIANGLES)?;
-            log::info!(
-                "[load_stl_file] Streaming preview complete: {} -> {} triangles",
-                triangle_count,
-                preview.triangles.len()
+
+            let budget = dragonfruit_mesh_repair::stl_budget::compute_triangle_budget(
+                triangle_count as usize,
+                bbox_diagonal_mm,
+                None,
             );
-            return encode_stl_response(&preview, triangle_count as u32, true).map(Response::new);
+
+            // Through the dispatcher, not `io::stl::load`, so the model gets the
+            // same coarse-face refinement every other import path applies.
+            let mesh = io::load_mesh_from_path(path)
+                .map_err(|e| format!("Failed to load STL '{file_path}': {e}"))?;
+
+            let (mesh_to_decimate, model_tri_count) = match forced_model_triangle_count {
+                Some(provided) => {
+                    let count = provided.min(mesh.triangles.len() as u32) as usize;
+                    (mesh, count)
+                }
+                None => {
+                    let classify_outcome = dragonfruit_mesh_repair::repair::classify_support_split(
+                        mesh,
+                        &dragonfruit_mesh_repair::RepairOptions::default(),
+                    );
+                    let count = classify_outcome
+                        .report
+                        .model_triangle_count
+                        .unwrap_or(classify_outcome.mesh.triangles.len());
+                    (classify_outcome.mesh, count)
+                }
+            };
+
+            let outcome = dragonfruit_mesh_repair::repair::decimate_sections_to_budget(
+                mesh_to_decimate,
+                model_tri_count,
+                &budget,
+            );
+            let preview = outcome.mesh;
+
+            log::info!(
+                "[load_mesh_file] Preview complete: {} -> {} triangles (budget: {}, error: {:.4})",
+                triangle_count,
+                preview.triangles.len(),
+                budget.budget_tris,
+                outcome.achieved_error
+            );
+            return encode_mesh_bodies(
+                std::slice::from_ref(&preview),
+                triangle_count as u32,
+                true,
+                Some(outcome.model_triangle_count as u32),
+                None,
+            )
+            .map(Some);
         }
     }
     if file_size > MAX_NATIVE_ASCII_STL_BYTES && header.starts_with(b"solid") {
@@ -754,52 +1732,237 @@ pub async fn load_stl_file(file_path: String) -> Result<Response, String> {
             MAX_NATIVE_ASCII_STL_BYTES as f64 / 1_000_000_000.0,
         ));
     }
-    drop(file);
-
-    let mesh =
-        io::stl::load(path).map_err(|e| format!("Failed to load STL '{}': {e}", file_path))?;
-
-    let tri_count = mesh.triangles.len();
-    encode_stl_response(&mesh, tri_count as u32, false).map(Response::new)
+    Ok(None)
 }
 
-const STL_RESPONSE_MAGIC: &[u8; 4] = b"DFST";
-const STL_RESPONSE_HEADER_BYTES: usize = 16;
-const STL_RESPONSE_FLAG_PREVIEW: u32 = 1;
+/// Parse a mesh file of any supported format and return its bodies in the
+/// `DFMX` wire format that [`encode_mesh_bodies`] writes: a 32-byte header, a
+/// body table, then one positions+normals soup per body.
+///
+/// The format-agnostic entry point: it dispatches through
+/// `io::load_mesh_bodies_from_path` (`stl`/`obj` give one body; `3mf` gives one
+/// per build item expanded through its components, with transforms baked), so
+/// refinement and the welded, crease-split normals are the same ones every other
+/// import path gets. Materials and units are dropped, matching the renderer's
+/// loaders. STL adds one format-specific step — [`stl_special_case_response`],
+/// which turns a mesh too large to render into a decimated preview.
+///
+/// `classify` (default true) runs the model/support classifier on a single-body
+/// load and returns its report in the payload's metadata tail. Pass `false` when
+/// the caller will repair instead: that pass classifies too.
+#[tauri::command]
+pub async fn load_mesh_file(file_path: String, classify: Option<bool>) -> Result<Response, String> {
+    let path = std::path::Path::new(&file_path);
+    log::info!("[load_mesh_file] Starting native mesh load: {file_path}");
 
-fn encode_stl_response(
-    mesh: &IndexedMesh,
+    let is_stl = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("stl"));
+    if is_stl {
+        if let Some(bytes) = stl_special_case_response(path, &file_path, None)? {
+            return Ok(Response::new(bytes));
+        }
+    }
+
+    // Through the dispatcher, not a format loader: `load_mesh_bodies_from_path`
+    // refines coarse faces per body before anything derives data from the mesh,
+    // and resolves a 3MF's build items into one body each.
+    let bodies = io::load_mesh_bodies_from_path(path)
+        .map_err(|e| format!("Failed to load mesh '{file_path}': {e}"))?;
+
+    // Classify a single-body load here, when the caller asks, and ship the report
+    // in the payload: the frontend then has nothing to stage or round-trip, the
+    // geometry arrives section-ordered, and the report it would have produced is
+    // already in hand. A caller that will repair passes `classify: false` — the
+    // repair pass classifies too, and that report is the one that matters.
+    let want_classify = classify.unwrap_or(true) && bodies.len() == 1;
+    let (bodies, metadata_json) = if want_classify {
+        classify_single_body(bodies.into_iter().next().expect("length checked above"))
+    } else {
+        (bodies, None)
+    };
+
+    let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
+    encode_mesh_bodies(&bodies, tri_count as u32, false, None, metadata_json.as_deref())
+        .map(Response::new)
+}
+
+/// Parse a mesh's bytes with the native loader, for a source that has no on-disk
+/// path: a VOXL's embedded mesh chunk, or a file expanded out of a zip. The body
+/// is the raw file (binary or ASCII STL today), exactly the bytes the path loader
+/// would have read, and the response is the same `DFMX` payload `load_mesh_file`
+/// writes, classification tail included.
+///
+/// A raw-body command cannot also take JSON arguments, so its one option rides in
+/// a header: `x-mesh-classify: 0` skips the classifier for a caller that will
+/// repair, because that pass classifies too. Absent means classify.
+#[tauri::command]
+pub async fn load_mesh_bytes(request: tauri::ipc::Request<'_>) -> Result<Response, String> {
+    let classify = request
+        .headers()
+        .get("x-mesh-classify")
+        .and_then(|value| value.to_str().ok())
+        .map_or(true, |value| value.trim() != "0");
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        tauri::ipc::InvokeBody::Json(_) => {
+            return Err("load_mesh_bytes expects a raw binary body".into())
+        }
+    };
+    log::info!(
+        "[load_mesh_bytes] Starting native mesh load from {} bytes",
+        bytes.len()
+    );
+    load_mesh_bytes_response(&bytes, classify).map(Response::new)
+}
+
+/// The pipeline behind `load_mesh_bytes`: parse the file's bytes, refine, classify
+/// when asked, and encode the same `DFMX` payload the path loader writes.
+fn load_mesh_bytes_response(bytes: &[u8], classify: bool) -> Result<Vec<u8>, String> {
+    let mesh = io::stl::parse_bytes(bytes)
+        .map_err(|e| format!("Failed to parse mesh bytes: {e}"))?;
+    let mesh = io::refine_coarse_faces(mesh);
+    let (bodies, metadata_json) = if classify {
+        classify_single_body(mesh)
+    } else {
+        (vec![mesh], None)
+    };
+
+    let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
+    encode_mesh_bodies(&bodies, tri_count as u32, false, None, metadata_json.as_deref())
+}
+
+/// Classify one body: section-ordered mesh plus the report as JSON.
+///
+/// Both loaders share this, so a file and a byte payload produce the same report
+/// for the same mesh, and the report rides the `DFMX` metadata tail either way.
+fn classify_single_body(mesh: IndexedMesh) -> (Vec<IndexedMesh>, Option<String>) {
+    let started = std::time::Instant::now();
+    let outcome = classify_support_split(mesh, &RepairOptions::default());
+    log::info!(
+        "[load_mesh] classified in {}ms (model section {:?} triangles)",
+        started.elapsed().as_millis(),
+        outcome.report.model_triangle_count,
+    );
+    // The report timestamps its own sub-steps, so the share each pass holds is
+    // visible without a profiler: total minus the split step is the analysis and
+    // manifold work around it.
+    for step in &outcome.report.steps {
+        log::info!("[load_mesh]   step {} in {:.1}ms", step.name, step.elapsed_ms);
+    }
+    log::info!(
+        "[load_mesh]   native report total {:.1}ms",
+        outcome.report.total_ms
+    );
+    (
+        vec![outcome.mesh],
+        serde_json::to_string(&outcome.report).ok(),
+    )
+}
+
+/// DragonFruit Mesh Transfer (DFMX) Binary IPC Protocol Specification:
+/// Format Version: 1
+///
+/// The one wire format a native load returns, for a single body (STL, OBJ) or
+/// several (a 3MF). Versioned, so an encoding flag (quantized positions,
+/// compression) can be added without breaking readers.
+///
+/// Header (32 bytes):
+///   0 ..  3 : ASCII Magic "DFMX" (0x44464D58)
+///   4 ..  7 : Version u32 LE (currently 1)
+///   8 .. 11 : Flags u32 LE (Bit 0: IS_PREVIEW)
+///  12 .. 15 : Body count u32 LE
+///  16 .. 19 : Original input triangle count u32 LE
+///  20 .. 23 : Model section triangle count u32 LE (0 when absent)
+///  24 .. 27 : Metadata JSON byte length (u32 LE, 0 when absent)
+///  28 .. 31 : Reserved (4 bytes, zero)
+///
+/// Body table: `bodyCount` entries of 8 bytes each, in payload order:
+///   0 .. 3 : Triangle count u32 LE
+///   4 .. 7 : Reserved (zero; an encoding/vertex-count slot for v2)
+///
+/// Payload: each body in table order, positions then normals, 9 f32 per
+/// triangle each (72 bytes/triangle). The metadata JSON, when present, is the
+/// last `metadataLength` bytes of the payload — a reader that does not know the
+/// key reads the bodies and ignores the tail.
+const MESH_RESPONSE_MAGIC: &[u8; 4] = b"DFMX";
+const MESH_RESPONSE_VERSION: u32 = 1;
+const MESH_RESPONSE_HEADER_BYTES: usize = 32;
+const MESH_RESPONSE_BODY_ENTRY_BYTES: usize = 8;
+const MESH_RESPONSE_FLAG_PREVIEW: u32 = 1;
+/// Positions plus normals, both 9 f32 per triangle.
+const SOUP_BYTES_PER_TRIANGLE: usize = 9 * std::mem::size_of::<f32>() * 2;
+
+fn encode_mesh_bodies(
+    bodies: &[IndexedMesh],
     original_triangle_count: u32,
     is_preview: bool,
+    model_triangle_count: Option<u32>,
+    metadata_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    let tri_count = mesh.triangles.len();
-    let positions_len = tri_count * 9 * std::mem::size_of::<f32>();
-    let normals_len = tri_count * 9 * std::mem::size_of::<f32>();
-    let response_len = STL_RESPONSE_HEADER_BYTES
-        .checked_add(positions_len)
-        .and_then(|size| size.checked_add(normals_len))
-        .ok_or_else(|| "STL response size overflow".to_string())?;
+    let total_triangles: usize = bodies.iter().map(|body| body.triangles.len()).sum();
+    let metadata_len = metadata_json.map_or(0, str::len);
+    let response_len = MESH_RESPONSE_HEADER_BYTES
+        .checked_add(bodies.len() * MESH_RESPONSE_BODY_ENTRY_BYTES)
+        .and_then(|size| size.checked_add(total_triangles * SOUP_BYTES_PER_TRIANGLE))
+        .and_then(|size| size.checked_add(metadata_len))
+        .ok_or_else(|| "DFMX response size overflow".to_string())?;
+
     let mut result = Vec::new();
     result.try_reserve_exact(response_len).map_err(|_| {
         format!(
-            "Not enough memory for the STL response ({:.2} GB)",
+            "Not enough memory for the mesh response ({:.2} GB)",
             response_len as f64 / 1_000_000_000.0
         )
     })?;
-    result.extend_from_slice(STL_RESPONSE_MAGIC);
+    result.extend_from_slice(MESH_RESPONSE_MAGIC);
+    result.extend_from_slice(&MESH_RESPONSE_VERSION.to_le_bytes());
     result.extend_from_slice(
         &(if is_preview {
-            STL_RESPONSE_FLAG_PREVIEW
+            MESH_RESPONSE_FLAG_PREVIEW
         } else {
             0
         })
         .to_le_bytes(),
     );
+    result.extend_from_slice(&(bodies.len() as u32).to_le_bytes());
     result.extend_from_slice(&original_triangle_count.to_le_bytes());
-    result.extend_from_slice(&(tri_count as u32).to_le_bytes());
+    result.extend_from_slice(&model_triangle_count.unwrap_or(0).to_le_bytes());
+    result.extend_from_slice(&(metadata_len as u32).to_le_bytes());
+    result.extend_from_slice(&[0u8; 4]);
+    for body in bodies {
+        result.extend_from_slice(&(body.triangles.len() as u32).to_le_bytes());
+        result.extend_from_slice(&[0u8; 4]);
+    }
     result.resize(response_len, 0);
-    let (position_output, normal_output) =
-        result[STL_RESPONSE_HEADER_BYTES..].split_at_mut(positions_len);
+
+    let mut offset = MESH_RESPONSE_HEADER_BYTES + bodies.len() * MESH_RESPONSE_BODY_ENTRY_BYTES;
+    for body in bodies {
+        let len = body.triangles.len() * SOUP_BYTES_PER_TRIANGLE;
+        write_soup(body, &mut result[offset..offset + len]);
+        offset += len;
+    }
+    if let Some(json) = metadata_json {
+        result[offset..offset + metadata_len].copy_from_slice(json.as_bytes());
+    }
+
+    log::info!(
+        "[load_mesh] {} bodies, {} triangles, {:.1} MB payload, {} B metadata",
+        bodies.len(),
+        total_triangles,
+        (response_len - MESH_RESPONSE_HEADER_BYTES) as f64 / 1_000_000.0,
+        metadata_len,
+    );
+    Ok(result)
+}
+
+/// Write a mesh's soup — positions (9 f32 per triangle), then welded,
+/// crease-split corner normals — into `out`, which must be exactly
+/// `triangleCount * 72` bytes.
+fn write_soup(mesh: &IndexedMesh, out: &mut [u8]) {
+    let positions_len = mesh.triangles.len() * 9 * std::mem::size_of::<f32>();
+    let (position_output, normal_output) = out.split_at_mut(positions_len);
     position_output
         .par_chunks_mut(9 * std::mem::size_of::<f32>())
         .zip(mesh.triangles.par_iter())
@@ -815,35 +1978,22 @@ fn encode_stl_response(
                 vertex_output[8..12].copy_from_slice(&vertex.z.to_le_bytes());
             }
         });
+    // Smooth vertex normals, averaged over the welded mesh and split at creases:
+    // see `dragonfruit_mesh_core::normals` for why both halves matter.
+    let normals = dragonfruit_mesh_core::normals::corner_normals(mesh);
     normal_output
         .par_chunks_mut(9 * std::mem::size_of::<f32>())
-        .zip(mesh.triangles.par_iter())
-        .for_each(|(output, triangle)| {
-            let p0 = mesh.positions[triangle[0] as usize];
-            let p1 = mesh.positions[triangle[1] as usize];
-            let p2 = mesh.positions[triangle[2] as usize];
-            let face_normal = p1.sub(p0).cross(p2.sub(p0));
-            let len = face_normal.length();
-            let normal = if len > 1e-10 {
-                face_normal.scale(1.0 / len)
-            } else {
-                Vec3::ZERO
-            };
-            for normal_output in output.chunks_exact_mut(12) {
+        .zip(mesh.triangles.par_iter().enumerate())
+        .for_each(|(output, (face, _))| {
+            for (normal_output, normal) in output
+                .chunks_exact_mut(12)
+                .zip(normals[face * 3..face * 3 + 3].iter())
+            {
                 normal_output[0..4].copy_from_slice(&normal.x.to_le_bytes());
                 normal_output[4..8].copy_from_slice(&normal.y.to_le_bytes());
                 normal_output[8..12].copy_from_slice(&normal.z.to_le_bytes());
             }
         });
-
-    log::info!(
-        "[load_stl_file] {} triangles, {} MB positions + {} MB normals",
-        tri_count,
-        positions_len / (1024 * 1024),
-        normals_len / (1024 * 1024),
-    );
-
-    Ok(result)
 }
 
 fn read_binary_stl_vertex(record: &[u8; 50], offset: usize) -> Vec3 {
@@ -851,6 +2001,11 @@ fn read_binary_stl_vertex(record: &[u8; 50], offset: usize) -> Vec3 {
     Vec3::new(read_f32(offset), read_f32(offset + 4), read_f32(offset + 8))
 }
 
+// PRESERVED (Low-RAM Fallback / Feasibility Baseline):
+// Legacy streaming disk-bucket preview generator from origin/dev.
+// Kept in-place for future low-RAM system fallbacks and streaming decimation feasibility benchmarks.
+// Superseded in active PLAN-3 path by in-memory engine (`decimate_sections_to_budget`).
+#[allow(dead_code)]
 struct PreviewTempDir(PathBuf);
 
 impl Drop for PreviewTempDir {
@@ -882,6 +2037,7 @@ fn binary_stl_bounds(path: &std::path::Path, triangle_count: u32) -> Result<(Vec
     Ok((min, max))
 }
 
+#[allow(dead_code)]
 fn simplify_preview_region(
     path: &std::path::Path,
     triangle_count: usize,
@@ -940,6 +2096,7 @@ fn simplify_preview_region(
     Ok(output)
 }
 
+#[allow(dead_code)]
 fn load_binary_stl_preview(
     path: &std::path::Path,
     triangle_count: u32,
@@ -1055,7 +2212,7 @@ fn load_binary_stl_preview(
                 .map(|[a, b, c]| [a + vertex_base, b + vertex_base, c + vertex_base]),
         );
         log::info!(
-            "[load_stl_file] Topology-safe preview region {}/{}: {} source triangles, {} total output triangles",
+            "[load_mesh_file] Topology-safe preview region {}/{}: {} source triangles, {} total output triangles",
             bucket + 1,
             bucket_count,
             bucket_triangle_count,
@@ -1194,4 +2351,409 @@ fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
         .lock()
         .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = Some(bytes);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse the first body of an encoded `DFMX` response into (positions,
+    /// normals) as f32 triples. These fixtures carry one body, so the soup
+    /// starts right after the header and its single table entry.
+    fn decode_positions_and_normals(bytes: &[u8]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+        let tri_count =
+            u32::from_le_bytes(bytes[MESH_RESPONSE_HEADER_BYTES..MESH_RESPONSE_HEADER_BYTES + 4].try_into().unwrap())
+                as usize;
+        let header = MESH_RESPONSE_HEADER_BYTES + MESH_RESPONSE_BODY_ENTRY_BYTES;
+        let floats = |start: usize| -> Vec<[f32; 3]> {
+            (0..tri_count * 3)
+                .map(|v| {
+                    let at = start + v * 12;
+                    [
+                        f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()),
+                        f32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()),
+                        f32::from_le_bytes(bytes[at + 8..at + 12].try_into().unwrap()),
+                    ]
+                })
+                .collect()
+        };
+        (floats(header), floats(header + tri_count * 36))
+    }
+
+    /// A coarsely triangulated cylinder: every adjacent face pair differs by enough
+    /// that a flat-shaded import is unmistakable.
+    fn cylinder_mesh(sides: usize) -> IndexedMesh {
+        let mut positions = Vec::new();
+        for z in [0.0f32, 1.0] {
+            for i in 0..sides {
+                let angle = std::f32::consts::TAU * i as f32 / sides as f32;
+                positions.push(Vec3::new(angle.cos(), angle.sin(), z));
+            }
+        }
+        let mut triangles = Vec::new();
+        for i in 0..sides {
+            let j = (i + 1) % sides;
+            let (b0, b1) = (i as u32, j as u32);
+            let (t0, t1) = ((sides + i) as u32, (sides + j) as u32);
+            triangles.push([b0, b1, t1]);
+            triangles.push([b0, t1, t0]);
+        }
+        IndexedMesh { positions, triangles }
+    }
+
+    /// STL imports must shade as a surface, not as a stack of facets.
+    ///
+    /// The file format carries one normal per triangle and the loader used to
+    /// write that normal onto all three corners, so every face was lit by its own
+    /// orientation: a coarsely triangulated part rendered as a mosaic, which also
+    /// made a smooth per-vertex baked-AO field look like broken per-triangle data.
+    /// LYS imports arrive welded with shared normals, so the two paths disagreed
+    /// about the same model.
+    #[test]
+    fn stl_normals_are_smooth_at_shared_vertices() {
+        let sides = 8;
+        let mesh = cylinder_mesh(sides);
+        let bytes = encode_mesh_bodies(std::slice::from_ref(&mesh), mesh.triangles.len() as u32, false, None, None)
+            .unwrap();
+        let (positions, normals) = decode_positions_and_normals(&bytes);
+
+        // A welded vertex has ONE normal, whichever triangle it is read from.
+        // Indexed by position, which is what the consumer sees, so this does not
+        // depend on the builder's corner ordering.
+        // sees, so this does not depend on the builder's corner ordering.
+        let mut shared: std::collections::HashMap<[i64; 3], Vec<[f32; 3]>> =
+            std::collections::HashMap::new();
+        for (corner, position) in positions.iter().enumerate() {
+            let key = [
+                (position[0] * 4096.0).round() as i64,
+                (position[1] * 4096.0).round() as i64,
+                (position[2] * 4096.0).round() as i64,
+            ];
+            shared.entry(key).or_default().push(normals[corner]);
+        }
+        let mut checked = 0usize;
+        for (key, list) in &shared {
+            if list.len() < 2 {
+                continue;
+            }
+            checked += 1;
+            for normal in list {
+                let delta = (0..3)
+                    .map(|axis| (normal[axis] - list[0][axis]).abs())
+                    .fold(0.0f32, f32::max);
+                assert!(
+                    delta < 1e-6,
+                    "position {key:?} is shaded by two different normals ({list:?}) - the mesh \
+                     will render as facets"
+                );
+            }
+        }
+        assert!(checked >= sides, "the fixture must have shared vertices, got {checked}");
+
+        // ...and the normals carry the vertex orientation, so a curved face has
+        // three distinct corner normals rather than one flat one.
+        let smooth_faces = (0..mesh.triangles.len())
+            .filter(|tri| {
+                let n0 = normals[tri * 3];
+                (1..3).any(|corner| {
+                    (0..3).any(|axis| (normals[tri * 3 + corner][axis] - n0[axis]).abs() > 1e-6)
+                })
+            })
+            .count();
+        assert!(
+            smooth_faces * 2 > mesh.triangles.len(),
+            "only {smooth_faces} of {} faces carry vertex normals - still flat shaded",
+            mesh.triangles.len()
+        );
+
+        for normal in &normals {
+            let len = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            assert!((len - 1.0).abs() < 1e-4, "normal is not unit length: {normal:?}");
+        }
+    }
+
+    /// A hard crease keeps two normals; a shallow fold still averages.
+    ///
+    /// Averaging across a crease is what put a faceted band around every organic
+    /// shape that meets the base, because the shared vertices carried a ramp
+    /// between the two surfaces and the rest of the base did not.
+    #[test]
+    fn stl_normals_split_at_creases_and_average_on_shallow_folds() {
+        // Two quads sharing the edge x = 0, folded by `fold_deg` about it: a
+        // floor to the left, a wall rising to the right at that angle. The two
+        // crease vertices are shared, which is what the welding produces on a
+        // model where an organic shape meets a base.
+        let folded = |fold_deg: f32| -> IndexedMesh {
+            let angle = fold_deg.to_radians();
+            let (sin, cos) = angle.sin_cos();
+            let positions = vec![
+                Vec3::new(0.0, 0.0, 0.0),  // 0: crease
+                Vec3::new(0.0, 1.0, 0.0),  // 1: crease
+                Vec3::new(-1.0, 0.0, 0.0), // 2: floor
+                Vec3::new(-1.0, 1.0, 0.0), // 3: floor
+                Vec3::new(0.0, 1.0, 0.0),  // 4: wall
+                Vec3::new(0.0, 0.0, 0.0),  // 5: wall
+            ];
+            let mut positions = positions;
+            positions[4] = Vec3::new(cos, 1.0, sin);
+            positions[5] = Vec3::new(cos, 0.0, sin);
+            IndexedMesh {
+                positions,
+                triangles: vec![[0, 2, 3], [0, 3, 1], [1, 4, 5], [1, 5, 0]],
+            }
+        };
+
+        let hard = folded(90.0);
+        let bytes = encode_mesh_bodies(std::slice::from_ref(&hard), hard.triangles.len() as u32, false, None, None)
+            .unwrap();
+        let (_, normals) = decode_positions_and_normals(&bytes);
+        // The two faces at the shared vertex keep their own normals: up for the
+        // floor, sideways for the wall.
+        let floor_normal = normals[0];
+        let wall_normal = normals[2 * 3];
+        assert!(
+            floor_normal[2].abs() > 0.9,
+            "the floor face should keep an upward normal, got {floor_normal:?}"
+        );
+        assert!(
+            wall_normal[0].abs() > 0.9 || wall_normal[2].abs() > 0.9,
+            "the wall face should keep its own normal, got {wall_normal:?}"
+        );
+        let dot: f32 = (0..3).map(|i| floor_normal[i] * wall_normal[i]).sum();
+        assert!(
+            dot.abs() < 0.5,
+            "a ninety degree crease must not be averaged into a ramp, got dot {dot}"
+        );
+
+        // A twenty degree fold is a curve as far as shading is concerned.
+        let shallow = folded(20.0);
+        let bytes = encode_mesh_bodies(std::slice::from_ref(&shallow), shallow.triangles.len() as u32, false, None, None)
+            .unwrap();
+        let (_, normals) = decode_positions_and_normals(&bytes);
+        let floor_normal = normals[0];
+        let fold_normal = normals[2 * 3];
+        let dot: f32 = (0..3).map(|i| floor_normal[i] * fold_normal[i]).sum();
+        assert!(
+            dot > 0.8,
+            "a twenty degree fold should still average, got dot {dot}"
+        );
+    }
+
+    #[test]
+    fn hollow_options_parsing_rejects_malformed_json_instead_of_defaulting() {
+        // Wrong type: previously produced HollowOptions::default() (resolution
+        // 64, 2mm shell) and the destructive hollow ran anyway.
+        assert!(parse_hollow_options(r#"{"voxelResolution": "192"}"#).is_err());
+        // Truncated JSON.
+        assert!(parse_hollow_options(r#"{"voxelResolution": 192"#).is_err());
+    }
+
+    #[test]
+    fn hollow_options_parsing_accepts_empty_and_valid_input() {
+        let defaults = parse_hollow_options("").expect("empty input falls back to defaults");
+        assert_eq!(defaults.voxel_resolution, HollowOptions::default().voxel_resolution);
+
+        let parsed = parse_hollow_options(r#"{"voxelResolution": 128, "shellThicknessMm": 1.5}"#)
+            .expect("well-formed JSON parses");
+        assert_eq!(parsed.voxel_resolution, 128);
+        assert!((parsed.shell_thickness_mm - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn repair_and_punch_options_parsing_reject_malformed_json() {
+        assert!(parse_options(r#"{"weldEpsilon": "tiny"}"#).is_err());
+        assert!(parse_hole_punch_options(r#"{"punches": {}}"#).is_err());
+    }
+
+    #[test]
+    fn test_stl_preview_reports_its_model_triangle_count() {
+        use std::io::Write;
+
+        let path = std::env::temp_dir().join("test_stl_preview.stl");
+        let mut file = std::fs::File::create(&path).unwrap();
+        let mut header = [0u8; 84];
+        header[80..84].copy_from_slice(&10u32.to_le_bytes());
+        file.write_all(&header).unwrap();
+        for _ in 0..10 {
+            let record = [0u8; 50];
+            file.write_all(&record).unwrap();
+        }
+        drop(file);
+
+        // The forced count stands in for a re-decimation, so the preview path
+        // runs on a 10-triangle fixture instead of a 4M-triangle one.
+        let bytes = stl_special_case_response(&path, path.to_str().unwrap(), Some(6))
+            .unwrap()
+            .expect("the forced count should trigger the preview path");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(&bytes[0..4], b"DFMX");
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()) & 1, 1, "preview flag");
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 10, "original count");
+        assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 6, "model count");
+    }
+
+    #[test]
+    fn test_load_mesh_file_dispatches_by_extension() {
+        use std::io::Write;
+        use tauri::ipc::IpcResponse;
+
+        let dir = std::env::temp_dir();
+        let stl_path = dir.join("test_load_mesh_file.stl");
+        let obj_path = dir.join("test_load_mesh_file.obj");
+
+        // Binary STL with three degenerate (all-zero) triangles: a zero diagonal,
+        // so the dispatcher's refinement no-ops and the count is exact.
+        {
+            let mut file = std::fs::File::create(&stl_path).unwrap();
+            let mut header = [0u8; 84];
+            header[80..84].copy_from_slice(&3u32.to_le_bytes());
+            file.write_all(&header).unwrap();
+            for _ in 0..3 {
+                file.write_all(&[0u8; 50]).unwrap();
+            }
+        }
+        // OBJ with one triangle, whose edges are far longer than the refinement
+        // target, so the load proves it went through `io::load_mesh_from_path`.
+        std::fs::write(&obj_path, b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let raw = |resp: Result<Response, String>| match resp.unwrap().body().unwrap() {
+            tauri::ipc::InvokeResponseBody::Raw(b) => b,
+            _ => panic!("Expected Raw body"),
+        };
+        // DFMX: body count at 12, body table at 32 (8 bytes each), then soups.
+        let u32_at = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let bodies = |bytes: &[u8]| u32_at(bytes, 12);
+        let body_triangles = |bytes: &[u8], index: usize| u32_at(bytes, 32 + index * 8);
+        let described_len = |bytes: &[u8]| {
+            let count = bodies(bytes) as usize;
+            let metadata = u32_at(bytes, 24) as usize;
+            (0..count).fold(32 + count * 8 + metadata, |sum, i| {
+                sum + body_triangles(bytes, i) as usize * 72
+            })
+        };
+
+        let stl = raw(rt.block_on(load_mesh_file(
+            stl_path.to_str().unwrap().to_string(),
+            Some(true),
+        )));
+        assert_eq!(&stl[0..4], b"DFMX");
+        assert_eq!(u32_at(&stl, 4), 1, "DFMX version");
+        assert_eq!(bodies(&stl), 1);
+        assert_eq!(body_triangles(&stl, 0), 3);
+        assert_eq!(stl.len(), described_len(&stl));
+        // A single-body load is classified natively, so its report rides the tail
+        // and the frontend has nothing to stage back.
+        let metadata_len = u32_at(&stl, 24) as usize;
+        assert!(metadata_len > 0, "the single-body load should carry a report");
+        let metadata = std::str::from_utf8(&stl[stl.len() - metadata_len..]).unwrap();
+        // `model_triangle_count` is skipped when the classifier found no split, so
+        // the identity assertion is the JSON envelope, not a particular key.
+        assert!(
+            metadata.starts_with("{\"version\""),
+            "the tail should be the report JSON: {metadata}"
+        );
+
+        let obj = raw(rt.block_on(load_mesh_file(
+            obj_path.to_str().unwrap().to_string(),
+            None,
+        )));
+        assert_eq!(&obj[0..4], b"DFMX");
+        assert_eq!(bodies(&obj), 1);
+        assert!(
+            body_triangles(&obj, 0) > 1,
+            "the coarse OBJ should have been refined"
+        );
+        assert_eq!(obj.len(), described_len(&obj));
+
+        // An unsupported extension is an error, not a panic.
+        let bad = dir.join("test_load_mesh_file.xyz");
+        assert!(rt
+            .block_on(load_mesh_file(bad.to_str().unwrap().to_string(), None))
+            .is_err());
+
+        let _ = std::fs::remove_file(&stl_path);
+        let _ = std::fs::remove_file(&obj_path);
+    }
+
+    /// A byte source has no path, so `load_mesh_bytes` carries the whole pipeline:
+    /// parse, refine, classify, encode the same payload the path loader writes.
+    #[test]
+    fn test_load_mesh_bytes_parses_refines_and_classifies() {
+        let mut stl = vec![0u8; 84];
+        stl[80..84].copy_from_slice(&3u32.to_le_bytes());
+        stl.extend(std::iter::repeat_n(0u8, 3 * 50));
+
+        let classified = load_mesh_bytes_response(&stl, true).unwrap();
+        assert_eq!(&classified[0..4], b"DFMX");
+        assert_eq!(u32::from_le_bytes(classified[12..16].try_into().unwrap()), 1);
+        let metadata_len = u32::from_le_bytes(classified[24..28].try_into().unwrap()) as usize;
+        assert!(metadata_len > 0, "classify should attach a report");
+        let json = std::str::from_utf8(&classified[classified.len() - metadata_len..]).unwrap();
+        assert!(json.starts_with("{\"version\""));
+
+        // A caller that will repair asks for no report and gets no tail.
+        let plain = load_mesh_bytes_response(&stl, false).unwrap();
+        assert_eq!(&plain[0..4], b"DFMX");
+        assert_eq!(u32::from_le_bytes(plain[24..28].try_into().unwrap()), 0);
+        assert_eq!(plain.len(), 32 + 8 + 3 * 72);
+    }
+
+    #[test]
+    fn test_encode_mesh_bodies_appends_metadata_at_the_tail() {
+        let body = IndexedMesh {
+            positions: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ],
+            triangles: vec![[0, 1, 2]],
+        };
+        let json = r#"{"model_triangle_count":1}"#;
+        let bytes =
+            encode_mesh_bodies(std::slice::from_ref(&body), 1, false, Some(1), Some(json)).unwrap();
+
+        let metadata_len = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
+        assert_eq!(metadata_len, json.len(), "header carries the metadata length");
+        assert_eq!(bytes.len(), 32 + 8 + 72 + metadata_len, "tail sits after every body");
+        assert_eq!(&bytes[bytes.len() - metadata_len..], json.as_bytes());
+    }
+
+    #[test]
+    fn test_encode_mesh_bodies_lays_out_every_body() {
+        let bodies = vec![
+            IndexedMesh {
+                positions: vec![
+                    Vec3::new(0.0, 0.0, 0.0),
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                ],
+                triangles: vec![[0, 1, 2]],
+            },
+            IndexedMesh {
+                positions: vec![Vec3::new(0.0, 0.0, 0.0); 4],
+                triangles: vec![[0, 1, 2], [0, 2, 3]],
+            },
+        ];
+        let bytes = encode_mesh_bodies(&bodies, 3, false, None, None).unwrap();
+
+        assert_eq!(&bytes[0..4], b"DFMX");
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 3);
+        // Body table records each body's triangle count, in payload order.
+        assert_eq!(u32::from_le_bytes(bytes[32..36].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 2);
+        assert_eq!(bytes.len(), 32 + 2 * 8 + 3 * 72);
+
+        // Body 1's soup starts after body 0's 72 bytes; its first vertex is the
+        // origin it was built with, so the offsets are not simply concatenated
+        // in the wrong direction.
+        let body1 = 32 + 2 * 8 + 72;
+        assert_eq!(
+            f32::from_le_bytes(bytes[body1..body1 + 4].try_into().unwrap()),
+            0.0
+        );
+    }
 }

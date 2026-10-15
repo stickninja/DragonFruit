@@ -7,6 +7,14 @@
 import { SupportPreset, PresetCollection, SupportSettings, createDefaultSettings } from './types';
 import { getSettings, setSettings, saveSettingsToLocalStorage } from './state';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
+import { createDefaultAutoSupportSettings, migrateLegacySizingPreset } from '../autoSupport/settings';
+import type { AutoSupportSettings } from '../autoSupport/settings';
+import {
+    CURRENT_AUTO_SUPPORT_DEFAULTS_VERSION,
+    SUPPORT_DEFAULTS_VERSION_KEY,
+    applyAutoSupportDefaultMigrations,
+    readWrittenDefaultsVersion,
+} from './defaultMigrations';
 
 function normalizePresetSettings(
     settings: Partial<SupportSettings> | undefined,
@@ -59,10 +67,81 @@ function normalizePresetSettings(
             ...fallback.autoBracing,
             ...(source.autoBracing ?? {}),
         },
+        autoSupport: {
+            ...defaults.autoSupport,
+            ...fallback.autoSupport,
+            // A stored preset written before the band became data names a tier:
+            // migrate it here so the preset record carries a band, not the
+            // obsolete key (and so `migrateLegacyPresetAutoSupport`'s
+            // comparison below compares like with like).
+            ...migrateLegacySizingPreset(source.autoSupport ?? {}),
+        },
     };
 }
 
 // --- Built-in Presets ---
+
+/**
+ * Migration: the built-in presets now carry per-preset auto-support density
+ * (detail 12 / structure 8 / anchor 5 mm² per support). Presets persisted
+ * before that change stored the old flat default autoSupport block, which
+ * would silently override the new per-preset values on load — reapply the
+ * built-in block when the stored one is exactly the legacy default. A
+ * customized (non-default) autoSupport block is preserved as-is.
+ */
+function migrateLegacyPresetAutoSupport(
+    parsedSettings: SupportSettings,
+    fallbackSettings: SupportSettings,
+): SupportSettings {
+    const normalized = normalizePresetSettings(parsedSettings, fallbackSettings);
+    if (normalized.autoSupport
+        && JSON.stringify(normalized.autoSupport) === JSON.stringify(createDefaultAutoSupportSettings())) {
+        return { ...normalized, autoSupport: fallbackSettings.autoSupport };
+    }
+    return normalized;
+}
+
+/**
+ * The `autoSupport` keys a preset *states* itself, rather than inheriting from
+ * the code defaults. A shipped preset writes its own density (detail 16, anchor
+ * 5) and inherits the rest, so a stated value is a design decision: the
+ * default-migration table must not move it, even when its value happens to equal
+ * an old default. Everything else in the preset came from the defaults and
+ * follows them.
+ */
+function designedAutoSupportKeysOf(presetSettings: SupportSettings): Set<string> {
+    const defaults = createDefaultSettings();
+    const keys = new Set<string>();
+
+    for (const key of Object.keys(presetSettings.autoSupport) as Array<keyof AutoSupportSettings>) {
+        if (presetSettings.autoSupport[key] !== defaults.autoSupport[key]) keys.add(key);
+    }
+    return keys;
+}
+
+/**
+ * The auto-support block of a *factory* preset, migrated against the batch the
+ * blob was written at. Nothing else in the block is touched: the studio's own
+ * sections are the user's configuration, and a preset the user made is theirs
+ * outright (see defaultMigrations).
+ */
+function migrateFactoryPresetAutoSupport(
+    presetSettings: SupportSettings,
+    fallbackPreset: SupportSettings,
+    writtenAtVersion: number,
+): SupportSettings {
+    return {
+        ...presetSettings,
+        autoSupport: {
+            ...presetSettings.autoSupport,
+            ...applyAutoSupportDefaultMigrations(
+                presetSettings.autoSupport,
+                writtenAtVersion,
+                { skip: designedAutoSupportKeysOf(fallbackPreset) },
+            ),
+        },
+    };
+}
 
 const DETAIL_PRESET: SupportPreset = {
     id: 'detail',
@@ -120,8 +199,11 @@ const DETAIL_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 16, sizingPreset: 'detail' },
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
+        debugSimpleSupportRender: false,
+        navigationDiscsOnly: false,
     },
 };
 
@@ -166,7 +248,7 @@ const ANCHOR_PRESET: SupportPreset = {
         tip: {
             shape: 'cone',
             contactDiameterMm: 0.4,
-            bodyDiameterMm: 1.2,
+            bodyDiameterMm: 1.4,
             lengthMm: 2.5,
             penetrationMm: 0,
             coneAngleMode: 'adaptive',
@@ -176,14 +258,14 @@ const ANCHOR_PRESET: SupportPreset = {
         },
         shaft: {
             shape: 'cylinder',
-            diameterMm: 1.2,
-            secondaryDiameterMm: 1.2,
+            diameterMm: 1.4,
+            secondaryDiameterMm: 1.4,
             isStraight: true,
             maxAngleDeg: 80,
         },
         roots: {
             shape: 'cylinder',
-            diameterMm: 2.0,
+            diameterMm: 2.3,
             diskHeightMm: 0.5,
             coneHeightMm: 1.0,
             neckDiameterMm: 1.5,
@@ -191,11 +273,11 @@ const ANCHOR_PRESET: SupportPreset = {
         },
         baseFlare: {
             enabled: true,
-            diameterMm: 4.0,
+            diameterMm: 4.5,
             heightMm: 2.0,
         },
         joint: {
-            ballDiameterMm: 2.0,
+            ballDiameterMm: 2.2,
             maxRotationDeg: 45,
             maxSlideMm: 5,
         },
@@ -210,8 +292,11 @@ const ANCHOR_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 5, sizingPreset: 'anchor' },
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
+        debugSimpleSupportRender: false,
+        navigationDiscsOnly: false,
     },
 };
 
@@ -219,12 +304,16 @@ const ANCHOR_PRESET: SupportPreset = {
 
 // --- Store ---
 
+/** Built-in preset definitions — the canonical default detail/structure/
+ *  anchor values (auto-support sizing derives its bands from these). */
+export { DETAIL_PRESET, STRUCTURE_PRESET, ANCHOR_PRESET };
+
 const PRESET_STORAGE_KEY = 'support-presets-v1';
 const ACTIVE_PRESET_STORAGE_KEY = 'support-active-preset-id-v1';
 const SUPPORT_SETTINGS_STORAGE_KEY = 'support-settings';
 const LEGACY_CUSTOM_IDS = new Set(['custom1', 'custom2', 'custom3']);
 
-let presets: PresetCollection = loadPresetsFromStorage();
+const presets: PresetCollection = loadPresetsFromStorage();
 
 function loadPresetsFromStorage(): PresetCollection {
     const defaults: PresetCollection = {
@@ -244,6 +333,10 @@ function loadPresetsFromStorage(): PresetCollection {
         const stored = localStorage.getItem(PRESET_STORAGE_KEY);
         if (stored) {
             const parsed = JSON.parse(stored);
+            // A factory preset's auto-support block pins defaults the same way the
+            // code defaults do, so it carries the batch it was written at: a
+            // preset saved since the last migration keeps whatever it holds.
+            const writtenAtVersion = readWrittenDefaultsVersion(parsed);
 
             // Merge stored presets into defaults (preserves new structure if code updates)
             // But allows stored names/settings to win.
@@ -254,10 +347,19 @@ function loadPresetsFromStorage(): PresetCollection {
                     defaults.byId[id] = {
                         ...fallbackPreset,
                         name: parsedPreset.name || fallbackPreset.name,
-                        pinnedSlot: parsedPreset.pinnedSlot ?? fallbackPreset.pinnedSlot,
-                        settings: normalizePresetSettings(
-                            parsedPreset.settings,
+                        // A stored `null` means the user unpinned it; a missing
+                        // key is a record from before slots existed, where the
+                        // factory slot still applies.
+                        pinnedSlot: parsedPreset.pinnedSlot === undefined
+                            ? fallbackPreset.pinnedSlot
+                            : parsedPreset.pinnedSlot,
+                        settings: migrateFactoryPresetAutoSupport(
+                            migrateLegacyPresetAutoSupport(
+                                parsedPreset.settings,
+                                fallbackPreset.settings,
+                            ),
                             fallbackPreset.settings,
+                            writtenAtVersion,
                         ),
                         updatedAt: parsedPreset.updatedAt,
                     };
@@ -278,6 +380,10 @@ function loadPresetsFromStorage(): PresetCollection {
                         icon: parsedPreset.icon || '👤',
                         isBuiltIn: false,
                         pinnedSlot: parsedPreset.pinnedSlot ?? undefined,
+                        // A user's own preset is their artifact: its block is what
+                        // they made, not a copy of a shipped default, so the
+                        // default-migration table does not touch it. Only the
+                        // factory presets above follow the code.
                         settings: normalizePresetSettings(
                             parsedPreset.settings,
                             createDefaultSettings(),
@@ -290,6 +396,30 @@ function loadPresetsFromStorage(): PresetCollection {
                     }
                 });
             }
+
+            // The stored order is the rail's order, and a reorder is only a
+            // preference if it survives a reload. The recovery loop above
+            // appends custom ids in `byId` order, which is creation order, not
+            // the order the user arranged them in.
+            if (Array.isArray(parsed.allIds)) {
+                const ordered = (parsed.allIds as string[]).filter((id) => Boolean(defaults.byId[id]));
+                const rest = defaults.allIds.filter((id) => !ordered.includes(id));
+                defaults.allIds = [...ordered, ...rest];
+            }
+
+            // One preset per slot. A stored record can claim the slot a factory
+            // preset just re-took, and the rail reads the first claimant, so the
+            // loser leaves the rail rather than sharing it.
+            const claimedSlots = new Set<number>();
+            defaults.allIds.forEach((id) => {
+                const preset = defaults.byId[id];
+                if (!preset || preset.pinnedSlot == null) return;
+                if (claimedSlots.has(preset.pinnedSlot)) {
+                    defaults.byId[id] = { ...preset, pinnedSlot: null };
+                    return;
+                }
+                claimedSlots.add(preset.pinnedSlot);
+            });
 
             // Restore active ID if valid
             if (parsed.activePresetId && defaults.byId[parsed.activePresetId]) {
@@ -331,7 +461,14 @@ function loadPresetsFromStorage(): PresetCollection {
 function savePresetsToStorage() {
     if (typeof window === 'undefined') return;
     try {
-        localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets));
+        localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify({
+            ...presets,
+            // The batch this blob was written at, so a later auto-support default
+            // change knows which stored factory presets are still ours (see
+            // defaultMigrations). The live `support-settings` blob carries no
+            // such field: the studio's settings are never migrated.
+            [SUPPORT_DEFAULTS_VERSION_KEY]: CURRENT_AUTO_SUPPORT_DEFAULTS_VERSION,
+        }));
         if (presets.activePresetId) {
             localStorage.setItem(ACTIVE_PRESET_STORAGE_KEY, presets.activePresetId);
         } else {
@@ -396,15 +533,38 @@ export function setPresetPinnedSlot(id: string, slot: number | null): void {
     if (slot != null) {
         for (const other of Object.values(presets.byId)) {
             if (other.id !== id && other.pinnedSlot === slot) {
-                other.pinnedSlot = undefined;
+                other.pinnedSlot = null;
             }
         }
     }
 
     presets.byId[id] = {
         ...presets.byId[id],
-        pinnedSlot: slot ?? undefined,
+        // `null`, not `undefined`: the storage round trip drops an absent key,
+        // and the loader cannot then tell "unpinned" from "written before
+        // slots existed", so unpinning a factory preset came back on reload.
+        pinnedSlot: slot,
     };
+
+    savePresetsToStorage();
+    notify();
+}
+
+/**
+ * Moves a preset in front of `beforeId`, or to the end of the rail when that is
+ * null. Slot order comes from the slot number, so this only orders the list of
+ * unpinned presets.
+ */
+export function movePresetBefore(id: string, beforeId: string | null): void {
+    if (id === beforeId || !presets.byId[id]) return;
+    if (beforeId != null && !presets.byId[beforeId]) return;
+
+    const rest = presets.allIds.filter((presetId) => presetId !== id);
+    const at = beforeId == null ? rest.length : rest.indexOf(beforeId);
+    if (at < 0) return;
+
+    rest.splice(at, 0, id);
+    presets.allIds = rest;
 
     savePresetsToStorage();
     notify();
@@ -521,6 +681,18 @@ export function setActivePreset(id: string | null): void {
         autoBracing: {
             ...current.autoBracing,
         },
+        // Preserve current Auto Supports settings. Trunk presets are sizing/
+        // geometry profiles; auto-support density is owned by the Auto
+        // Support panel (whose light/medium/heavy quick-select writes it via
+        // updateAutoSupportSettings before calling this), never by the
+        // trunk-preset dropdown.
+        autoSupport: {
+            ...current.autoSupport,
+        },
+        // Preserve the navigation view. It is how the user is looking at the
+        // forest, not part of a sizing profile, so switching presets must not
+        // flip it (and the stored flag a preset carries is never applied).
+        navigationDiscsOnly: current.navigationDiscsOnly,
     });
 
     // Keep selected preset + persisted settings in sync across app restarts.
@@ -553,6 +725,9 @@ export function savePreset(id: string): void {
         autoBracing: {
             ...existingPreset.settings.autoBracing,
         },
+        autoSupport: {
+            ...existingPreset.settings.autoSupport,
+        },
     };
 
     presets.byId[id] = {
@@ -564,6 +739,26 @@ export function savePreset(id: string): void {
     savePresetsToStorage();
     notify();
     console.log('[PresetStore] Saved settings to preset:', id);
+}
+
+/**
+ * Deletes several presets in one write, so a multi-selection delete persists
+ * and notifies once.
+ */
+export function deletePresets(ids: readonly string[]): void {
+    const present = ids.filter((id) => Boolean(presets.byId[id]));
+    if (present.length === 0) return;
+
+    present.forEach((id) => { delete presets.byId[id]; });
+    const removed = new Set(present);
+    presets.allIds = presets.allIds.filter((id) => !removed.has(id));
+    if (presets.activePresetId && removed.has(presets.activePresetId)) {
+        presets.activePresetId = presets.allIds[0] ?? null;
+    }
+
+    savePresetsToStorage();
+    notify();
+    console.log('[PresetStore] Deleted presets:', present.join(', '));
 }
 
 export function renamePreset(id: string, newName: string): void {
@@ -685,7 +880,7 @@ export function restoreFactoryDefaults(): void {
         if (id === 'detail' || id === 'structure' || id === 'anchor') return;
         const preset = presets.byId[id];
         if (preset) {
-            presets.byId[id] = { ...preset, pinnedSlot: undefined };
+            presets.byId[id] = { ...preset, pinnedSlot: null };
         }
     });
 

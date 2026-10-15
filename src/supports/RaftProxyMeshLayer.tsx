@@ -4,17 +4,22 @@ import { useSyncExternalStore } from 'react';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { usePicking } from '@/components/picking';
 import { subscribe, getSnapshot } from './state';
-import { getKickstandSnapshot, subscribeToKickstandStore } from './SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import type { RaftSettings } from './Rafts/Crenelated/RaftTypes';
 import { buildSolidRaftPreviewMeshes } from './Settings/AnatomyPreview/PreviewTypes/Raft/buildSolidRaftPreviewMeshes';
 import { buildLineRaftPreviewMeshes } from './Settings/AnatomyPreview/PreviewTypes/Raft/buildLineRaftPreviewMeshes';
+import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
 import {
   collectRaftBaseCirclesByModel,
   fromRaftModelKey,
   RAFT_UNASSIGNED_MODEL_KEY,
+  raftFootprintSourceRefs,
+  sameRaftFootprintSource,
   toRaftModelKey,
 } from './Rafts/Crenelated/raftFootprintCircles';
+import { collectModelPlateFootprint, type PlateFootprintSource } from './Rafts/Crenelated/geometry/modelPlateFootprint';
+import { raftBandTopMm } from './Rafts/Crenelated/geometry/computeRaftFootprint';
+import type { PolygonWithHoles } from './Rafts/Crenelated/geometry/polygonSet2d';
 
 interface RaftProxyMeshLayerProps {
   clipLower?: number | null;
@@ -22,17 +27,40 @@ interface RaftProxyMeshLayerProps {
   activeModelId?: string | null;
   selectedModelIds?: string[];
   hoverModelId?: string | null;
+  /** Models the marquee would take if the drag ended now. */
+  marqueeCandidateModelIds?: readonly string[];
   modelFilterId?: string | null;
   excludeModelId?: string | null;
   excludeModelIds?: string[];
   ghostOpacity?: number;
   ghostRenderOrder?: number;
   onModelPointerSelect?: (modelId: string) => void;
+  /** In Select mode, a pointer-down on a raft reports a potential model XY-drag
+   *  start (model + screen coords). The scene owns the drag. */
+  onModelPointerDragStart?: (modelId: string, clientX: number, clientY: number) => void;
   enablePointerSelection?: boolean;
   colorized?: boolean;
   hoverized?: boolean;
   navigationLodActive?: boolean;
   passive?: boolean;
+  /** Models whose plate footprint the raft has to clear. */
+  plateClearanceTargets?: readonly PlateFootprintSource[];
+}
+
+const EMPTY_PLATE_CLEARANCE_TARGETS: readonly PlateFootprintSource[] = Object.freeze([]);
+
+/**
+ * Give a raft proxy geometry a bounds tree.
+ *
+ * The accelerated raycast is installed globally (`src/utils/bvh.ts`), and a mesh
+ * whose geometry has no bounds tree falls back to the plain per-triangle test —
+ * which every pointer move pays once per visible raft: measured at ~7 ms per
+ * move for 20 raft meshes of 5k triangles, and ~50 ms at 20k triangles, against
+ * ~0.12 ms with a tree.
+ */
+function withBoundsTree<T extends THREE.BufferGeometry>(geometry: T): T {
+  if (typeof geometry.computeBoundsTree === 'function') geometry.computeBoundsTree();
+  return geometry;
 }
 
 type CachedRaftGeometry = {
@@ -52,14 +80,57 @@ type VisibleRaftEntry = {
 };
 
 type RaftProxyCacheEntry = {
-  supportRootsRef: ReturnType<typeof getSnapshot>['roots'];
-  supportAnchorsRef: ReturnType<typeof getSnapshot>['anchors'];
-  kickstandRootsRef: ReturnType<typeof getKickstandSnapshot>['roots'];
+  /** The collections the footprint read, so the cache invalidates on exactly those. */
+  footprintSourceRefs: readonly unknown[];
   raftSignature: string;
+  /** The model clearance the meshes were cut with, by identity. */
+  clearance: readonly PolygonWithHoles[];
   geometriesByModel: Map<string, CachedRaftGeometry>;
 };
 
 let raftProxyCache: RaftProxyCacheEntry | null = null;
+
+/**
+ * The last clearance, and the model footprints it was built from.
+ *
+ * Module-level, and keyed on the *elements* rather than the array, because a
+ * re-render of a parent hands this component a fresh array of the same models.
+ * Keyed on the array's identity the clearance was rebuilt on every model
+ * selection, and with it every raft mesh, re-running the plate footprint's
+ * Clipper offsets - ~130 ms of blocking work on a click, measured in a
+ * production build. The elements are the models' own geometry and transform
+ * objects, so they survive a new array.
+ */
+let clearanceCache: {
+  sources: readonly { geometry: unknown; transform: unknown }[];
+  bandTop: number;
+  value: PolygonWithHoles[];
+} | null = null;
+
+function clearanceFor(
+  sources: readonly { geometry: unknown; transform: unknown }[],
+  bandTop: number,
+): PolygonWithHoles[] {
+  const cache = clearanceCache;
+  if (
+    cache
+    && cache.bandTop === bandTop
+    && cache.sources.length === sources.length
+    && cache.sources.every((source, i) => (
+      source.geometry === sources[i].geometry && source.transform === sources[i].transform
+    ))
+  ) {
+    return cache.value;
+  }
+  const value = collectModelPlateFootprint(sources as never, bandTop);
+  clearanceCache = {
+    sources: sources.map((source) => ({ geometry: source.geometry, transform: source.transform })),
+    bandTop,
+    value,
+  };
+  return value;
+}
+const EMPTY_RAFT_MARQUEE_CANDIDATES: readonly string[] = Object.freeze([]);
 const RAFT_BASE_COLOR = '#a3a3a3';
 const SOLID_BOTTOM_TINT_COLOR = '#3b82f6';
 const LINE_BOTTOM_TINT_COLOR = '#f97316';
@@ -175,24 +246,30 @@ export function RaftProxyMeshLayer({
   activeModelId = null,
   selectedModelIds = [],
   hoverModelId = null,
+  marqueeCandidateModelIds = EMPTY_RAFT_MARQUEE_CANDIDATES,
   modelFilterId = null,
   excludeModelId = null,
   excludeModelIds = [],
   ghostOpacity = 1,
   ghostRenderOrder = 0,
   onModelPointerSelect,
+  onModelPointerDragStart,
   enablePointerSelection = true,
   colorized = true,
   hoverized = false,
   navigationLodActive = false,
   passive = false,
+  plateClearanceTargets = EMPTY_PLATE_CLEARANCE_TARGETS,
 }: RaftProxyMeshLayerProps) {
   const { hit } = usePicking();
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const supportRoots = supportState.roots;
-  const supportAnchors = supportState.anchors;
-  const kickstandState = useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
-  const kickstandRoots = kickstandState.roots;
+  // The collections the footprint reads: the shared roots plus whichever types
+  // carry their own inline root. The cache identity, so editing a type that puts
+  // nothing on the raft does not rebuild the meshes.
+  const footprintSourceRefs = React.useMemo(
+    () => raftFootprintSourceRefs(supportState),
+    [supportState],
+  );
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
@@ -209,26 +286,31 @@ export function RaftProxyMeshLayer({
   }, [clipLower, clipUpper]);
 
   const effectiveHoverModelId = passive ? null : hoverModelId;
+  const marqueeCandidateModelIdSet = React.useMemo(
+    () => new Set(passive ? [] : marqueeCandidateModelIds),
+    [marqueeCandidateModelIds, passive],
+  );
 
   const hasSelectedModels = selectedModelIdSet.size > 0;
   const raftSignature = React.useMemo(() => buildRaftSignature(raft), [raft]);
+  const clearance = React.useMemo(
+    () => (raft.bottomMode === 'off'
+      ? []
+      : clearanceFor(plateClearanceTargets, raftBandTopMm(raft))),
+    [plateClearanceTargets, raft],
+  );
 
   const geometriesByModel = React.useMemo(() => {
     if (
       raftProxyCache
-      && raftProxyCache.supportRootsRef === supportRoots
-      && raftProxyCache.supportAnchorsRef === supportAnchors
-      && raftProxyCache.kickstandRootsRef === kickstandRoots
+      && sameRaftFootprintSource(raftProxyCache.footprintSourceRefs, footprintSourceRefs)
       && raftProxyCache.raftSignature === raftSignature
+      && raftProxyCache.clearance === clearance
     ) {
       return raftProxyCache.geometriesByModel;
     }
 
-    const rootCirclesByModel = collectRaftBaseCirclesByModel({
-      roots: Object.values(supportRoots),
-      anchors: Object.values(supportAnchors),
-      kickstandRoots: Object.values(kickstandRoots),
-    }, {
+    const rootCirclesByModel = collectRaftBaseCirclesByModel(supportState, {
       fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY,
     });
     const next = new Map<string, CachedRaftGeometry>();
@@ -240,13 +322,16 @@ export function RaftProxyMeshLayer({
           raftSettings: raft,
           baseColor: RAFT_BASE_COLOR,
           wallColor: RAFT_BASE_COLOR,
+          clearance,
         });
         if (!solid) continue;
 
         next.set(modelKey, {
           kind: 'solid',
-          bottomGeometry: (solid.baseMesh.geometry as THREE.BufferGeometry).clone(),
-          wallGeometry: solid.wallMesh ? (solid.wallMesh.geometry as THREE.BufferGeometry).clone() : null,
+          bottomGeometry: withBoundsTree((solid.baseMesh.geometry as THREE.BufferGeometry).clone()),
+          wallGeometry: solid.wallMesh
+            ? withBoundsTree((solid.wallMesh.geometry as THREE.BufferGeometry).clone())
+            : null,
         });
 
         disposeGeneratedMeshes([
@@ -261,16 +346,18 @@ export function RaftProxyMeshLayer({
           raftSettings: raft,
           beamColor: RAFT_BASE_COLOR,
           wallColor: RAFT_BASE_COLOR,
+          clearance,
         });
         if (!line) continue;
 
-        const bottomGeometry = mergeGeometryParts([
+        const mergedBottomGeometry = mergeGeometryParts([
           ...line.beamMeshes.map((mesh) => mesh.geometry as THREE.BufferGeometry),
           line.borderMesh ? (line.borderMesh.geometry as THREE.BufferGeometry) : null,
         ]);
+        const bottomGeometry = mergedBottomGeometry ? withBoundsTree(mergedBottomGeometry) : null;
 
         const wallGeometry = line.wallMesh
-          ? (line.wallMesh.geometry as THREE.BufferGeometry).clone()
+          ? withBoundsTree((line.wallMesh.geometry as THREE.BufferGeometry).clone())
           : null;
 
         next.set(modelKey, {
@@ -288,15 +375,14 @@ export function RaftProxyMeshLayer({
     }
 
     raftProxyCache = {
-      supportRootsRef: supportRoots,
-      supportAnchorsRef: supportAnchors,
-      kickstandRootsRef: kickstandRoots,
+      footprintSourceRefs,
       raftSignature,
+      clearance,
       geometriesByModel: next,
     };
 
     return next;
-  }, [raft, raftSignature, supportRoots, supportAnchors, kickstandRoots]);
+  }, [clearance, raft, raftSignature, supportState, footprintSourceRefs]);
 
   const visibleEntries = React.useMemo<VisibleRaftEntry[]>(() => {
     const entries: VisibleRaftEntry[] = [];
@@ -305,6 +391,9 @@ export function RaftProxyMeshLayer({
       if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
       if (!colorized) return 0;
       if (selectedModelIdSet.has(modelId)) return 1;
+      // A model the marquee is about to take tints like a hovered one, but
+      // lighter: model, supports and raft all light up together.
+      if (marqueeCandidateModelIdSet.has(modelId)) return 0.5 * MARQUEE_CANDIDATE_TINT_FACTOR;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       if (hasSelectedModels) return 0;
       return hoverized ? 0.5 : 1;
@@ -349,6 +438,7 @@ export function RaftProxyMeshLayer({
     geometriesByModel,
     hasSelectedModels,
     hoverized,
+    marqueeCandidateModelIdSet,
     modelFilterId,
     selectedModelIdSet,
   ]);
@@ -409,7 +499,7 @@ export function RaftProxyMeshLayer({
   const handleClick = React.useCallback((event: any, modelId?: string) => {
     if (!pointerEnabled) return;
     if (!modelId || !onModelPointerSelect) return;
-    
+
     // Don't select model if a gizmo handle is being interacted with
     if (hit.category === 'gizmo') return;
 
@@ -421,6 +511,16 @@ export function RaftProxyMeshLayer({
 
     onModelPointerSelect(modelId);
   }, [hit.category, onModelPointerSelect, pointerEnabled]);
+
+  const handlePointerDown = React.useCallback((event: any, modelId?: string) => {
+    if (!pointerEnabled || !onModelPointerDragStart) return;
+    if (!modelId) return;
+    if (hit.category === 'gizmo') return;
+    const native = event.nativeEvent as PointerEvent | undefined;
+    if (native?.ctrlKey || native?.metaKey || native?.shiftKey) return;
+    if (event.button !== 0) return;
+    onModelPointerDragStart(modelId, event.clientX, event.clientY);
+  }, [hit.category, onModelPointerDragStart, pointerEnabled]);
 
   const handlePointerMove = React.useCallback((event: any, modelId?: string) => {
     if (!pointerEnabled) return;
@@ -452,6 +552,7 @@ export function RaftProxyMeshLayer({
               geometry={entry.bottomGeometry}
               renderOrder={ghostRenderOrder}
               onClick={pointerEnabled ? (event) => handleClick(event, entry.modelId) : undefined}
+              onPointerDown={pointerEnabled && onModelPointerDragStart ? (event) => handlePointerDown(event, entry.modelId) : undefined}
               onPointerMove={pointerEnabled ? (event) => handlePointerMove(event, entry.modelId) : undefined}
               onPointerOut={pointerEnabled ? handlePointerOut : undefined}
             >
@@ -474,6 +575,7 @@ export function RaftProxyMeshLayer({
               geometry={entry.wallGeometry}
               renderOrder={ghostRenderOrder}
               onClick={pointerEnabled ? (event) => handleClick(event, entry.modelId) : undefined}
+              onPointerDown={pointerEnabled && onModelPointerDragStart ? (event) => handlePointerDown(event, entry.modelId) : undefined}
               onPointerMove={pointerEnabled ? (event) => handlePointerMove(event, entry.modelId) : undefined}
               onPointerOut={pointerEnabled ? handlePointerOut : undefined}
             >

@@ -23,6 +23,7 @@ export const CTB_MOTION_KEYS = [
 
 export type CtbTimingOverride = {
   id: string;
+  name?: string;
   startLayer: number;
   endLayer: number;
   values: Partial<CtbLayerTimingValues>;
@@ -109,6 +110,7 @@ export function sanitizeCtbTimingConfig(input: unknown): CtbTimingConfigV1 | und
       }
       return [{
         id: typeof rule.id === 'string' && rule.id.trim() ? rule.id.trim() : `range-${index + 1}`,
+        ...(typeof rule.name === 'string' && rule.name.trim() ? { name: rule.name.trim() } : {}),
         startLayer,
         endLayer,
         values,

@@ -1,6 +1,8 @@
 'use client';
 
 import { ExternalLink } from 'lucide-react';
+import { Trans } from '@lingui/react/macro';
+import { Button } from '@/components/atoms';
 
 const RELEASES_URL = 'https://github.com/stickninja/DragonFruit/releases';
 
@@ -23,21 +25,21 @@ export function UpdatesSettingsTab() {
       }}
     >
       <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-        Manual updates
+        <Trans>Manual updates</Trans>
       </div>
       <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        This fork does not check for or install updates automatically. Visit the
-        fork’s releases page to find new versions and download an installer.
+        <Trans>Visit the fork’s releases page to find new versions and download an installer.</Trans>
       </p>
-      <button
+      <Button
         type="button"
         onClick={() => void openReleasesPage()}
-        className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold underline underline-offset-2"
-        style={{ color: 'var(--accent)' }}
+        variant="secondary"
+        size="sm"
+        className="mt-3 inline-flex items-center gap-1.5"
       >
-        DragonFruit (stickninja) releases
+        <Trans>DragonFruit (stickninja) releases</Trans>
         <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
+      </Button>
     </div>
   );
 }

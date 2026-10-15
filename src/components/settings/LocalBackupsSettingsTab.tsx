@@ -1,11 +1,33 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, ArchiveRestore, CheckCircle2, Eye, FolderOpen, HardDrive, Loader2, RefreshCcw, Trash2, UploadCloud, X } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
+import { AlertTriangle, ArchiveRestore, CheckCircle2, Eye, FolderOpen, HardDrive, RefreshCcw, Trash2, UploadCloud, X } from 'lucide-react';
+import { Button, IconButton, SegmentedControl, SettingRow, Spinner } from '@/components/atoms';
 import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
+
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+// Interpolated messages live in module-level formatters: React Compiler renames
+// locals before the Lingui macro computes the id, so interpolating inside a
+// component leaves the placeholder raw in production builds.
+function formatMaterialCountLabel(translate: Translate, count: number): string {
+  return translate(msg({
+    message: '{count, plural, one {# material} other {# materials}}',
+    comment: 'Counter under a printer profile in a backup snapshot: how many materials belong to it.',
+  }), { count });
+}
+
+function formatSnapshotDeletionWarning(translate: Translate, timestamp: string): string {
+  return translate(msg`Backup snapshot from ${timestamp} will be permanently removed from disk.`);
+}
 
 type BackupSnapshot = {
   version: number;
@@ -109,7 +131,7 @@ const KNOWN_LOCAL_STORAGE_KEYS = [
   'app-theme-preference',
   'app-theme-colors',
   'app-theme-preset',
-  'lumenslicer:floating-panel-layout:v4',
+  'lumenslicer:floating-panel-layout:v5',
   'app-floating-layout-persistence',
   'app-recent-opened-files',
   'app-3d-view-settings',
@@ -152,7 +174,7 @@ function getOrCreateClientId(): string {
   const existing = window.localStorage.getItem(CLIENT_ID_KEY)?.trim();
   if (existing) return existing;
 
-  const created = generateUuid();
+  const created = uuidv4();
   window.localStorage.setItem(CLIENT_ID_KEY, created);
   return created;
 }
@@ -315,6 +337,7 @@ function formatHistoryDate(item: LocalBackupHistoryEntry): string {
 }
 
 export function LocalBackupsSettingsTab() {
+  const { _ } = useLingui();
   const [desktopAvailable] = React.useState<boolean>(() => isDesktopRuntime());
   const [loadingStatus, setLoadingStatus] = React.useState(true);
   const [busy, setBusy] = React.useState<'none' | 'choose-directory' | 'sync' | 'restore' | 'reveal'>('none');
@@ -338,6 +361,7 @@ export function LocalBackupsSettingsTab() {
   const [selectedHistoryId, setSelectedHistoryId] = React.useState<string | null>(null);
   const [selectedHistoryDocument, setSelectedHistoryDocument] = React.useState<SelectedHistoryDocument | null>(null);
   const [showSnapshotModal, setShowSnapshotModal] = React.useState(false);
+  useEscapeToClose(showSnapshotModal, () => setShowSnapshotModal(false));
   const [confirmRestoreId, setConfirmRestoreId] = React.useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = React.useState<string | null>(null);
   const [snapshotModalTab, setSnapshotModalTab] = React.useState<SnapshotModalTab>('overview');
@@ -382,16 +406,16 @@ export function LocalBackupsSettingsTab() {
       });
       setHistoryItems(items);
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to load local backup history.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to load local backup history.`) });
     } finally {
       setHistoryLoading(false);
     }
-  }, [selectedDirectory]);
+  }, [_, selectedDirectory]);
 
   const runSync = React.useCallback(async () => {
     const targetDirectory = selectedDirectory.trim();
     if (!targetDirectory) {
-      setMessage({ kind: 'error', text: 'Choose a local backup directory before syncing.' });
+      setMessage({ kind: 'error', text: _(msg`Choose a local backup directory before syncing.`) });
       return;
     }
 
@@ -419,14 +443,14 @@ export function LocalBackupsSettingsTab() {
       setLastLocalSyncAt(syncedAt);
       setStateUpdatedAt(syncedAt);
 
-      setMessage({ kind: 'success', text: 'Backup saved to local disk.' });
+      setMessage({ kind: 'success', text: _(msg`Backup saved to local disk.`) });
       await loadHistory(targetDirectory);
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Local backup sync failed.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Local backup sync failed.`) });
     } finally {
       setBusy('none');
     }
-  }, [loadHistory, selectedDirectory]);
+  }, [_, loadHistory, selectedDirectory]);
 
   const handleChooseDirectory = React.useCallback(async () => {
     setBusy('choose-directory');
@@ -440,13 +464,13 @@ export function LocalBackupsSettingsTab() {
       const trimmed = nextDirectory.trim();
       setSelectedDirectory(trimmed);
       await Promise.all([loadState(trimmed), loadHistory(trimmed)]);
-      setMessage({ kind: 'success', text: 'Local backup directory updated.' });
+      setMessage({ kind: 'success', text: _(msg`Local backup directory updated.`) });
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to choose local backup directory.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to choose local backup directory.`) });
     } finally {
       setBusy('none');
     }
-  }, [defaultDirectory, loadHistory, loadState, selectedDirectory]);
+  }, [_, defaultDirectory, loadHistory, loadState, selectedDirectory]);
 
   const handleUseDefaultDirectory = React.useCallback(async () => {
     if (!defaultDirectory) return;
@@ -454,8 +478,8 @@ export function LocalBackupsSettingsTab() {
     const nextDirectory = defaultDirectory.trim();
     setSelectedDirectory(nextDirectory);
     await Promise.all([loadState(nextDirectory), loadHistory(nextDirectory)]);
-    setMessage({ kind: 'success', text: 'Using default local backup directory.' });
-  }, [defaultDirectory, loadHistory, loadState]);
+    setMessage({ kind: 'success', text: _(msg`Using default local backup directory.`) });
+  }, [_, defaultDirectory, loadHistory, loadState]);
 
   const handleRevealDirectory = React.useCallback(async () => {
     const targetDirectory = selectedDirectory.trim();
@@ -465,11 +489,11 @@ export function LocalBackupsSettingsTab() {
     try {
       await invokeDesktop('reveal_in_file_manager', { path: targetDirectory });
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to open folder in file manager.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to open folder in file manager.`) });
     } finally {
       setBusy('none');
     }
-  }, [selectedDirectory]);
+  }, [_, selectedDirectory]);
 
   const handleViewHistory = React.useCallback(async (id: string) => {
     const targetDirectory = selectedDirectory.trim();
@@ -489,17 +513,17 @@ export function LocalBackupsSettingsTab() {
 
       const parsed = parseBackupDocument(payload.documentJson);
       if (!parsed) {
-        throw new Error('Backup snapshot is malformed.');
+        throw new Error(_(msg`Backup snapshot is malformed.`));
       }
 
       setSelectedHistoryDocument(parsed);
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to load backup snapshot.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to load backup snapshot.`) });
       setShowSnapshotModal(false);
       setSelectedHistoryId(null);
       setSelectedHistoryDocument(null);
     }
-  }, [selectedDirectory]);
+  }, [_, selectedDirectory]);
 
   const handleDeleteHistory = React.useCallback(async (id: string) => {
     const targetDirectory = selectedDirectory.trim();
@@ -518,11 +542,11 @@ export function LocalBackupsSettingsTab() {
       }
 
       await loadHistory(targetDirectory);
-      setMessage({ kind: 'success', text: 'Backup snapshot deleted.' });
+      setMessage({ kind: 'success', text: _(msg`Backup snapshot deleted.`) });
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to delete backup snapshot.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to delete backup snapshot.`) });
     }
-  }, [loadHistory, selectedDirectory, selectedHistoryId]);
+  }, [_, loadHistory, selectedDirectory, selectedHistoryId]);
 
   const handleRestoreHistory = React.useCallback(async (id: string) => {
     const targetDirectory = selectedDirectory.trim();
@@ -543,13 +567,13 @@ export function LocalBackupsSettingsTab() {
       }
 
       await Promise.all([loadState(targetDirectory), loadHistory(targetDirectory)]);
-      setMessage({ kind: 'success', text: 'Snapshot restored to current local backup state.' });
+      setMessage({ kind: 'success', text: _(msg`Snapshot restored to current local backup state.`) });
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to restore backup snapshot.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to restore backup snapshot.`) });
     } finally {
       setBusy('none');
     }
-  }, [loadHistory, loadState, selectedDirectory, selectedHistoryDocument, selectedHistoryId]);
+  }, [_, loadHistory, loadState, selectedDirectory, selectedHistoryDocument, selectedHistoryId]);
 
   React.useEffect(() => {
     if (!desktopAvailable) {
@@ -574,7 +598,7 @@ export function LocalBackupsSettingsTab() {
         await Promise.all([loadState(nextDirectory), loadHistory(nextDirectory)]);
       } catch (error) {
         if (!cancelled) {
-          setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to initialize local backups.' });
+          setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to initialize local backups.`) });
         }
       } finally {
         if (!cancelled) {
@@ -588,7 +612,7 @@ export function LocalBackupsSettingsTab() {
     return () => {
       cancelled = true;
     };
-  }, [desktopAvailable, loadHistory, loadState, selectedDirectory]);
+  }, [_, desktopAvailable, loadHistory, loadState, selectedDirectory]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -663,8 +687,8 @@ export function LocalBackupsSettingsTab() {
 
   if (!desktopAvailable) {
     return (
-      <div className="rounded-lg border p-3 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
-        Local on-disk backups are currently available in the DragonFruit desktop build only.
+      <div className="rounded-md border p-3 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+        <Trans>Local on-disk backups are currently available in the DragonFruit desktop build only.</Trans>
       </div>
     );
   }
@@ -676,99 +700,108 @@ export function LocalBackupsSettingsTab() {
     background: 'var(--accent-secondary-action-bg-92)',
   };
   const dangerActionStyle92: React.CSSProperties = {
-    color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
-    borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
-    background: 'color-mix(in srgb, var(--danger), var(--surface-1) 88%)',
+    color: 'var(--danger)',
+    borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+    background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
   };
+  const isUsingDefault = !defaultDirectory || selectedDirectory.trim().toLowerCase() === defaultDirectory.trim().toLowerCase();
 
   return (
     <div className="space-y-3">
-      <section className="relative rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <section className="relative rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2.5">
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
             <HardDrive className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Local On-Disk Backups</h3>
-            <p className="mt-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              Automatically saves snapshots of your settings and profiles to a folder on your computer.
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Local On-Disk Backups</Trans></h3>
+            <p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+              <Trans>Automatically saves snapshots of your settings and profiles to a folder on your computer.</Trans>
             </p>
           </div>
         </div>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          {loadingStatus ? (
-            <div className="text-xs inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Loading backup status…
-            </div>
-          ) : (
-            <div className="grid gap-2 sm:grid-cols-2">
-              <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Default directory</div>
-                <div className="mt-1 text-xs font-medium break-all" style={{ color: 'var(--text-strong)' }}>
-                  {defaultDirectory || 'Resolving...'}
-                </div>
-              </div>
-
-              <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Selected directory</div>
-                <div className="mt-1 text-xs font-medium break-all" style={{ color: 'var(--text-strong)' }}>
-                  {selectedDirectory || 'Not selected'}
-                </div>
-              </div>
-
-              <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Last backup on disk</div>
-                <div className="mt-1 text-xs" style={{ color: 'var(--text-strong)' }}>
-                  {stateUpdatedAt ? new Date(stateUpdatedAt).toLocaleString() : 'Never'}
-                </div>
-              </div>
-
-              <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Last local sync</div>
-                <div className="mt-1 text-xs" style={{ color: 'var(--text-strong)' }}>
-                  {lastLocalSyncAt ? new Date(lastLocalSyncAt).toLocaleString() : 'Never'}
-                </div>
+        {loadingStatus ? (
+          <div className="mt-2 text-xs inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
+            <Spinner size="sm" />
+            <Trans>Loading backup status…</Trans>
+          </div>
+        ) : (
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Default directory</Trans></div>
+              <div className="mt-1 text-xs font-medium break-all" style={{ color: 'var(--text-strong)' }}>
+                {defaultDirectory || <Trans>Resolving...</Trans>}
               </div>
             </div>
-          )}
-        </div>
 
-        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <button
-            type="button"
-            onClick={() => { void handleUseDefaultDirectory(); }}
-            disabled={!defaultDirectory || busy !== 'none'}
-            className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            Use Default Path
-          </button>
+            <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Selected directory</Trans></div>
+              <div className="mt-1 text-xs font-medium break-all" style={{ color: 'var(--text-strong)' }}>
+                {selectedDirectory || <Trans>Not selected</Trans>}
+              </div>
+            </div>
 
-          <button
-            type="button"
-            onClick={() => { void handleChooseDirectory(); }}
+            <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Last backup on disk</Trans></div>
+              <div className="mt-1 text-xs" style={{ color: 'var(--text-strong)' }}>
+                {stateUpdatedAt ? new Date(stateUpdatedAt).toLocaleString() : <Trans>Never</Trans>}
+              </div>
+            </div>
+
+            <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Last local sync</Trans></div>
+              <div className="mt-1 text-xs" style={{ color: 'var(--text-strong)' }}>
+                {lastLocalSyncAt ? new Date(lastLocalSyncAt).toLocaleString() : <Trans>Never</Trans>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className={isUsingDefault ? 'mt-2 grid gap-2 sm:grid-cols-2' : 'mt-2 grid gap-2 sm:grid-cols-3'}>
+          {!isUsingDefault && defaultDirectory ? (
+            <Button
+              variant="secondary"
+              size="auto"
+              className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
+              disabled={busy !== 'none'}
+              onClick={() => { void handleUseDefaultDirectory(); }}
+            >
+              <CheckCircle2 className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />
+              <Trans>Use Default Path</Trans>
+            </Button>
+          ) : null}
+
+          <Button
+            variant="tinted-accent"
+            size="auto"
+            className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
             disabled={busy !== 'none'}
-            className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+            onClick={() => { void handleChooseDirectory(); }}
           >
-            {busy === 'choose-directory' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
-            Choose Folder
-          </button>
+            {busy === 'choose-directory' ? <Spinner size="md" /> : <FolderOpen className="h-4 w-4" />}
+            <Trans>Choose Folder</Trans>
+          </Button>
 
-          <button
-            type="button"
-            onClick={() => { void handleRevealDirectory(); }}
+          <Button
+            variant="secondary"
+            size="auto"
+            className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 86%)',
+              color: 'var(--accent-secondary)',
+            }}
             disabled={!selectedDirectory || busy !== 'none'}
-            className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+            onClick={() => { void handleRevealDirectory(); }}
           >
-            {busy === 'reveal' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
-            Open Folder
-          </button>
+            {busy === 'reveal' ? <Spinner size="md" /> : <FolderOpen className="h-4 w-4" />}
+            <Trans>Open Folder</Trans>
+          </Button>
         </div>
       </section>
 
-      <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <section className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2">
           <span
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
@@ -777,132 +810,120 @@ export function LocalBackupsSettingsTab() {
             <RefreshCcw className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Backup Management</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Backup Management</Trans></h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Save snapshots to your local backup folder, then review and restore any point-in-time snapshot in-app.
+              <Trans>Save snapshots to your local backup folder, then review and restore any point-in-time snapshot in-app.</Trans>
             </p>
           </div>
         </div>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Quick actions</div>
-          <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            Create a snapshot now and refresh history.
+          <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Quick actions</Trans></div>
+          <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+            <Trans>Create a snapshot now and refresh history.</Trans>
           </div>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => { void runSync(); }}
+            <Button
+              variant="tinted-accent"
+              size="auto"
+              className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
               disabled={busy !== 'none' || !selectedDirectory}
-              className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+              onClick={() => { void runSync(); }}
             >
-              {busy === 'sync' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-              Backup Now
-            </button>
+              {busy === 'sync' ? <Spinner size="md" /> : <UploadCloud className="h-4 w-4" />}
+              <Trans>Backup Now</Trans>
+            </Button>
 
-            <button
-              type="button"
-              onClick={() => { void loadHistory(); }}
+            <Button
+              variant="secondary"
+              size="auto"
+              className="!h-9 !px-3 !py-0 text-sm gap-1.5 disabled:opacity-60"
               disabled={busy !== 'none' || historyLoading || !selectedDirectory}
-              className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+              onClick={() => { void loadHistory(); }}
             >
-              {historyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-              Refresh History
-            </button>
+              {historyLoading ? <Spinner size="md" /> : <RefreshCcw className="h-4 w-4" />}
+              <Trans>Refresh History</Trans>
+            </Button>
           </div>
         </div>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Automation</div>
+          <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Automation</Trans></div>
           <div className="mt-2 grid gap-2">
-            <div className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Enable automatic backups</div>
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Automatically write snapshots to local disk on an interval.</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAutoSyncEnabled((prev) => !prev)}
-                className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                aria-pressed={autoSyncEnabled}
-                style={autoSyncEnabled
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                {autoSyncEnabled ? 'ON' : 'OFF'}
-              </button>
-            </div>
-
-            <div
-              className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3"
-              style={{
-                borderColor: 'var(--border-subtle)',
-                background: 'var(--surface-1)',
-                opacity: autoSyncEnabled ? 1 : 0.68,
-              }}
+            <SettingRow
+              bordered
+              surface="raised"
+              label={<Trans>Enable automatic backups</Trans>}
+              description={<Trans>Automatically write snapshots to local disk on an interval.</Trans>}
             >
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Sync interval</div>
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Minutes between automatic local backups.</div>
-              </div>
-              <div className="inline-flex items-center gap-2">
-                <NumberInput
-                  min={1}
-                  max={240}
-                  step={1}
-                  value={autoSyncMinutes}
-                  onChange={(next) => {
-                    if (!Number.isFinite(next)) return;
-                    setAutoSyncMinutes(Math.max(1, Math.min(240, Math.round(next))));
-                  }}
-                  className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
-                  disabled={!autoSyncEnabled}
-                />
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>min</span>
-              </div>
-            </div>
+              <SegmentedControl
+                label={_(msg`Enable automatic backups`)}
+                options={[
+                  { value: 'off', label: <Trans>OFF</Trans> },
+                  { value: 'on', label: <Trans>ON</Trans> },
+                ]}
+                value={autoSyncEnabled ? 'on' : 'off'}
+                onChange={(next) => setAutoSyncEnabled(next === 'on')}
+              />
+            </SettingRow>
+
+            <SettingRow
+              bordered
+              surface="raised"
+              disabled={!autoSyncEnabled}
+              label={<Trans>Sync interval</Trans>}
+              description={<Trans>Minutes between automatic local backups.</Trans>}
+            >
+              <NumberInput
+                min={1}
+                max={240}
+                step={1}
+                value={autoSyncMinutes}
+                onChange={(next) => {
+                  if (!Number.isFinite(next)) return;
+                  setAutoSyncMinutes(Math.max(1, Math.min(240, Math.round(next))));
+                }}
+                className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
+                disabled={!autoSyncEnabled}
+              />
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>min</Trans></span>
+            </SettingRow>
           </div>
 
           <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-            Last local sync: {lastLocalSyncAt ? new Date(lastLocalSyncAt).toLocaleString() : 'never'}
+            <Trans>Last local sync: {lastLocalSyncAt ? new Date(lastLocalSyncAt).toLocaleString() : _(msg`never`)}</Trans>
           </div>
         </div>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="flex items-center justify-between gap-2">
             <div>
-              <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Manage Backups</div>
-              <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>View, restore, or delete older snapshots from disk.</div>
+              <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Manage Backups</Trans></div>
+              <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}><Trans>View, restore, or delete older snapshots from disk.</Trans></div>
             </div>
-            <button
-              type="button"
-              onClick={() => { void loadHistory(); }}
+            <Button
+              variant="secondary"
+              size="auto"
+              className="!h-8 !px-2.5 !py-0 text-xs gap-1.5 disabled:opacity-60"
               disabled={historyLoading || !selectedDirectory}
-              className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+              onClick={() => { void loadHistory(); }}
             >
-              {historyLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
-              Refresh
-            </button>
+              {historyLoading ? <Spinner size="sm" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+              <Trans>Refresh</Trans>
+            </Button>
           </div>
 
-          <div className="mt-2">
-            <div className="max-h-64 overflow-auto rounded-md border custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              {historyItems.length === 0 ? (
-                <div className="px-3 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {hasAnySync ? 'No history snapshots found in this folder.' : 'No snapshots yet. Run "Backup Now" to create your first local snapshot.'}
-                </div>
-              ) : (
-                <ul className="p-1.5 space-y-1.5">
+          <div className="mt-2 max-h-64 overflow-auto custom-scrollbar">
+            {historyItems.length === 0 ? (
+              <div className="px-3 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                {hasAnySync
+                  ? <Trans>No history snapshots found in this folder.</Trans>
+                  : <Trans>No snapshots yet. Run &quot;Backup Now&quot; to create your first local snapshot.</Trans>}
+              </div>
+            ) : (
+              <ul className="space-y-1.5">
                   {historyItems.map((item) => (
-                    <li key={item.id} className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                    <li key={item.id} className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                       <button
                         type="button"
                         onClick={() => { void handleViewHistory(item.id); }}
@@ -911,8 +932,8 @@ export function LocalBackupsSettingsTab() {
                         <div className="truncate text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
                           {formatHistoryDate(item)}
                         </div>
-                        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          ID {item.id}
+                        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                          <Trans>ID {item.id}</Trans>
                         </div>
                       </button>
                       <div className="flex items-center gap-1">
@@ -921,7 +942,7 @@ export function LocalBackupsSettingsTab() {
                           onClick={() => { void handleViewHistory(item.id); }}
                           className="inline-flex h-7 w-7 items-center justify-center rounded border transition-colors"
                           style={accentSecondaryActionStyle92}
-                          title="View snapshot"
+                          title={_(msg`View snapshot`)}
                         >
                           <Eye className="h-3.5 w-3.5" />
                         </button>
@@ -930,7 +951,7 @@ export function LocalBackupsSettingsTab() {
                           onClick={() => { setConfirmDeleteId(item.id); }}
                           className="inline-flex h-7 w-7 items-center justify-center rounded border"
                           style={dangerActionStyle92}
-                          title="Delete snapshot"
+                          title={_(msg`Delete snapshot`)}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -940,33 +961,32 @@ export function LocalBackupsSettingsTab() {
                 </ul>
               )}
             </div>
-          </div>
         </div>
       </section>
 
       <StructuredDialogModal
         open={Boolean(confirmDeleteId)}
-        ariaLabel="Confirm delete snapshot"
-        title="Delete Backup Snapshot"
-        subtitle="This action cannot be undone."
+        ariaLabel={_(msg`Confirm delete snapshot`)}
+        title={_(msg`Delete Backup Snapshot`)}
+        subtitle={_(msg`This action cannot be undone.`)}
         icon={<Trash2 className="h-4 w-4" />}
         iconTone="danger"
         zIndexClassName="z-[100]"
         onClose={() => { setConfirmDeleteId(null); }}
-        closeAriaLabel="Cancel delete"
+        closeAriaLabel={_(msg`Cancel delete`)}
         actions={(
           <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            <Button
+              variant="secondary"
+              size="md"
               onClick={() => { setConfirmDeleteId(null); }}
             >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={dangerActionStyle92}
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="tinted-danger"
+              size="md"
+              className="gap-1.5"
               disabled={busy !== 'none'}
               onClick={() => {
                 const id = confirmDeleteId;
@@ -976,106 +996,59 @@ export function LocalBackupsSettingsTab() {
               }}
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Delete
-            </button>
+              <Trans>Delete</Trans>
+            </Button>
           </>
         )}
       >
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
           {confirmDeleteId
-            ? `Backup snapshot from ${new Date(Number(confirmDeleteId)).toLocaleString()} will be permanently removed from disk.`
-            : 'This backup snapshot will be permanently removed from disk.'}
+            ? formatSnapshotDeletionWarning(_, new Date(Number(confirmDeleteId)).toLocaleString())
+            : <Trans>This backup snapshot will be permanently removed from disk.</Trans>}
         </p>
       </StructuredDialogModal>
 
-      {confirmRestoreId && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setConfirmRestoreId(null);
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Confirm restore snapshot"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Restore Snapshot
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    Snapshot from {confirmRestoreId ? new Date(Number(confirmRestoreId)).toLocaleString() : ''}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Cancel restore"
-                onClick={() => { setConfirmRestoreId(null); }}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                This will overwrite your current app settings and profiles with the data from this snapshot, then reload the app. This action cannot be undone.
-              </p>
-              <div className="flex shrink-0 items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => { setConfirmRestoreId(null); }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={accentSecondaryActionStyle92}
-                  disabled={busy !== 'none'}
-                  onClick={() => {
-                    const id = confirmRestoreId;
-                    setConfirmRestoreId(null);
-                    if (!id) return;
-                    void handleRestoreHistory(id);
-                  }}
-                >
-                  <ArchiveRestore className="h-3.5 w-3.5" />
-                  Yes, restore
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <StructuredDialogModal
+        open={Boolean(confirmRestoreId)}
+        ariaLabel={_(msg`Confirm restore snapshot`)}
+        title={<Trans>Restore Snapshot</Trans>}
+        subtitle={<Trans>Snapshot from {confirmRestoreId ? new Date(Number(confirmRestoreId)).toLocaleString() : ''}</Trans>}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        closeAriaLabel={_(msg`Cancel restore`)}
+        onClose={() => { setConfirmRestoreId(null); }}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => { setConfirmRestoreId(null); }}
+            >
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              className="gap-1.5"
+              style={accentSecondaryActionStyle92}
+              disabled={busy !== 'none'}
+              onClick={() => {
+                const id = confirmRestoreId;
+                setConfirmRestoreId(null);
+                if (!id) return;
+                void handleRestoreHistory(id);
+              }}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              <Trans>Yes, restore</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+          <Trans>This will overwrite your current app settings and profiles with the data from this snapshot, then reload the app. This action cannot be undone.</Trans>
+        </p>
+      </StructuredDialogModal>
 
       {showSnapshotModal && (
         <div
@@ -1092,34 +1065,36 @@ export function LocalBackupsSettingsTab() {
             <div className="flex items-center justify-between gap-2 px-4 py-3" style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
               <div>
                 <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Backup Snapshot Content
+                  <Trans>Backup Snapshot Content</Trans>
                 </h4>
-                <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  {selectedHistoryId ? `Snapshot ${new Date(Number(selectedHistoryId)).toLocaleString()}` : 'Loading snapshot...'}
+                <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  {selectedHistoryId
+                    ? <Trans>Snapshot {new Date(Number(selectedHistoryId)).toLocaleString()}</Trans>
+                    : <Trans>Loading snapshot...</Trans>}
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 {selectedHistoryId && (
-                  <button
-                    type="button"
-                    onClick={() => { setConfirmRestoreId(selectedHistoryId); }}
-                    disabled={busy !== 'none'}
-                    className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+                  <Button
+                    variant="secondary"
+                    size="auto"
+                    className="!h-8 !px-2.5 !py-0 text-xs gap-1.5 disabled:opacity-60"
                     style={accentSecondaryActionStyle92}
+                    disabled={busy !== 'none'}
+                    onClick={() => { setConfirmRestoreId(selectedHistoryId); }}
                   >
                     <ArchiveRestore className="h-3.5 w-3.5" />
-                    Restore to App
-                  </button>
+                    <Trans>Restore to App</Trans>
+                  </Button>
                 )}
-                <button
-                  type="button"
+                <IconButton
+                  variant="surface"
+                  size="sm"
+                  aria-label={_(msg`Close snapshot details`)}
                   onClick={() => setShowSnapshotModal(false)}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}
-                  aria-label="Close snapshot details"
                 >
                   <X className="h-4 w-4" />
-                </button>
+                </IconButton>
               </div>
             </div>
 
@@ -1127,18 +1102,18 @@ export function LocalBackupsSettingsTab() {
               {!selectedHistoryId || !selectedHistoryDocument ? (
                 <div className="h-full min-h-0 flex items-center justify-center">
                   <div className="inline-flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Loading snapshot content…
+                    <Spinner size="sm" />
+                    <Trans>Loading snapshot content…</Trans>
                   </div>
                 </div>
               ) : (
                 <div className="h-full min-h-0 grid gap-3 lg:grid-cols-[190px_minmax(0,1fr)]">
                   <aside className="h-full min-h-0 rounded-lg border p-2 overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     {([
-                      { id: 'overview' as const, label: 'Overview' },
-                      { id: 'localStorage' as const, label: 'Local Storage' },
-                      { id: 'profiles' as const, label: 'Profiles' },
-                      { id: 'raw' as const, label: 'Raw JSON' },
+                      { id: 'overview' as const, label: _(msg`Overview`) },
+                      { id: 'localStorage' as const, label: _(msg`Local Storage`) },
+                      { id: 'profiles' as const, label: _(msg`Profiles`) },
+                      { id: 'raw' as const, label: _(msg`Raw JSON`) },
                     ]).map((tab) => (
                       <button
                         key={tab.id}
@@ -1161,24 +1136,24 @@ export function LocalBackupsSettingsTab() {
                     ))}
                   </aside>
 
-                  <div className="h-full min-h-0 rounded-lg border p-3 overflow-hidden flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="h-full min-h-0 rounded-md border p-3 overflow-hidden flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     {snapshotModalTab === 'overview' && (
                       <div className="h-full min-h-0 overflow-auto custom-scrollbar pr-1">
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                           <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                            <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Snapshot ID</div>
+                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Snapshot ID</Trans></div>
                             <div className="mt-1 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>{selectedHistoryId}</div>
                           </div>
                           <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                            <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Document Updated</div>
+                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Document Updated</Trans></div>
                             <div className="mt-1 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>{new Date(selectedHistoryDocument.updatedAt).toLocaleString()}</div>
                           </div>
                           <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                            <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Client ID</div>
+                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Client ID</Trans></div>
                             <div className="mt-1 text-xs font-medium break-all" style={{ color: 'var(--text-strong)' }}>{selectedHistoryDocument.snapshot.clientId}</div>
                           </div>
                           <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                            <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>LocalStorage Keys</div>
+                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>LocalStorage Keys</Trans></div>
                             <div className="mt-1 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>{Object.keys(selectedHistoryDocument.snapshot.localStorage ?? {}).length}</div>
                           </div>
                         </div>
@@ -1189,7 +1164,7 @@ export function LocalBackupsSettingsTab() {
                       <div className="h-full min-h-0 grid gap-2 lg:grid-cols-[minmax(220px,30%)_minmax(0,1fr)]">
                         <div className="rounded-md border p-1.5 min-h-0 overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                           {Object.keys(selectedHistoryDocument.snapshot.localStorage ?? {}).length === 0 ? (
-                            <div className="px-2 py-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>No LocalStorage keys found.</div>
+                            <div className="px-2 py-1.5 text-xs" style={{ color: 'var(--text-muted)' }}><Trans>No LocalStorage keys found.</Trans></div>
                           ) : (
                             Object.keys(selectedHistoryDocument.snapshot.localStorage ?? {}).map((key) => (
                               <button
@@ -1216,11 +1191,11 @@ export function LocalBackupsSettingsTab() {
                         </div>
 
                         <div className="rounded-md border p-2.5 min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                          <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>
-                            {selectedStorageKey ?? 'Select a key'}
+                          <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>
+                            {selectedStorageKey ?? _(msg`Select a key`)}
                           </div>
                           <pre
-                            className="mt-2 flex-1 min-h-0 w-full rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre"
+                            className="mt-2 flex-1 min-h-0 w-full rounded-md border p-2 text-xs leading-snug overflow-auto custom-scrollbar whitespace-pre"
                             style={{
                               borderColor: 'color-mix(in srgb, #3f4451, var(--border-subtle) 35%)',
                               background: '#282c34',
@@ -1229,7 +1204,7 @@ export function LocalBackupsSettingsTab() {
                           >
                             {selectedStorageKey
                               ? renderHighlightedJson(stringifyReadable((selectedHistoryDocument.snapshot.localStorage ?? {})[selectedStorageKey]))
-                              : 'Select a LocalStorage key from the left to view its value.'}
+                              : _(msg`Select a LocalStorage key from the left to view its value.`)}
                           </pre>
                         </div>
                       </div>
@@ -1239,12 +1214,12 @@ export function LocalBackupsSettingsTab() {
                       parsedProfiles ? (
                         <div className="h-full min-h-0 grid gap-2 lg:grid-cols-[minmax(230px,32%)_minmax(0,1fr)]">
                           <div className="rounded-md border p-2 min-h-0 overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                            <div className="text-[10px] uppercase tracking-wide font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>
-                              Printer Profiles ({parsedProfiles.printerProfiles.length})
+                            <div className="text-[11px] uppercase tracking-wide font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>
+                              <Trans>Printer Profiles ({parsedProfiles.printerProfiles.length})</Trans>
                             </div>
                             <div className="space-y-1.5">
                               {parsedProfiles.printerProfiles.length === 0 ? (
-                                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>No printer profiles.</div>
+                                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>No printer profiles.</Trans></div>
                               ) : parsedProfiles.printerProfiles.map((printer) => {
                                 const isSelected = selectedProfilesPrinterId === printer.id;
                                 const isActiveSnapshot = parsedProfiles.activePrinterProfileId === printer.id;
@@ -1266,13 +1241,13 @@ export function LocalBackupsSettingsTab() {
                                   >
                                     <div className="flex items-center justify-between gap-2">
                                       <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{printer.name ?? printer.id}</div>
-                                      {isActiveSnapshot && <span className="text-[10px] font-semibold" style={{ color: 'var(--accent-secondary)' }}>ACTIVE</span>}
+                                      {isActiveSnapshot && <span className="text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}><Trans>ACTIVE</Trans></span>}
                                     </div>
-                                    <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                      {printer.manufacturer ?? 'Unknown manufacturer'}
+                                    <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                      {printer.manufacturer ?? _(msg`Unknown manufacturer`)}
                                     </div>
-                                    <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                      {materialCount} material{materialCount === 1 ? '' : 's'}
+                                    <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                      {formatMaterialCountLabel(_, materialCount)}
                                     </div>
                                   </button>
                                 );
@@ -1282,30 +1257,30 @@ export function LocalBackupsSettingsTab() {
 
                           <div className="rounded-md border p-2 min-h-0 overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                             {!selectedProfilesPrinter ? (
-                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Select a printer profile to view details.</div>
+                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Select a printer profile to view details.</Trans></div>
                             ) : (
                               <div className="space-y-2">
                                 <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                                   <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{selectedProfilesPrinter.name ?? selectedProfilesPrinter.id}</div>
-                                  <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                    {selectedProfilesPrinter.manufacturer ?? 'Unknown manufacturer'}
+                                  <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                    {selectedProfilesPrinter.manufacturer ?? _(msg`Unknown manufacturer`)}
                                     {selectedProfilesPrinter.networkSupport ? ` • ${selectedProfilesPrinter.networkSupport}` : ''}
                                   </div>
-                                  <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                    Build: {selectedProfilesPrinter.buildVolumeMm?.width ?? '-'} × {selectedProfilesPrinter.buildVolumeMm?.depth ?? '-'} × {selectedProfilesPrinter.buildVolumeMm?.height ?? '-'} mm
+                                  <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                    <Trans>Build: {selectedProfilesPrinter.buildVolumeMm?.width ?? '-'} × {selectedProfilesPrinter.buildVolumeMm?.depth ?? '-'} × {selectedProfilesPrinter.buildVolumeMm?.height ?? '-'} mm</Trans>
                                   </div>
-                                  <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                    Display: {selectedProfilesPrinter.display?.resolutionX ?? '-'} × {selectedProfilesPrinter.display?.resolutionY ?? '-'}{selectedProfilesPrinter.display?.outputFormat ? ` (${selectedProfilesPrinter.display.outputFormat})` : ''}
+                                  <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                    <Trans>Display: {selectedProfilesPrinter.display?.resolutionX ?? '-'} × {selectedProfilesPrinter.display?.resolutionY ?? '-'}{selectedProfilesPrinter.display?.outputFormat ? ` (${selectedProfilesPrinter.display.outputFormat})` : ''}</Trans>
                                   </div>
                                 </div>
 
                                 <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                                  <div className="text-[10px] uppercase tracking-wide font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>
-                                    Materials for this printer ({filteredMaterialsForSelectedPrinter.length})
+                                  <div className="text-[11px] uppercase tracking-wide font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>
+                                    <Trans>Materials for this printer ({filteredMaterialsForSelectedPrinter.length})</Trans>
                                   </div>
                                   <div className="space-y-1.5">
                                     {filteredMaterialsForSelectedPrinter.length === 0 ? (
-                                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>No materials linked to this printer.</div>
+                                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>No materials linked to this printer.</Trans></div>
                                     ) : filteredMaterialsForSelectedPrinter.map((material) => {
                                       const isActiveSnapshot = parsedProfiles.activeMaterialProfileId === material.id;
                                       return (
@@ -1319,13 +1294,13 @@ export function LocalBackupsSettingsTab() {
                                         }}>
                                           <div className="flex items-center justify-between gap-2">
                                             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{material.name ?? material.id}</div>
-                                            {isActiveSnapshot && <span className="text-[10px] font-semibold" style={{ color: 'var(--accent-secondary)' }}>ACTIVE</span>}
+                                            {isActiveSnapshot && <span className="text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}><Trans>ACTIVE</Trans></span>}
                                           </div>
-                                          <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                            {material.brand ?? 'Unknown brand'}{material.resinFamily ? ` • ${material.resinFamily}` : ''}
+                                          <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                            {material.brand ?? _(msg`Unknown brand`)}{material.resinFamily ? ` • ${material.resinFamily}` : ''}
                                           </div>
-                                          <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                            Layer {material.layerHeightMm ?? '-'} mm • Normal {material.normalExposureSec ?? '-'}s • Bottom {material.bottomExposureSec ?? '-'}s × {material.bottomLayerCount ?? '-'}
+                                          <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                            <Trans>Layer {material.layerHeightMm ?? '-'} mm • Normal {material.normalExposureSec ?? '-'}s • Bottom {material.bottomExposureSec ?? '-'}s × {material.bottomLayerCount ?? '-'}</Trans>
                                           </div>
                                         </div>
                                       );
@@ -1338,7 +1313,7 @@ export function LocalBackupsSettingsTab() {
                         </div>
                       ) : (
                         <pre
-                          className="rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar"
+                          className="rounded-md border p-2 text-xs leading-snug overflow-auto custom-scrollbar"
                           style={{
                             borderColor: 'color-mix(in srgb, #3f4451, var(--border-subtle) 35%)',
                             background: '#282c34',
@@ -1353,7 +1328,7 @@ export function LocalBackupsSettingsTab() {
 
                     {snapshotModalTab === 'raw' && (
                       <pre
-                        className="flex-1 min-h-0 rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre"
+                        className="flex-1 min-h-0 rounded-md border p-2 text-xs leading-snug overflow-auto custom-scrollbar whitespace-pre"
                         style={{
                           borderColor: 'color-mix(in srgb, #3f4451, var(--border-subtle) 35%)',
                           background: '#282c34',

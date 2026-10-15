@@ -1,4 +1,6 @@
 import React from 'react';
+import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
+import { clampToViewport } from '@/utils/math';
 import { ChevronDown } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
@@ -36,6 +38,12 @@ export type SelectDropdownProps<T extends string | number = string> = {
   selectedDisplayOffsetX?: number;
   menuClassName?: string;
   menuAlign?: 'left' | 'right';
+  /** Positioning class for the chevron, e.g. 'right-1.5' for narrow icon-only
+   *  triggers where the default gap reads as wasted space. */
+  chevronClassName?: string;
+  /** When true the chevron icon is not rendered. Useful for icon-only triggers
+   *  where the arrow wastes horizontal space. */
+  hideChevron?: boolean;
   optionClassName?: string;
   menuFooterAction?: {
     label: string;
@@ -46,6 +54,29 @@ export type SelectDropdownProps<T extends string | number = string> = {
   menuFooterDivider?: boolean;
   onFocus?: React.FocusEventHandler<HTMLElement>;
   onBlur?: React.FocusEventHandler<HTMLElement>;
+};
+
+/**
+ * The insets that centre a trigger's label in the space **left of the chevron**.
+ *
+ * The label is centred inside the trigger's padding box, so what that box is decides
+ * where "centred" lands. The usual `pl-2.5 pr-10` — small left, large right for the
+ * chevron — centres it left of the control by half the difference with a lopsided gap
+ * before the chevron. Equal insets put it on the control's centre, which is not it
+ * either: the space the label reads as belonging to is the one the chevron does not
+ * occupy.
+ *
+ * So the box *is* that space: from the control's left edge to the chevron's left edge.
+ * The chevron's footprint is `right-3` (12px) plus its `h-3.5 w-3.5` icon (14px) — 26px
+ * in from the right edge — hence no left inset and 26px on the right. The label then
+ * centres on `(width - 26) / 2`, which is 13px left of the control's centre and puts
+ * the same space on either side of the text *within the space a user reads as the
+ * field's*. Pair with `textAlign: 'center'`, which this carries.
+ */
+export const CENTERED_SELECT_PADDING: React.CSSProperties = {
+  paddingLeft: 0,
+  paddingRight: 26,
+  textAlign: 'center',
 };
 
 /**
@@ -74,6 +105,8 @@ export function SelectDropdown<T extends string | number = string>({
   selectedDisplayOffsetX = 0,
   menuClassName = '',
   menuAlign = 'left',
+  chevronClassName = 'right-3',
+  hideChevron = false,
   optionClassName = '',
   menuFooterAction,
   menuFooterDivider = true,
@@ -103,30 +136,20 @@ export function SelectDropdown<T extends string | number = string>({
     triggerRef.current?.blur();
   }, []);
 
-  React.useEffect(() => {
-    if (!isOpen) return;
+  const closeMenu = React.useCallback(() => setIsOpen(false), []);
 
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (containerRef.current?.contains(target)) return;
-      if (menuRef.current?.contains(target)) return;
-      setIsOpen(false);
-    };
-
-    const onEscape = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        setIsOpen(false);
-      }
-    };
-
-    window.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('app-hotkey-keydown', onEscape as EventListener);
-
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('app-hotkey-keydown', onEscape as EventListener);
-    };
-  }, [isOpen]);
+  // Escape and outside pointer down close the menu. The trigger lives inside
+  // containerRef, so its own click never counts as outside. The portal menu is
+  // not a descendant of containerRef, so it stops pointerdown propagation
+  // itself (below) and never reaches the dismiss listener.
+  //
+  // Resize/scroll keep the menu open and reposition it instead (see
+  // updateMenuPosition), so both dismiss-on-layout listeners are disabled.
+  useOutsideDismiss(isOpen, closeMenu, {
+    ignoreRef: containerRef,
+    dismissOnResize: false,
+    dismissOnScroll: false,
+  });
 
   const updateMenuPosition = React.useCallback((measureMenu: boolean) => {
     const trigger = containerRef.current;
@@ -138,21 +161,31 @@ export function SelectDropdown<T extends string | number = string>({
     const margin = 8;
     const gap = 6;
 
-    // The menu is always forced to the trigger's width (minWidth/width below),
-    // so position from rect.width directly. Measuring offsetWidth instead was
-    // wrong on the first pass — before the width style applied — which left the
-    // menu mispositioned until a later pass corrected it (the visible reflow).
-    const measuredMenuWidth = rect.width;
-    const measuredMenuHeight = measureMenu && menuRef.current
-      ? menuRef.current.offsetHeight
-      : 0;
+    // The menu is normally forced to the trigger's width (minWidth/width
+    // below), but menuClassName can override it with !important (e.g. !w-64).
+    // Apply the trigger width before measuring so the measurement reflects
+    // exactly what will render: the override if present, rect.width otherwise.
+    // Measuring without the inline width was wrong on the first pass — the
+    // content-sized menu left align-right menus mispositioned/clipped.
+    let measuredMenuWidth = rect.width;
+    let measuredMenuHeight = 0;
+    if (measureMenu && menuRef.current) {
+      menuRef.current.style.width = `${rect.width}px`;
+      measuredMenuWidth = menuRef.current.offsetWidth;
+      measuredMenuHeight = menuRef.current.offsetHeight;
+    }
 
     let left = rect.left;
     if (menuAlign === 'right') {
       left = rect.right - measuredMenuWidth;
     }
 
-    left = Math.max(margin, Math.min(left, viewportWidth - margin - measuredMenuWidth));
+    // Keep the menu inside the viewport horizontally, via the shared edge clamp.
+    left = clampToViewport(
+      { x: left, y: rect.bottom + gap },
+      { width: measuredMenuWidth, height: measuredMenuHeight },
+      { margin, viewport: { width: viewportWidth, height: viewportHeight } },
+    ).left;
 
     const belowSpace = viewportHeight - (rect.bottom + gap) - margin;
     const aboveSpace = rect.top - gap - margin;
@@ -253,7 +286,7 @@ export function SelectDropdown<T extends string | number = string>({
               setIsOpen(false);
             }
           }}
-          className={`ui-input rounded-[4px] relative w-full h-[36px] px-2.5 pr-10 leading-tight text-sm disabled:opacity-55 disabled:cursor-not-allowed inline-flex items-center text-left ${selectClassName}`}
+          className={`ui-input rounded-[4px] relative w-full h-[36px] px-2.5 pr-10 leading-tight text-sm disabled:pointer-events-none disabled:opacity-55 disabled:cursor-not-allowed inline-flex items-center text-left ${selectClassName}`}
           style={{
             ...selectStyle,
             ...(isOpen
@@ -296,10 +329,12 @@ export function SelectDropdown<T extends string | number = string>({
             {endAdornment}
           </span>
         )}
-        <ChevronDown
-          className={`pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-          style={{ color: disabled ? 'var(--text-muted)' : 'var(--text-muted)' }}
-        />
+        {!hideChevron && (
+          <ChevronDown
+            className={`pointer-events-none absolute ${chevronClassName} top-1/2 h-3.5 w-3.5 -translate-y-1/2 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+            style={{ color: disabled ? 'var(--text-muted)' : 'var(--text-muted)' }}
+          />
+        )}
 
         </button>
 
@@ -307,6 +342,7 @@ export function SelectDropdown<T extends string | number = string>({
           <div
             ref={menuRef}
             role="listbox"
+            onPointerDown={(event) => event.stopPropagation()}
             className={`fixed z-[9999] rounded-[4px] border shadow-xl ${menuClassName}`}
             style={{
               top: menuPosition?.top ?? 0,

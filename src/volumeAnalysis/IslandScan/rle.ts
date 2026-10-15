@@ -4,6 +4,20 @@ import { ComponentInfo } from './types';
 // Represents a single row of binary data.
 export type RleRow = Int32Array;
 
+/**
+ * The one empty row, shared by every row that has no spans.
+ *
+ * A layer is 1814 rows tall and a scan is 5292 layers deep, so the naive
+ * `new Int32Array(0)` per empty row produced 9.6 million typed arrays holding
+ * half a megabyte of data between them — over a gigabyte of pure object and
+ * buffer overhead, and most of the live object count.
+ *
+ * Sharing is safe because RLE rows are never written in place: every producer
+ * builds a fresh row and assigns it. Structured clone preserves identity within
+ * a message, so the sharing survives the trip from the worker.
+ */
+export const EMPTY_ROW: RleRow = new Int32Array(0);
+
 // RLE Mask: Array of rows
 export type RleMask = {
     rows: RleRow[];
@@ -13,6 +27,45 @@ export type RleMask = {
 
 // Labeled RLE Row: [start, length, id, start, length, id, ...]
 export type RleLabelRow = Int32Array;
+
+/**
+ * The candidate (unsupported) voxels of one layer, as flat `[col, row]` pairs.
+ *
+ * The per-layer label RLE exists only to identify these — the caller throws it
+ * away once it has them — so extracting here keeps the work on the worker and
+ * leaves a payload proportional to the voxels instead of to the layer's area.
+ * Shipping the RLE instead meant structured-cloning thousands of small
+ * `Int32Array`s per layer on the receiving thread, ~2525 times a scan, which is
+ * what starved the main thread for most of a 23 s scan.
+ *
+ * Two passes over the runs (count, then fill) so the result is one exact-sized
+ * buffer rather than a growable array.
+ */
+export function candidateVoxelPairs(labels: RleLabels): Int32Array {
+    let count = 0;
+    for (const row of labels.rows) {
+        if (!row) continue;
+        for (let i = 0; i < row.length; i += 3) {
+            if (row[i + 2] > 0) count += row[i + 1];
+        }
+    }
+    const out = new Int32Array(count * 2);
+    let at = 0;
+    for (let y = 0; y < labels.rows.length; y++) {
+        const row = labels.rows[y];
+        if (!row) continue;
+        for (let i = 0; i < row.length; i += 3) {
+            if (row[i + 2] <= 0) continue;
+            const start = row[i];
+            const end = start + row[i + 1];
+            for (let col = start; col < end; col++) {
+                out[at++] = col;
+                out[at++] = y;
+            }
+        }
+    }
+    return out;
+}
 
 export type RleLabels = {
     rows: RleLabelRow[];
@@ -44,7 +97,7 @@ export function rleEncode(data: Uint8Array, width: number, height: number): RleM
         if (runStart !== -1) {
             rowSpans.push(runStart, width - runStart);
         }
-        rows[y] = new Int32Array(rowSpans);
+        rows[y] = rowSpans.length === 0 ? EMPTY_ROW : new Int32Array(rowSpans);
     }
 
     return { rows, width, height };
@@ -88,7 +141,7 @@ export function rleEncodeLabels(data: Int32Array | Uint8Array, width: number, he
             rowSpans.push(runStart, width - runStart, currentId);
         }
 
-        rows[y] = new Int32Array(rowSpans);
+        rows[y] = rowSpans.length === 0 ? EMPTY_ROW : new Int32Array(rowSpans);
     }
 
     return { rows, width, height };
@@ -131,7 +184,7 @@ export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): Rle
     for (let y = 0; y < height; y++) {
         const aRow = a.rows[y];
         if (aRow.length === 0) {
-            resultRows[y] = new Int32Array(0);
+            resultRows[y] = EMPTY_ROW;
             continue;
         }
 
@@ -151,7 +204,7 @@ export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): Rle
         }
 
         if (relevantBRows.length === 0) {
-            resultRows[y] = new Int32Array(0);
+            resultRows[y] = EMPTY_ROW;
             continue;
         }
 
@@ -238,7 +291,7 @@ export function rleSubtract(a: RleMask, b: RleMask): RleMask {
         const bRow = b.rows[y];
 
         if (aRow.length === 0) {
-            resultRows[y] = new Int32Array(0);
+            resultRows[y] = EMPTY_ROW;
             continue;
         }
         if (bRow.length === 0) {

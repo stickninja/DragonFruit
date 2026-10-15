@@ -1,0 +1,1224 @@
+import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
+/** No auto leaf may be a tapered spike: past the branch threshold it must be a
+ *  branch, whichever surface its tip touches and whichever pass attached it. */
+function assertNoLeafPastBranchThreshold(): void {
+    for (const leaf of Object.values(getSnapshot().leaves)) {
+        const knot = leaf.parentKnotId ? getSnapshot().knots[leaf.parentKnotId] : undefined;
+        const tip = leaf.contactCone?.pos;
+        if (!knot || !tip) continue;
+        const spanMm = Math.hypot(tip.x - knot.pos.x, tip.y - knot.pos.y, tip.z - knot.pos.z);
+        assert.ok(spanMm <= 6.01,
+            `leaf ${leaf.id} spans ${spanMm.toFixed(1)}mm — past the branch threshold, it must be a branch`);
+    }
+}
+
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import * as THREE from 'three';
+
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { clearHistory, undo, registerHistoryHandler } from '../../history/historyStore';
+import { SUPPORT_AUTO_PLACE } from '../history/actionTypes';
+import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
+import { runAutoPlace } from '../autoSupport/autoPlace';
+import { setModelMesh } from '../autoSupport/meshStore';
+import { resetStore, getSnapshot, setSnapshot, resetKickstandsInState, getSupportTypeOf } from '../state';
+import { initializeBVH, accelerateGeometry } from '@/utils/bvh';
+import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
+import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
+import { getSettings, setSettings } from '../Settings/state';
+import { createDefaultSettings } from '../Settings/types';
+import {
+    contactBridgeTypes,
+    defaultPlacementToolTypeId,
+    getSupportTypeDescriptor,
+    selectTypeForPlacement,
+} from '../supportTypeRegistry';
+import { entitiesIn, keyOf } from './helpers/typeCollections';
+import type { SupportEntityAny } from '../types';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeIsland(id: string, x: number, y: number, z: number, areaMm2: number): DetectedIsland {
+    return {
+        id,
+        source: 'voxel',
+        contact: new THREE.Vector3(x, y, z),
+        baseZ: z,
+        areaMm2,
+        layerSpan: [0, Math.round(z / 0.05)],
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test('runAutoPlace places standalone trunks and pushes an undoable history entry', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    const islands = [
+        makeIsland('i1', 0, 0, 20, 0.5),
+        makeIsland('i2', 8, 0, 30, 0.5),
+    ];
+
+    const captured: Array<{ type: string; payload?: unknown }> = [];
+    const unregisterCapture = registerHistoryHandler(SUPPORT_AUTO_PLACE, (action) => {
+        captured.push(action);
+        return true;
+    });
+
+    const result = runAutoPlace(islands, 'model-a');
+
+    assert.equal(result.placed.trunk, 2, 'both islands become trunks');
+    assert.equal(result.rejectedCandidates, 0);
+    assert.equal(result.changed, true);
+
+    const snapshot = getSnapshot();
+    assert.equal(Object.keys(snapshot.trunks).length, 2, 'two trunks committed to the store');
+    assert.equal(Object.keys(snapshot.roots).length, 2, 'two roots committed');
+
+    // The run must be undoable as one entry.
+    undo();
+    assert.equal(captured.length, 1, 'SUPPORT_AUTO_PLACE handler ran on undo');
+    assert.equal(captured[0].type, SUPPORT_AUTO_PLACE);
+    const payload = captured[0].payload as { before?: unknown; after?: unknown };
+    assert.ok(payload.before && payload.after, 'payload carries before/after snapshots');
+    assert.equal(Object.keys(getSnapshot().trunks).length, 0, 'undo restores the empty pre-run snapshot');
+
+    unregisterCapture();
+    disposeHandlers();
+    setModelMesh('model-a', null);
+});
+
+test('runAutoPlace resolves the underside surface normal from the mesh', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // Box 10x10x10, translated so its underside sits at z = 20, normal (0,0,-1).
+    initializeBVH();
+    const geometry = new THREE.BoxGeometry(10, 10, 10);
+    geometry.translate(0, 0, 25);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    setModelMesh('model-a', mesh);
+
+    const islands = [makeIsland('i1', 0, 0, 20, 0.5)];
+    const result = runAutoPlace(islands, 'model-a', { debugSkipAutoBracing: true });
+
+    assert.equal(result.placed.trunk, 1, 'underside island places a trunk');
+
+    const snapshot = getSnapshot();
+    const trunk = Object.values(snapshot.trunks)[0];
+    assert.ok(trunk, 'trunk exists');
+    const cone = trunk.contactCone;
+    assert.ok(cone?.pos, 'contact cone exists');
+    assert.ok(Math.abs(cone.pos.z - 20) < 0.6, `tip sits on the underside (z=${cone.pos.z.toFixed(2)}, expected ~20)`);
+    const normal = cone.normal ?? cone.surfaceNormal;
+    assert.ok(normal, 'cone normal exists');
+    assert.ok(normal.z < 0, `underside normal points down (z=${normal.z.toFixed(3)})`);
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace grids a large flat region at fixed density (uniform distribution)', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // 20×20 flat underside: above the threshold → the unified fixed-density
+    // grid (boundary ring + lattice infill), no anchor selection involved.
+    const contactVoxels: { x: number; y: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -10; y <= 10; y += 0.25) {
+            contactVoxels.push({ x, y });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 0, 6.5),
+        baseZ: 6.5,
+        areaMm2: 400,
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true });
+
+    // Fixed-density grid: spacing = √8 with the default angle/suction curve
+    // → ~200 tips on a 20×20 flat underside. Neighbouring pillars then
+    // consolidate into fan trees — supports release in chunks, so plate
+    // contacts drop well below the candidate count (leaves attach to chunk
+    // hosts; branches only appear when a straight leaf is blocked).
+    assert.ok(result.placed.trunk >= 30 && result.placed.trunk <= 120,
+        `placed ${result.placed.trunk} chunk hosts for ~200 tips (consolidated into trees)`);
+    assert.ok(result.placed.leaf >= 50,
+        `consolidated into fan leaves (${result.placed.leaf})`);
+    assert.equal(result.placed.branch, 0,
+        'flat underside leaves fan straight — no routed branches needed');
+
+    const snapshot = getSnapshot();
+    const trunks = Object.values(snapshot.trunks);
+    assert.ok(trunks.length > 0 && trunks.some((t) => t.origin === 'overhang'),
+        'chunk hosts carry the overhang origin (debug coloring)');
+    assert.equal(Object.keys(snapshot.branches).length, 0,
+        'no branches — the flat grid is a pure pillar forest');
+    const trunkCount = Object.keys(snapshot.trunks).length;
+    assert.equal(trunkCount, result.placed.trunk, 'trunks committed to the store');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace places grid trunks on a rotated mesh via the region normal', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    // Box rotated 30° about X: the underside face normal is (0, 0.5, -0.866)
+    // and its surface Z varies with y. This is the exact case the generic
+    // raycast got wrong (side face vs underside) — the region's own normal
+    // must be used instead.
+    const geometry = new THREE.BoxGeometry(20, 20, 20);
+    geometry.rotateX(THREE.MathUtils.degToRad(30));
+    geometry.translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    // Underside after rotateX(30) + translate(0,0,20): projected y in
+    // [-3.66, 13.66], x in [-10, 10], surface z(y) = 0.577y + 8.45, normal
+    // (0, 0.5, -sqrt(3)/2). (A plane through the cube's middle would put the
+    // tips inside the model — the fixture must match the real face.)
+    const normal = { x: 0, y: 0.5, z: -Math.sqrt(3) / 2 };
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -3.66; y <= 13.66; y += 0.25) {
+            contactVoxels.push({ x, y, z: 0.577 * y + 8.45 });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 5, 11.33),
+        baseZ: 6.34,
+        areaMm2: 400 * (Math.sqrt(3) / 2), // projected area ≈ 346
+        surfaceNormal: normal,
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
+
+    assert.ok(result.placed.trunk >= 15,
+        `placed ${result.placed.trunk} grid trunks on the rotated face`);
+    assert.equal(result.rejectedCandidates, 0,
+        'no rejections: the region normal keeps the cone clear');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace grids a huge steep flat the self-support angle calls self-supporting', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    // Box rotated 60° about X: the face is steeper than the 45° self-support
+    // angle, so the angle rule alone leaves it bare. The Rust steep-flat pass
+    // is what hands a patch this size over as an `overhang` region — a leaning
+    // plate's whole face, the lever the part topples on. From there the
+    // pipeline must grid it like any other region.
+    const deg = 60;
+    const geometry = new THREE.BoxGeometry(20, 20, 20);
+    geometry.rotateX(THREE.MathUtils.degToRad(deg));
+    geometry.translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const rad = THREE.MathUtils.degToRad(deg);
+    const normal = { x: 0, y: Math.sin(rad), z: -Math.cos(rad) };
+    const yMin = -10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const yMax = 10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const zAt = (y: number) => Math.tan(rad) * y;
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = yMin; y <= yMax; y += 0.25) {
+            contactVoxels.push({ x, y, z: zAt(y) });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, (yMin + yMax) / 2, zAt((yMin + yMax) / 2)),
+        baseZ: zAt(yMin),
+        areaMm2: 400 * Math.cos(rad),
+        surfaceNormal: normal,
+        overhangAngleDeg: deg,
+        // BoxGeometry group 5 (local −Z) → the 60° face after rotateX.
+        triangleIds: [10, 11],
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
+
+    assert.ok(result.placed.trunk >= 15,
+        `placed ${result.placed.trunk} grid trunks on the 60° face`);
+    assert.equal(result.rejectedCandidates, 0,
+        'the region normal keeps the cone clear at 60°');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('a run reports where its time went', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    const geometry = new THREE.BoxGeometry(20, 20, 20);
+    geometry.rotateX(THREE.MathUtils.degToRad(30));
+    geometry.translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -3.66; y <= 13.66; y += 0.25) {
+            contactVoxels.push({ x, y, z: 0.577 * y + 8.45 });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 5, 11.33),
+        baseZ: 6.34,
+        areaMm2: 400 * (Math.sqrt(3) / 2),
+        surfaceNormal: { x: 0, y: 0.5, z: -Math.sqrt(3) / 2 },
+        triangleIds: [10, 11],
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(' ')); };
+    let result: ReturnType<typeof runAutoPlace>;
+    try {
+        result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
+    } finally {
+        console.log = originalLog;
+    }
+
+    const timings = result.analytics?.timings;
+    assert.ok(timings, 'the run reports timings');
+    assert.ok(timings.totalMs > 0, `total is measured (got ${timings.totalMs})`);
+
+    // The coarse breakdown, in the order the pipeline runs it.
+    const labels = timings.phases.map((phase) => phase.label);
+    const expected = [
+        'candidates', 'dedup', 'support-filter', 'placement', 'consolidation', 'gap-fill',
+        'analytics', 'fanning', 'surface-coverage', 'resize', 'report', 'bracing',
+    ];
+    assert.deepEqual(labels, expected, 'every phase is timed, in order');
+    assert.ok(timings.phases.every((phase) => phase.durationMs >= 0), 'durations are real numbers');
+
+    const line = logs.find((entry) => entry.includes('[AutoSupport] Timing:'));
+    assert.ok(line, `the breakdown reaches the log (got ${logs.filter((l) => l.includes('Timing')).length} timing lines)`);
+    assert.ok(line.includes('placement'), 'and it names the phases');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('elevated small overhang routes a trunk around the body instead of a culled pillar', () => {
+    const cleanup = elevatedJawScenario(false);
+    cleanup();
+});
+
+test('elevated small overhang also routes with the density grid enabled', () => {
+    const cleanup = elevatedJawScenario(true);
+    cleanup();
+});
+
+function elevatedJawScenario(gridEnabled: boolean): () => void {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    const previousSettings = getSettings();
+    if (gridEnabled) {
+        const settings = createDefaultSettings();
+        settings.grid.enabled = true;
+        settings.grid.spacingMm = 4;
+        setSettings(settings);
+    }
+
+    // Body slab spanning x ∈ [-20, 5], z ∈ [0, 10]; a small jaw chip (4×4×2)
+    // overhangs PAST the body's top edge, underside at z = 16, centred at
+    // x = 3.5 — its vertical drop pierces the body corner. The island is
+    // small (2 mm²) and elevated: exactly the shape that used to bypass the
+    // pathfinder as a "small island", get placed as a straight pillar, and
+    // then be culled for piercing the mesh (Puck jaw/mouth).
+    const body = new THREE.BoxGeometry(25, 20, 10);
+    body.translate(-7.5, 0, 5);
+    const jaw = new THREE.BoxGeometry(4, 4, 2);
+    jaw.translate(3.5, 0, 17);
+    const geometry = mergeGeometries([body, jaw])!;
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const island = makeIsland('jaw', 3.5, 0, 16, 2);
+    const result = runAutoPlace([island], 'model-a', { debugSkipAutoBracing: true });
+
+    const snapshot = getSnapshot();
+    const trunks = Object.values(snapshot.trunks);
+    const jawTrunk = trunks.find((t) => t.contactCone && Math.abs(t.contactCone.pos.x - 3.5) < 1.5
+        && Math.abs(t.contactCone.pos.y) < 1.5 && Math.abs(t.contactCone.pos.z - 16) < 1.5);
+    assert.ok(jawTrunk, 'jaw tip is carried by a plate-rooted trunk');
+    assert.equal(result.rejectedCandidates, 0,
+        `nothing rejected (${result.rejectedCandidates})`);
+    // The long-span bridge is the BRIDGING type whose contact-span rule is
+    // unbounded above -- the registry's own way of saying it serves the spans
+    // past the twig cutoff. Asked of the registry rather than named.
+    const longBridgeTypeId = contactBridgeTypes().find(
+        (typeId) => getSupportTypeDescriptor(typeId).placementRule?.maxMm === undefined,
+    );
+    assert.ok(longBridgeTypeId, 'a bridging type serves the long spans');
+    assert.equal(result.placed[longBridgeTypeId], 0,
+        'no cavity stick — the routed trunk made the bridge unnecessary');
+    // The routed shaft must actually clear the body: every segment passes
+    // the same post-thickening check the orphan cull applies.
+    const root = snapshot.roots[jawTrunk!.rootId];
+    assert.ok(root, 'trunk has a root');
+    for (const seg of jawTrunk!.segments) {
+        const start = seg.bottomJoint?.pos ?? root.transform.pos;
+        const end = seg.topJoint?.pos;
+        assert.ok(end, 'segment has endpoints');
+        assert.equal(isShaftBlocked(start, end, (seg.diameter ?? 1) / 2 + 0.15, mesh), false,
+            'routed shaft clears the mesh at cull clearance');
+    }
+
+    setModelMesh('model-a', null);
+    if (gridEnabled) setSettings(previousSettings);
+    disposeHandlers();
+    return () => {};
+}
+
+test('runAutoPlace gap-fills under-covered regions (coverage convergence)', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // 20×20 facet at a SPARSE density (30 mm²/support → ~5.5mm spacing):
+    // the initial grid's 3mm coverage discs leave bands uncovered, so the
+    // convergence pass must add more trunks.
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -10; y <= 10; y += 0.25) {
+            contactVoxels.push({ x, y, z: 6.5 });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 0, 6.5),
+        baseZ: 6.5,
+        areaMm2: 400,
+        surfaceNormal: { x: 0, y: 0, z: -1 },
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([facet], 'model-a', {
+        debugSkipAutoBracing: true,
+        areaPerSupportMm2: 30,
+        gridAreaThresholdMm2: 25,
+    });
+
+    // Initial grid at 5.5mm spacing ≈ 16 points + gap-fill, then the
+    // anchor-tree pass merges trunks into branches — assert TIPS preserved.
+    assert.ok(result.placed.trunk + result.placed.branch >= 20,
+        `gap-fill + tree merge preserved tips (${result.placed.trunk}T + ${result.placed.branch}B)`);
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // A 4×4 mm foot (16 mm², under the 25 mm² grid threshold) is below the
+    // distribution threshold — shape analysis says a single support carries
+    // it; no carpet for a patch this small.
+    const contactVoxels: { x: number; y: number }[] = [];
+    for (let x = -2; x <= 2; x += 0.25) {
+        for (let y = -2; y <= 2; y += 0.25) {
+            contactVoxels.push({ x, y });
+        }
+    }
+    const foot: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 0, 6.5),
+        baseZ: 6.5,
+        areaMm2: 16,
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([foot], 'model-a', { debugSkipAutoBracing: true });
+
+    assert.equal(result.placed.trunk, 1, 'sub-threshold patch → exactly one pillar');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('a sub-threshold overhang candidate past the leaf threshold becomes a pillar, not a spike', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // Trunk A (voxel island) at the origin; overhang region o15 at (3,0,33) is
+    // sub-threshold and non-anchor (band off), so it is offered to A's shaft.
+    // The link is past the leaf threshold, so the old answer was a 7mm tapered
+    // cone — a spike standing next to the trunk rather than a support. It gets
+    // a branch or, when no sample on A gives one a legal departure (as here), a
+    // pillar of its own; the consolidation pass merges pillars into chunk trees.
+    const result = runAutoPlace(
+        [
+            makeIsland('A', 0, 0, 40, 30),
+            {
+                id: 'o15',
+                source: 'overhang',
+                contact: new THREE.Vector3(3, 0, 33),
+                baseZ: 33,
+                areaMm2: 16,
+                contactVoxels: footprintFromPoints([
+                    { x: 2.75, y: -0.25 }, { x: 3, y: -0.25 }, { x: 3.25, y: -0.25 },
+                    { x: 2.75, y: 0 }, { x: 3, y: 0 }, { x: 3.25, y: 0 },
+                    { x: 2.75, y: 0.25 }, { x: 3, y: 0.25 }, { x: 3.25, y: 0.25 },
+                ]),
+            },
+        ],
+        'model-a',
+        { debugSkipAutoBracing: true,  },
+    );
+
+    assertNoLeafPastBranchThreshold();
+    assert.equal(result.placed.leaf, 0, 'no leaf cone: the span is past the threshold');
+    assert.equal(result.placed.trunk, 2, 'o15 stands on the plate instead');
+
+    // Both contacts are still supported — the pillar is a real support, not a drop.
+    assert.ok((result.analytics?.areaCoverage ?? 0) >= 0.99, 'both contacts are supported');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace falls back to a standalone trunk when no fan host exists', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // 20 mm from any shaft: beyond both fan and merge reach — the overhang
+    // keeps a standalone trunk so the surface is still supported.
+    const result = runAutoPlace(
+        [
+            makeIsland('A', 0, 0, 40, 30),
+            {
+                id: 'o20',
+                source: 'overhang',
+                contact: new THREE.Vector3(20, 0, 30),
+                baseZ: 30,
+                areaMm2: 16,
+                contactVoxels: footprintFromPoints([{ x: 19.75, y: 0 }, { x: 20, y: 0 }, { x: 20.25, y: 0 }]),
+            },
+        ],
+        'model-a',
+        { debugSkipAutoBracing: true,  },
+    );
+
+    assert.equal(result.placed.trunk, 2, 'far overhang keeps its standalone trunk (coverage)');
+
+    const placement = result.analytics?.placement;
+    assert.equal(placement?.hostsByKind.standalone, 2, 'both became standalone trunks');
+    assert.deepEqual(placement?.fanRefusals, { noHost: 1 }, 'o20 found no shaft within the fan radius');
+    assert.deepEqual(placement?.mergeRefusals, { noHost: 2 }, 'neither had a host within the merge radius');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace dispatches by shape: planar → grid, organic → Poisson', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // Planar anchor facet at the origin (flat voxels) — lowest cluster, planar
+    // → dynamic grid at anchor density.
+    const planarVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -10; y <= 10; y += 0.25) {
+            planarVoxels.push({ x, y, z: 6.5 });
+        }
+    }
+    const planar: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 0, 6.5),
+        baseZ: 6.5,
+        areaMm2: 400,
+        contactVoxels: footprintFromPoints(planarVoxels),
+    };
+
+    // Curved region (z = 6.5 + x²/20) offset far away, higher cluster →
+    // organic → Poisson disk.
+    const curvedVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = 30; x <= 50; x += 0.25) {
+        for (let y = 30; y <= 50; y += 0.25) {
+            curvedVoxels.push({ x, y, z: 25 + ((x - 40) * (x - 40)) / 20 });
+        }
+    }
+    const organic: DetectedIsland = {
+        id: 'o1',
+        source: 'overhang',
+        contact: new THREE.Vector3(40, 40, 25),
+        baseZ: 25,
+        areaMm2: 400,
+        contactVoxels: footprintFromPoints(curvedVoxels),
+    };
+
+    const result = runAutoPlace([planar, organic], 'model-a', { debugSkipAutoBracing: true });
+
+    assert.ok((result.analytics?.placement?.hostsByKind.gridInfill ?? 0) > 0,
+        'both regions place via the unified grid distribution');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace does not duplicate a pillar on top of an existing island trunk', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // Island trunk A at the origin (voxel, high area → placed first); a
+    // curved overhang wraps around it — the distributed point at the shaft
+    // must not become a second pillar on the same spot.
+    const curvedVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -10; y <= 10; y += 0.25) {
+            curvedVoxels.push({ x, y, z: 33 + (x * x) / 20 });
+        }
+    }
+    const result = runAutoPlace(
+        [
+            makeIsland('A', 0, 0, 40, 400),
+            {
+                id: 'o0',
+                source: 'overhang',
+                contact: new THREE.Vector3(0, 0, 33),
+                baseZ: 33,
+                areaMm2: 400,
+                contactVoxels: footprintFromPoints(curvedVoxels),
+            },
+        ],
+        'model-a',
+        // Explicit density: the assertion is about fanning geometry, not the
+        // preset density default — keep the layout stable across preset bumps.
+        { debugSkipAutoBracing: true, areaPerSupportMm2: 8 },
+    );
+
+    assert.ok(result.placed.trunk >= 10, 'the organic region places its own pillar set');
+
+    const snapshot = getSnapshot();
+    const aTrunkRoot = Object.values(snapshot.roots).find(
+        (r) => Math.abs(r.transform.pos.x) < 1 && Math.abs(r.transform.pos.y) < 1,
+    );
+    assert.ok(aTrunkRoot, 'island A keeps its own root at the origin');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace keeps a later-placed island trunk independent of the surrounding grid', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // The distributed grid places FIRST (low z → high priority); the tiny
+    // island A places AFTER. A must stand as its own trunk, not be absorbed
+    // by a neighbouring pillar.
+    const curvedVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -10; y <= 10; y += 0.25) {
+            curvedVoxels.push({ x, y, z: 25 + (x * x) / 20 });
+        }
+    }
+    const result = runAutoPlace(
+        [
+            {
+                id: 'o0',
+                source: 'overhang',
+                contact: new THREE.Vector3(0, 0, 25),
+                baseZ: 25,
+                areaMm2: 400,
+                contactVoxels: footprintFromPoints(curvedVoxels),
+            },
+            makeIsland('A', 2.5, 0, 30, 0.5),
+        ],
+        'model-a',
+        // Explicit density: the assertion is about consolidation geometry, not
+        // the preset density default — keep the layout stable across bumps.
+        { debugSkipAutoBracing: true, areaPerSupportMm2: 8 },
+    );
+
+    const snapshot = getSnapshot();
+    const rootsNearA = Object.values(snapshot.roots).filter(
+        (r) => Math.abs(r.transform.pos.x - 2.5) < 0.5 && Math.abs(r.transform.pos.y) < 0.5,
+    );
+    assert.equal(rootsNearA.length, 1, 'island A stands as its own trunk (did not merge into a pillar)');
+
+    const aTrunk = Object.values(snapshot.trunks).find((t) => {
+        const r = snapshot.roots[t.rootId];
+        return r && Math.abs(r.transform.pos.x - 2.5) < 0.5 && Math.abs(r.transform.pos.y) < 0.5;
+    });
+    assert.ok(aTrunk, 'island A is the host');
+    const leavesOnA = Object.values(snapshot.leaves).filter((l) => {
+        const k = snapshot.knots[l.parentKnotId];
+        return k && (k.parentShaftId === aTrunk?.id || !!aTrunk?.segments.some((s) => s.id === k.parentShaftId));
+    });
+    assert.ok(rootsNearA.length === 1, 'island A remains the only root at its position');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace merges with a steep knot, not at the host junction', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // Island A sits 1.5 mm from trunk B's 40 mm shaft with its tip 1 mm
+    // below B's tip. (Kept clear of the dedup influence disc so A survives
+    // as its own candidate.) The old code knotted at B's junction (top
+    // joint) — a shallow branch; the first steep fix snapped to the DEEPEST
+    // qualifying sample (kZ≈28, a near-parallel "floating" leaf); the knot
+    // must now be the HIGHEST sample meeting the 60°-above-horizontal
+    // minimum (kZ≈37). B places first (higher Z → higher priority) and
+    // stands alone; A then merges into B as a steep leaf.
+    const result = runAutoPlace(
+        [
+            makeIsland('A', 1.5, 0, 40, 60),
+            makeIsland('B', 0, 0, 41, 16),
+        ],
+        'model-a',
+        { debugSkipAutoBracing: true,  },
+    );
+
+    assert.equal(result.placed.trunk, 1, 'one trunk — the merge never builds a second');
+    assert.ok(result.placed.leaf >= 1, 'A attached as a leaf');
+
+    const snapshot = getSnapshot();
+    const mergeKnot = Object.values(snapshot.knots).find((k) => k.id.startsWith('auto-merge-'));
+    assert.ok(mergeKnot, 'merge knot exists');
+    assert.ok(mergeKnot.pos.z >= 32 && mergeKnot.pos.z <= 38,
+        `knot snapped to the highest 60°-rise sample, not the base (kZ=${mergeKnot.pos.z.toFixed(1)})`);
+
+    const leaf = Object.values(snapshot.leaves).find((l) => l.origin === 'island');
+    assert.ok(leaf, 'merged leaf carries the island origin');
+
+    const placement = result.analytics?.placement;
+    // Higher-Z island B places first (priority order) and has no host;
+    // A then merges into B — the merge itself never refuses.
+    assert.deepEqual(placement?.mergeRefusals, { noHost: 1 }, 'only the first-placed island lacks a host');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace places low undersides as a standalone pillar forest', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // Two low overhang patches: o0 (flat 8×8 grid, above threshold) gets the
+    // fixed-density grid and consolidates into chunk trees; o15 is a 3×0.5 mm
+    // sliver below the threshold — a single standalone pillar.
+    const contactVoxels: { x: number; y: number }[] = [];
+    for (let x = -4; x <= 4; x += 0.25) {
+        for (let y = -4; y <= 4; y += 0.25) {
+            contactVoxels.push({ x, y });
+        }
+    }
+    const result = runAutoPlace(
+        [
+            {
+                id: 'o0', source: 'overhang',
+                contact: new THREE.Vector3(0, 0, 6.5), baseZ: 6.5,
+                areaMm2: 64, contactVoxels: footprintFromPoints(contactVoxels),
+            },
+            {
+                id: 'o15', source: 'overhang',
+                contact: new THREE.Vector3(3, 0, 8), baseZ: 8,
+                areaMm2: 16,
+                contactVoxels: footprintFromPoints([
+                    { x: 2.75, y: -0.25 }, { x: 3, y: -0.25 }, { x: 3.25, y: -0.25 },
+                    { x: 2.75, y: 0 }, { x: 3, y: 0 }, { x: 3.25, y: 0 },
+                    { x: 2.75, y: 0.25 }, { x: 3, y: 0.25 }, { x: 3.25, y: 0.25 },
+                ]),
+            },
+        ],
+        'model-a',
+        { debugSkipAutoBracing: true },
+    );
+
+    assert.equal(result.placed.branch, 0, 'leaves only — no routed branches');
+
+    const snapshot = getSnapshot();
+    const trunks = Object.values(snapshot.trunks);
+    assert.ok(trunks.some((t) => t.origin === 'overhang'), 'chunk hosts carry the overhang origin');
+    assert.ok(trunks.some((t) => t.origin === 'standalone'),
+        'the o15 sliver keeps its own standalone pillar');
+    assert.ok(result.placed.leaf >= 5,
+        `o0 consolidates into fan leaves (${result.placed.leaf})`);
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('runAutoPlace with no viable candidates returns changed=false and pushes nothing', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+
+    const result = runAutoPlace([], 'model-a');
+    assert.equal(result.changed, false);
+    assert.equal(Object.keys(getSnapshot().trunks).length, 0);
+});
+
+/**
+ * A punched drain hole above an interior contact used to delete the support:
+ * the upward contact ray escaped through the hole and the downward fallback
+ * landed on the cavity floor with a flipped normal, so the candidate was
+ * rejected and the cavity ceiling ended up unsupported. The resolver now
+ * steps a small disc around the tip before falling back.
+ */
+test('a punched hole above a cavity ceiling does not delete its support', () => {
+    // The types that bridge model-to-model, in registry order; each keeps its
+    // entities in its own collection.
+    const bridgeTypeIds = contactBridgeTypes();
+
+    const buildShell = (ceilingHoleMm: number | null): THREE.Mesh => {
+        const box = (w: number, h: number, d: number, x: number, y: number, z: number) => {
+            const g = new THREE.BoxGeometry(w, h, d);
+            g.translate(x, y, z);
+            return g;
+        };
+        // Interior cavity x,y ∈ (-8,8), z ∈ (2,10); ceiling at z ∈ (10,12).
+        const parts: THREE.BufferGeometry[] = [
+            box(2, 20, 12, -9, 0, 6),
+            box(2, 20, 12, 9, 0, 6),
+            box(20, 2, 12, 0, -9, 6),
+            box(20, 2, 12, 0, 9, 6),
+            box(20, 20, 2, 0, 0, 1),
+        ];
+        if (ceilingHoleMm === null) {
+            parts.push(box(20, 20, 2, 0, 0, 11));
+        } else {
+            const piece = (20 - ceilingHoleMm) / 2;
+            parts.push(box(piece, 20, 2, -(ceilingHoleMm + piece) / 2, 0, 11));
+            parts.push(box(piece, 20, 2, (ceilingHoleMm + piece) / 2, 0, 11));
+        }
+        const geometry = mergeGeometries(parts)!;
+        accelerateGeometry(geometry);
+        const mesh = new THREE.Mesh(geometry);
+        mesh.updateMatrixWorld();
+        return mesh;
+    };
+
+    const run = (ceilingHoleMm: number | null) => {
+        resetStore();
+        resetKickstandsInState();
+        clearHistory();
+        const disposeHandlers = registerSupportHistoryHandlers();
+        initializeBVH();
+        setModelMesh('model-a', buildShell(ceilingHoleMm));
+
+        const result = runAutoPlace([makeIsland('ceiling', 0, 0, 10, 16)], 'model-a', {
+            debugSkipAutoBracing: true,
+            stabilizationEnabled: false,
+        });
+        const snapshot = getSnapshot();
+        // Every bridging type's own collection, walked from the registry: a
+        // third bridge added later is picked up without touching this test.
+        const bridges = bridgeTypeIds.flatMap(
+            (typeId) => entitiesIn<SupportEntityAny>(snapshot, keyOf(typeId)),
+        );
+        const contacts = bridges.flatMap((b) => [
+            'contactConeA' in b ? b.contactConeA?.pos : undefined,
+            'contactConeB' in b ? b.contactConeB?.pos : undefined,
+            'contactDiskA' in b ? b.contactDiskA?.pos : undefined,
+            'contactDiskB' in b ? b.contactDiskB?.pos : undefined,
+        ]).filter((p): p is { x: number; y: number; z: number } => Boolean(p));
+
+        setModelMesh('model-a', null);
+        disposeHandlers();
+        return { result, contacts, bridges };
+    };
+
+    const sealed = run(null);
+    assert.equal(sealed.contacts.length, 2, 'sealed cavity: one bridge between ceiling and floor');
+    // Summed over every bridging type the registry declares.
+    const bridgePlacements = bridgeTypeIds.reduce(
+        (total, typeId) => total + (sealed.result.placed[typeId] ?? 0),
+        0,
+    );
+    assert.equal(
+        bridgePlacements,
+        sealed.bridges.length,
+        `every bridge is counted (${sealed.bridges.map((b) => b.id).join(', ')})`,
+    );
+
+    const punched = run(4);
+    assert.equal(punched.result.rejectedCandidates, 0,
+        `punched ceiling: the contact is not rejected (${punched.result.rejectedCandidates})`);
+    assert.equal(punched.contacts.length, 2, 'punched ceiling: the bridge is still placed');
+    const roofContact = punched.contacts.reduce((top, p) => (p.z > top.z ? p : top));
+    assert.ok(Math.abs(roofContact.z - 10) < 0.6,
+        `the contact stays on the ceiling, not on the far side (z=${roofContact.z.toFixed(2)})`);
+});
+
+/**
+ * A sealed cavity whose floor is within the stick/twig cutoff: the trunk cannot
+ * reach the plate, so the contact is bridged to the cavity floor just below it.
+ * A bridge that short is a twig.
+ */
+test('a short cavity bridge is built as a twig and counted', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    const box = (w: number, h: number, d: number, x: number, y: number, z: number) => {
+        const g = new THREE.BoxGeometry(w, h, d);
+        g.translate(x, y, z);
+        return g;
+    };
+    // Interior cavity x,y ∈ (-8,8), z ∈ (2,6); floor top at z=2, ceiling
+    // underside at z=6 — a 4mm span, inside the 5mm stick/twig cutoff.
+    const geometry = mergeGeometries([
+        box(2, 20, 12, -9, 0, 3),
+        box(2, 20, 12, 9, 0, 3),
+        box(20, 2, 12, 0, -9, 3),
+        box(20, 2, 12, 0, 9, 3),
+        box(20, 20, 2, 0, 0, 1),
+        box(20, 20, 2, 0, 0, 7),
+    ])!;
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const result = runAutoPlace([makeIsland('ceiling', 0, 0, 6, 16)], 'model-a', {
+        debugSkipAutoBracing: true,
+        stabilizationEnabled: false,
+    });
+
+    const snapshot = getSnapshot();
+    assert.equal(Object.keys(snapshot.twigs).length, 1, 'the short span bridges as a twig');
+    assert.equal(result.placed.twig, 1, 'the placed twig is counted');
+    assert.equal(result.changed, true, 'a twig-only run is a change');
+
+    // The diagnostic names the type that bridged, so a bridging type added
+    // later is reported without touching the auto-place pass.
+    const fallbacks = result.analytics?.forestReport?.diagnostics?.cavityFallbacks ?? [];
+    assert.equal(fallbacks.length, 1, 'the bridge is reported as a cavity fallback');
+    assert.equal(fallbacks[0]?.kind, 'twig', 'reported under the type that built it');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+/**
+ * The contact cone is clamped toward the surface normal, so a branch can pass
+ * the knot→tip gate and still run out of its host nearly level, bending into a
+ * steep cone only at the tip — on a speck field every branch chord read 30°
+ * while every shaft left the host at 42°. The gate has to look at the shaft.
+ */
+test('no branch leaves its host shallower than the branch-angle rule', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    const islands: DetectedIsland[] = [];
+    for (let i = 0; i < 36; i++) {
+        islands.push(makeIsland(`s${i}`, (i % 6) * 4 - 12, Math.floor(i / 6) * 4 - 12, 20, 1));
+    }
+    runAutoPlace(islands, 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
+
+    const snapshot = getSnapshot();
+    const minRiseDeg = getSettings().grid.minBranchAngleDeg;
+
+    const tooFlat: string[] = [];
+    for (const [id, branch] of Object.entries(snapshot.branches)) {
+        const knot = snapshot.knots[branch.parentKnotId];
+        const firstJoint = branch.segments[0]?.topJoint?.pos;
+        if (!knot || !firstJoint) continue;
+        const lateral = Math.hypot(firstJoint.x - knot.pos.x, firstJoint.y - knot.pos.y);
+        const riseDeg = (Math.atan2(firstJoint.z - knot.pos.z, lateral) * 180) / Math.PI;
+        if (riseDeg < minRiseDeg) tooFlat.push(`${id.slice(0, 8)} leaves at ${riseDeg.toFixed(0)}°`);
+    }
+    assert.deepEqual(tooFlat, [],
+        `every branch leaves its host at least ${minRiseDeg}° above horizontal`);
+
+    // And the contacts are still supported — refusing a sagging branch must
+    // fall through to a pillar, not drop the island.
+    const tips = [
+        ...Object.values(snapshot.trunks),
+        ...Object.values(snapshot.leaves),
+        ...Object.values(snapshot.branches),
+    ].flatMap((entity) => {
+        const cone = (entity as { contactCone?: { pos?: { x: number; y: number; z: number } } }).contactCone;
+        return cone?.pos ? [cone.pos] : [];
+    });
+    const unsupported = islands.filter((island) => !tips.some((tip) =>
+        Math.hypot(tip.x - island.contact.x, tip.y - island.contact.y, tip.z - island.contact.z) < 3,
+    ));
+    assert.deepEqual(unsupported.map((i) => i.id), [], 'every island keeps a support');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('grid mode attaches the tips on a flat region instead of dropping most of them', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // The same 20×20 flat underside the density-grid test uses, with the grid
+    // on. Its tips are on a ~1.5mm lattice and the grid nodes are 4mm apart, so
+    // most of them land between nodes and have to attach to the trunk standing
+    // there. The hosts are only as tall as the region's clearance, which is why
+    // the length-aware slack is what lets anything leave them.
+    const previous = getSettings();
+    const settings = createDefaultSettings();
+    settings.grid.enabled = true;
+    settings.grid.spacingMm = 4;
+    setSettings(settings);
+
+    const contactVoxels: { x: number; y: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = -10; y <= 10; y += 0.25) {
+            contactVoxels.push({ x, y });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'o0',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 0, 6.5),
+        baseZ: 6.5,
+        areaMm2: 400,
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true });
+
+    // Before the length-aware allowance this run kept 7 attachments and refused
+    // the rest: 25 trunks standing alone on a lattice, 74% area coverage.
+    assert.ok(result.placed.trunk >= 20,
+        `the nodes carry pillars (${result.placed.trunk})`);
+    assert.ok(result.placed.branch + result.placed.leaf >= 60,
+        `the tips between nodes attach (${result.placed.leaf} leaves, ${result.placed.branch} branches)`);
+    const areaCoverage = result.analytics?.areaCoverage ?? 0;
+    assert.ok(areaCoverage >= 0.95,
+        `the region ends up covered (${(areaCoverage * 100).toFixed(0)}%)`);
+
+    setModelMesh('model-a', null);
+    setSettings(previous);
+    disposeHandlers();
+});
+
+test('a long fan link becomes a pillar, never a tapered spike', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+
+    // A thin pillar to Z=20, and a lone tip 6mm to its side sitting 2.5mm above
+    // its top. Every sample of the host is then illegally shallow (the top of
+    // the host is the closest sample, and 6mm lateral over a 2.5mm drop is 67°
+    // from vertical) while the sample deep enough to be steep is outside a 3D
+    // 8mm reach — so the tip used to stand as its own pillar, or bridge to the
+    // model as a stick and leave a second scar.
+    const facetAt = (id: string, cx: number, cy: number, z: number, half: number): DetectedIsland => {
+        const voxels: { x: number; y: number }[] = [];
+        for (let x = cx - half; x <= cx + half; x += 0.25) {
+            for (let y = cy - half; y <= cy + half; y += 0.25) {
+                voxels.push({ x, y });
+            }
+        }
+        return {
+            id,
+            source: 'overhang',
+            contact: new THREE.Vector3(cx, cy, z),
+            baseZ: z,
+            areaMm2: (half * 2) * (half * 2),
+            contactVoxels: footprintFromPoints(voxels),
+        };
+    };
+
+    const host = facetAt('host-spike', 0, 0, 20, 2);
+    const neighbour = facetAt('lone-tip', 6, 0, 22.5, 2);
+
+    const result = runAutoPlace([host, neighbour], 'model-a', { debugSkipAutoBracing: true });
+
+    // The link that would carry this tip is ~12mm, past the leaf threshold, and
+    // this host's shaft gives no sample a legal branch departure — so the tip
+    // keeps a pillar. The 12.2mm tapered cone this used to build is exactly the
+    // shape the rule forbids, and a pillar is not worse: one plate contact and
+    // one model contact, the same as any trunk, and the consolidation pass can
+    // still chunk it into the forest.
+    assert.equal(result.placed.stick, 0,
+        `never bridged model-to-model (${result.placed.stick} sticks)`);
+    assertNoLeafPastBranchThreshold();
+    assert.equal(result.placed.leaf, 0, 'no leaf cone of the link length');
+    assert.equal(result.placed.branch, 0, 'and no branch this host could carry');
+    assert.ok(result.placed.trunk <= 2,
+        `it stands on the plate instead (${result.placed.trunk} trunks)`);
+    assert.ok((result.analytics?.areaCoverage ?? 0) >= 0.99, 'the contact is still supported');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+// ---------------------------------------------------------------------------
+// The near-plate band: auto-support builds the type that overrides it, not a
+// trunk. Run end to end, since the unit tests reach only `decideGridPlacement`
+// and not the override or the commit path.
+// ---------------------------------------------------------------------------
+
+test('runAutoPlace builds the near-plate overridden type for a low island, not a trunk', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+
+    // A tip below the near-plate threshold, with the serving type read from the
+    // declared band rather than named.
+    const TIP_Z = 3;
+    const nearPlateTypeId = selectTypeForPlacement('tipHeight', TIP_Z);
+    assert.ok(nearPlateTypeId, 'a type must claim the near-plate band');
+    // The default tool must not serve this band, or the assertions below would
+    // pass on the fallback.
+    assert.notEqual(
+        nearPlateTypeId,
+        defaultPlacementToolTypeId(),
+        'the near-plate band must resolve to a type other than the default tool',
+    );
+
+    const islands = [makeIsland('i-low', 0, 0, TIP_Z, 1)];
+    const result = runAutoPlace(islands, 'model-a');
+
+    // The planner reports it under the resolved id.
+    assert.equal(result.placed[nearPlateTypeId], 1, 'one support of the resolved type');
+    assert.equal(result.placed[defaultPlacementToolTypeId()] ?? 0, 0, 'no trunk stood on the band');
+
+    // The store holds exactly one, in that type's own collection and stamped
+    // with its type.
+    const snapshot = getSnapshot();
+    const stored = Object.values(snapshot.stumps) as Array<{
+        id: string; typeId?: string;
+        contactCone: { pos: { z: number } };
+        joint: { pos: { z: number } };
+    }>;
+    assert.equal(stored.length, 1, 'the store holds exactly one');
+    const entity = stored[0]!;
+    assert.equal(entity.typeId, nearPlateTypeId, 'the entity carries its own type');
+    assert.equal(getSupportTypeOf(entity.id), nearPlateTypeId, 'and resolves back to it');
+
+    // The type's own two invariants, checked on the committed entity: it meets
+    // the plate at the tip, and its cone never dips below the root joint.
+    assert.ok(
+        entity.contactCone.pos.z > entity.joint.pos.z - 1e-3,
+        `cone dips below the root joint: ${entity.contactCone.pos.z} < ${entity.joint.pos.z}`,
+    );
+    assert.ok(entity.joint.pos.z > 0, 'the root joint sits above the plate');
+
+    setModelMesh('model-a', null);
+});
+
+// ---------------------------------------------------------------------------
+// Model-scale sizing: the run-level factors reach the built geometry.
+// ---------------------------------------------------------------------------
+
+test('the same island sizes a thicker trunk on a big model than on a small one', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    initializeBVH();
+
+    /** Run the SAME single island against a box of the given footprint and
+     *  return the shaft diameter the run actually built. */
+    const shaftForBox = (sizeX: number, sizeY: number, sizeZ: number): number => {
+        const geometry = new THREE.BoxGeometry(sizeX, sizeY, sizeZ);
+        geometry.translate(0, 0, 10 + sizeZ / 2); // underside at z = 10
+        accelerateGeometry(geometry);
+        const mesh = new THREE.Mesh(geometry);
+        mesh.updateMatrixWorld();
+        setModelMesh('model-a', mesh);
+
+        resetStore();
+        const result = runAutoPlace([makeIsland('i1', 0, 0, 10, 100)], 'model-a', {
+            debugSkipAutoBracing: true,
+            stabilizationEnabled: false,
+        });
+        assert.equal(result.placed.trunk, 1, 'one trunk placed');
+        const trunk = Object.values(getSnapshot().trunks)[0]!;
+        return trunk.segments[0]!.diameter;
+    };
+
+    const small = shaftForBox(30, 30, 30);
+    const large = shaftForBox(220, 220, 60);
+    assert.ok(
+        large > small,
+        `the large model's trunk is thicker (${large.toFixed(2)} mm vs ${small.toFixed(2)} mm)`,
+    );
+
+    setModelMesh('model-a', null);
+});

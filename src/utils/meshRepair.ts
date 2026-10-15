@@ -17,6 +17,11 @@
  * the WASM Manifold repair path.
  */
 import * as THREE from 'three';
+import {
+  expandGeometryToTriangleSoup,
+  loadTauriCore,
+  readPositionsFromCommand,
+} from './tauriMeshBridge';
 
 export interface MeshAnalysisJson {
   triangle_count: number;
@@ -57,8 +62,18 @@ export interface MeshHealthReport {
   /** When present, the first N triangles in the repaired mesh are model body;
    *  the remainder are support geometry. Used to bake per-triangle vertex colors. */
   model_triangle_count?: number | null;
+  /** Result of the final manifold_csg status check on the model section, run at
+   *  the end of the native repair and classify routines. `false` means the CSG
+   *  backend reported some non-manifold status (open mesh, non-finite vertices,
+   *  out-of-bounds indices, etc.) and the model should render red;
+   *  `null`/undefined means the check did not run (manifold backend disabled). */
+  model_is_manifold?: boolean | null;
+  /** Specific manifold_csg status string when `model_is_manifold` is false. */
+  model_manifold_status?: string | null;
   residual_issues: string[];
   fully_repaired: boolean;
+  /** True when the run stopped at a stage boundary because the caller asked. */
+  cancelled: boolean;
   total_ms: number;
 }
 
@@ -68,9 +83,7 @@ export interface MeshRepairOptions {
   keepLargestNComponents?: number | null;
   repairOrientation?: boolean;
   resolveSelfIntersections?: boolean;
-  solidifyFragmentedComponents?: boolean;
-  solidifyComponentThreshold?: number;
-  solidifySelfIntersectionThreshold?: number;
+  assumeSupportGeometry?: boolean;
 }
 
 export interface MeshRepairResult {
@@ -120,18 +133,13 @@ interface RawMeshHealthReport extends UnknownRecord {
   likely_support_geometry?: unknown;
   likelySupportGeometry?: unknown;
   model_triangle_count?: unknown;
+  model_is_manifold?: unknown;
+  model_manifold_status?: unknown;
   residual_issues?: unknown;
   fully_repaired?: unknown;
+  cancelled?: unknown;
   total_ms?: unknown;
 }
-
-type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView, opts?: { headers?: Record<string, string> }) => Promise<T>;
-
-interface TauriCoreModule {
-  invoke: TauriInvoke;
-}
-
-let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 
 function asRecord(value: unknown): UnknownRecord {
   return value != null && typeof value === 'object' ? value as UnknownRecord : {};
@@ -207,48 +215,13 @@ function normalizeMeshHealthReport(input: unknown): MeshHealthReport {
     model_triangle_count: typeof raw.model_triangle_count === 'number' && raw.model_triangle_count > 0
       ? raw.model_triangle_count
       : null,
+    model_is_manifold: typeof raw.model_is_manifold === 'boolean' ? raw.model_is_manifold : null,
+    model_manifold_status: typeof raw.model_manifold_status === 'string' ? raw.model_manifold_status : null,
     residual_issues: asStringArray(raw.residual_issues),
     fully_repaired: asBoolean(raw.fully_repaired),
+    cancelled: asBoolean(raw.cancelled),
     total_ms: asNumber(raw.total_ms),
   };
-}
-
-export function isTauriRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  return '__TAURI_INTERNALS__' in window;
-}
-
-async function loadTauriCore(): Promise<TauriCoreModule | null> {
-  if (!isTauriRuntime()) return null;
-  if (!tauriCorePromise) {
-    tauriCorePromise = import('@tauri-apps/api/core')
-      .then((mod) => ({ invoke: mod.invoke as TauriInvoke }))
-      .catch(() => null);
-  }
-  return tauriCorePromise;
-}
-
-/**
- * Reads the repaired positions from the Rust staging buffer. Tauri v2 returns
- * raw `Response` body as an ArrayBuffer automatically when the command uses
- * `tauri::ipc::Response::new(bytes)`.
- */
-async function readStagedPositions(invoke: TauriInvoke): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>('mesh_repair_read_positions');
-  let u8: Uint8Array;
-  if (bytes instanceof ArrayBuffer) {
-    u8 = new Uint8Array(bytes);
-  } else if (bytes instanceof Uint8Array) {
-    u8 = bytes;
-  } else if (Array.isArray(bytes)) {
-    u8 = new Uint8Array(bytes);
-  } else {
-    throw new Error('mesh_repair_read_positions returned unexpected type');
-  }
-  // Copy into an aligned ArrayBuffer so the resulting Float32Array is self-contained.
-  const copy = new Uint8Array(u8.byteLength);
-  copy.set(u8);
-  return new Float32Array(copy.buffer);
 }
 
 /**
@@ -258,17 +231,52 @@ async function readStagedPositions(invoke: TauriInvoke): Promise<Float32Array> {
 export async function repairFromPath(
   filePath: string,
   options: MeshRepairOptions = {},
+  sink?: MeshRepairProgressSink,
 ): Promise<MeshRepairResult | null> {
   const core = await loadTauriCore();
   if (!core) return null;
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_repair_from_path', {
-    filePath,
-    optionsJson,
-  });
-  const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-  const positions = await readStagedPositions(core.invoke);
-  return { report, positions };
+  const optionsPayload = {
+    ...options,
+    assume_support_geometry: options.assumeSupportGeometry,
+  };
+  const optionsJson = JSON.stringify(optionsPayload);
+
+  const wantsProgress = Boolean(sink?.onProgress || sink?.onToken);
+  const token = wantsProgress ? crypto.randomUUID() : null;
+  let unlisten: (() => void) | null = null;
+  if (token && sink) {
+    sink.onToken?.(token);
+    unlisten = await core.listen<MeshRepairProgress>('mesh-repair-progress', (event) => {
+      const progress = event.payload;
+      if (progress && progress.token === token) sink.onProgress?.(progress);
+    });
+  }
+
+  try {
+    const reportJson = await core.invoke<string>('mesh_repair_from_path', {
+      filePath,
+      optionsJson,
+      progressToken: token,
+    });
+    const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
+    return { report, positions };
+  } finally {
+    unlisten?.();
+  }
+}
+
+/**
+ * Loads a mesh from a file path and returns its positions, repairing nothing.
+ *
+ * The webview refuses a `file://` fetch, so a path goes through Rust the way `repairFromPath` does
+ * and stops before the repair. Used to put a model back to how it arrived.
+ */
+export async function loadMeshFromPath(filePath: string): Promise<Float32Array | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+  await core.invoke<void>('mesh_load_from_path', { filePath });
+  return readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
 }
 
 /**
@@ -301,7 +309,19 @@ export async function analyzeFromGeometry(
  * be triggered. Matches the default thresholds in RepairOptions::default().
  */
 export function isHeavyRepair(analysis: MeshAnalysisJson): boolean {
-  return analysis.component_count >= 256 && analysis.self_intersections >= 128;
+  // The five classes the verdict is made of, not the crossings.
+  //
+  // A mesh that crosses itself and is otherwise sound prints, so telling a user their
+  // model needs a repair because of its crossings is how a good file ends up with
+  // minutes of work spent on it. What makes a repair heavy is fragmentation, which the
+  // pipeline resolves component by component, or a real defect: a bad edge, a hole, or
+  // a winding disagreement.
+  return (
+    analysis.component_count >= 256
+    || analysis.non_manifold_edges > 0
+    || analysis.boundary_loops > 0
+    || analysis.inconsistent_edges > 0
+  );
 }
 
 /**
@@ -309,9 +329,46 @@ export function isHeavyRepair(analysis: MeshAnalysisJson): boolean {
  * by staging its position buffer and invoking the staged-repair command.
  * Returns null if not running under Tauri.
  */
+/**
+ * One stage of a repair, as the engine announces it.
+ *
+ * A repair runs for seconds and a large mesh for minutes, so the stages are what a
+ * progress display has to show. `index` is the 1-based position among the stages
+ * reported so far, and the total is not known upfront because two stages are
+ * conditional.
+ */
+export interface MeshRepairProgress {
+  token: string;
+  name: string;
+  index: number;
+}
+
+export interface MeshRepairProgressSink {
+  /** Called as each stage starts. */
+  onProgress?: (progress: MeshRepairProgress) => void;
+  /**
+   * Called with the run's token before it starts, so the caller can hold onto it
+   * and cancel. A cancel lands at the next stage boundary, never mid-pass.
+   */
+  onToken?: (token: string) => void;
+}
+
+/**
+ * Asks a repair in flight to stop at its next stage boundary.
+ *
+ * Returns whether a repair was carrying that token. A cancel arriving after the run
+ * finished is a no-op rather than an error.
+ */
+export async function cancelMeshRepair(token: string): Promise<boolean> {
+  const core = await loadTauriCore();
+  if (!core) return false;
+  return core.invoke<boolean>('mesh_repair_cancel', { progressToken: token });
+}
+
 export async function repairFromGeometry(
   geometry: THREE.BufferGeometry,
   options: MeshRepairOptions = {},
+  sink?: MeshRepairProgressSink,
 ): Promise<MeshRepairResult | null> {
   const core = await loadTauriCore();
   if (!core) return null;
@@ -328,13 +385,33 @@ export async function repairFromGeometry(
     headers: { 'Content-Type': 'application/octet-stream' },
   });
 
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_repair_staged', {
-    optionsJson,
-  });
-  const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-  const positions = await readStagedPositions(core.invoke);
-  return { report, positions };
+  const optionsPayload = {
+    ...options,
+    assume_support_geometry: options.assumeSupportGeometry,
+  };
+  const optionsJson = JSON.stringify(optionsPayload);
+  const wantsProgress = Boolean(sink?.onProgress || sink?.onToken);
+  const token = wantsProgress ? crypto.randomUUID() : null;
+  let unlisten: (() => void) | null = null;
+  if (token && sink) {
+    sink.onToken?.(token);
+    unlisten = await core.listen<MeshRepairProgress>('mesh-repair-progress', (event) => {
+      const progress = event.payload;
+      if (progress && progress.token === token) sink.onProgress?.(progress);
+    });
+  }
+
+  try {
+    const reportJson = await core.invoke<string>('mesh_repair_staged', {
+      optionsJson,
+      progressToken: token,
+    });
+    const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
+    return { report, positions };
+  } finally {
+    unlisten?.();
+  }
 }
 
 /**
@@ -344,6 +421,7 @@ export async function repairFromGeometry(
  */
 export async function classifyFromGeometry(
   geometry: THREE.BufferGeometry,
+  options: MeshRepairOptions = {},
 ): Promise<MeshRepairResult | null> {
   const core = await loadTauriCore();
   if (!core) return null;
@@ -358,9 +436,16 @@ export async function classifyFromGeometry(
     headers: { 'Content-Type': 'application/octet-stream' },
   });
 
-  const reportJson = await core.invoke<string>('mesh_classify_staged');
+  const optionsPayload = {
+    ...options,
+    assume_support_geometry: options.assumeSupportGeometry,
+  };
+  const optionsJson = JSON.stringify(optionsPayload);
+  const reportJson = await core.invoke<string>('mesh_classify_staged', {
+    optionsJson,
+  });
   const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-  const positions = await readStagedPositions(core.invoke);
+  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
   return { report, positions };
 }
 
@@ -385,27 +470,3 @@ export function applyRepairedPositions(
   geometry.computeBoundingSphere();
 }
 
-function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {
-  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const positions = posAttr.array as Float32Array;
-  const index = geometry.getIndex();
-
-  if (!index) {
-    // Already triangle soup, but caller may pass non-Float32Array — coerce.
-    if (positions instanceof Float32Array) {
-      return positions;
-    }
-    return new Float32Array(positions as unknown as ArrayLike<number>);
-  }
-
-  const indexArr = index.array as Uint16Array | Uint32Array;
-  const out = new Float32Array(indexArr.length * 3);
-  for (let i = 0; i < indexArr.length; i++) {
-    const vi = indexArr[i] * 3;
-    const oi = i * 3;
-    out[oi] = positions[vi];
-    out[oi + 1] = positions[vi + 1];
-    out[oi + 2] = positions[vi + 2];
-  }
-  return out;
-}

@@ -9,7 +9,7 @@ use crate::encoders::registry::{
 };
 use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
-use crate::metrics::SlicingPerfV3;
+use crate::metrics::{add_elapsed, EncodeStageCounters, SlicingPerfV3};
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
 use crate::raster::{
     apply_blur_postprocess_inplace_with_roi, blur_gray_rle_streaming,
@@ -28,6 +28,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -189,7 +190,9 @@ struct PerturbRleModelLayer {
 #[derive(Clone)]
 struct PendingPerturbRleLayer {
     layer_idx: u32,
-    model: PerturbRleModelLayer,
+    // #386 fix (Arc window): shared so the z-blur window is not deep-cloned into
+    // every dispatched post-task. Read-only downstream in the blur.
+    model: Arc<PerturbRleModelLayer>,
     support_runs: Option<Vec<crate::rle::RleRun>>,
 }
 
@@ -210,10 +213,13 @@ struct PerturbRlePostOutput {
 
 struct PerturbRlePostReadyTask {
     layer_idx: u32,
-    model: PerturbRleModelLayer,
+    // #386 fix (Arc window): the center layer plus its Z-blur neighbor window are
+    // shared (Arc) instead of deep-cloned. `future` carries only the model layers
+    // (the blur reads model runs/bounds only), so it no longer clones support runs.
+    model: Arc<PerturbRleModelLayer>,
     support_runs: Option<Vec<crate::rle::RleRun>>,
-    history: Vec<PerturbRleModelLayer>,
-    future: Vec<PendingPerturbRleLayer>,
+    history: Vec<Arc<PerturbRleModelLayer>>,
+    future: Vec<Arc<PerturbRleModelLayer>>,
 }
 
 impl<'a> RleRowDecoder<'a> {
@@ -225,7 +231,7 @@ impl<'a> RleRowDecoder<'a> {
         }
     }
 
-    fn skip_pixels(&mut self, mut count: usize) {
+    pub(crate) fn skip_pixels(&mut self, mut count: usize) {
         while count > 0 {
             if self.run_idx >= self.runs.len() {
                 break;
@@ -285,7 +291,7 @@ impl<'a> RleRowDecoder<'a> {
 }
 
 #[inline]
-fn nonzero_bounds_from_rle_runs(
+pub(crate) fn nonzero_bounds_from_rle_runs(
     runs: &[crate::rle::RleRun],
     width: usize,
     height: usize,
@@ -352,8 +358,8 @@ fn merge_nonzero_bounds(current: &mut RleNonzeroBounds, next: RleNonzeroBounds) 
 
 fn apply_z_weighted_blur_to_rle_layer(
     center: &PerturbRleModelLayer,
-    history: &VecDeque<PerturbRleModelLayer>,
-    future: &VecDeque<PendingPerturbRleLayer>,
+    history: &[Arc<PerturbRleModelLayer>],
+    future: &[Arc<PerturbRleModelLayer>],
     radius: usize,
     weights: &[u32],
     width: usize,
@@ -375,11 +381,7 @@ fn apply_z_weighted_blur_to_rle_layer(
             sources.push((weight, prior.runs.as_slice(), prior.bounds));
         }
         if let Some(next_layer) = future.get(dist - 1) {
-            sources.push((
-                weight,
-                next_layer.model.runs.as_slice(),
-                next_layer.model.bounds,
-            ));
+            sources.push((weight, next_layer.runs.as_slice(), next_layer.bounds));
         }
     }
 
@@ -462,23 +464,20 @@ fn finalize_perturb_rle_post_layer(
     dither_palette: Option<&crate::dither::DitherPaletteV3>,
     width: usize,
     height: usize,
-    post_blur_ns: &AtomicU64,
-    support_merge_ns: &AtomicU64,
+    post: &PostStageCounters,
 ) -> PerturbRlePostOutput {
-    let history: VecDeque<PerturbRleModelLayer> = task.history.into();
-    let future: VecDeque<PendingPerturbRleLayer> = task.future.into();
-
+    // #386 fix (Arc window): neighbors are shared Arc slices; no per-task deep copy.
     let z_blur_start = std::time::Instant::now();
     let mut final_runs = apply_z_weighted_blur_to_rle_layer(
         &task.model,
-        &history,
-        &future,
+        &task.history,
+        &task.future,
         z_blur_radius,
         z_blur_weights,
         width,
         height,
     );
-    post_blur_ns.fetch_add(
+    post.post_blur_ns.fetch_add(
         z_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
         Ordering::Relaxed,
     );
@@ -487,23 +486,17 @@ fn finalize_perturb_rle_post_layer(
         let lut_start = std::time::Instant::now();
         final_runs =
             crate::dither::dither_rle_layer_with_lut_and_gamma(&final_runs, palette, width, height);
-        post_blur_ns.fetch_add(
-            lut_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-            Ordering::Relaxed,
-        );
+        add_elapsed(&post.dither_ns, lut_start);
     } else if let Some(lut) = tail_cure_lut {
         let lut_start = std::time::Instant::now();
         final_runs = remap_gray_rle_with_lut(&final_runs, lut);
-        post_blur_ns.fetch_add(
-            lut_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-            Ordering::Relaxed,
-        );
+        add_elapsed(&post.tail_remap_ns, lut_start);
     }
 
     if let Some(ref support_runs) = task.support_runs {
         let support_merge_start = std::time::Instant::now();
         final_runs = merge_rle_max(final_runs, support_runs);
-        support_merge_ns.fetch_add(
+        post.support_merge_ns.fetch_add(
             support_merge_start
                 .elapsed()
                 .as_nanos()
@@ -1006,6 +999,20 @@ struct PostWorkerTask {
     zaa_config: zaa::ZaaKernelConfig,
 }
 
+/// The post-stage timers that travel together through the 3DAA pump.
+///
+/// Every field is a sum of the wall time spent inside that stage, accumulated
+/// across the post workers.  With more workers than cores those sums overcount
+/// against process CPU time — a descheduled worker is still inside the stage —
+/// so read them against `daa_post_threads`, not as CPU.
+#[derive(Debug, Default)]
+struct PostStageCounters {
+    post_blur_ns: AtomicU64,
+    dither_ns: AtomicU64,
+    tail_remap_ns: AtomicU64,
+    support_merge_ns: AtomicU64,
+}
+
 struct PostProcessedLayer {
     seq: u64,
     layer: PendingLayer,
@@ -1017,6 +1024,8 @@ struct PostProcessedLayer {
     cross_blend_touched_pixels: u64,
     cross_blend_contributing_layers: u64,
     post_blur_ns: u64,
+    dither_ns: u64,
+    tail_remap_ns: u64,
     support_merge_ns: u64,
 }
 
@@ -1223,24 +1232,30 @@ fn apply_tail_remap_and_support_merge(
     layer: &mut PostProcessedLayer,
     tail_lut: Option<&[u8; 256]>,
     dither_palette: Option<&crate::dither::DitherPaletteV3>,
-) -> (u64, u64) {
+) -> (u64, u64, u64) {
     let Some(bounds) = layer.active_bounds else {
-        return (0, 0);
+        return (0, 0, 0);
     };
 
     let mut mask = expand_bounded_gray_mask_to_bounds(std::mem::take(&mut layer.mask), bounds);
 
-    let remap_start = std::time::Instant::now();
+    // Dither and remap are alternatives, and they cost wildly different amounts;
+    // timing them as one number hid the dither entirely.
+    let mut dither_ns = 0u64;
+    let mut remap_ns = 0u64;
     if let Some(palette) = dither_palette {
+        let start = std::time::Instant::now();
         let row_width = bounds.1 - bounds.0 + 1;
         let row_height = bounds.3 - bounds.2 + 1;
         crate::dither::dither_mask_in_bounds(&mut mask, row_width, row_height, palette);
+        dither_ns = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
     } else if let Some(lut) = tail_lut {
+        let start = std::time::Instant::now();
         for px in mask.iter_mut() {
             *px = lut[*px as usize];
         }
+        remap_ns = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
     }
-    let remap_ns = remap_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
 
     let mut support_merge_ns = 0u64;
     if let Some(support_mask) = layer.layer.support_mask.as_ref() {
@@ -1250,7 +1265,7 @@ fn apply_tail_remap_and_support_merge(
     }
 
     layer.mask = BoundedGrayMask::from_rows(bounds, mask);
-    (remap_ns, support_merge_ns)
+    (dither_ns, remap_ns, support_merge_ns)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1269,16 +1284,16 @@ fn enqueue_post_processed_layer(
     cross_blend_ns: &AtomicU64,
     cross_blend_touched_pixels: &AtomicU64,
     cross_blend_contributing_layers: &AtomicU64,
-    post_blur_ns: &AtomicU64,
-    support_merge_ns: &AtomicU64,
+    post: &PostStageCounters,
     forwarded_layers: &AtomicU64,
 ) -> Result<(), SlicerV3Error> {
     let mut done = done;
 
     let Some(state) = z_blur_state.as_mut() else {
-        let (tail_remap_ns, tail_support_merge_ns) =
+        let (tail_dither_ns, tail_remap_ns, tail_support_merge_ns) =
             apply_tail_remap_and_support_merge(&mut done, tail_lut, dither_palette);
-        done.post_blur_ns = done.post_blur_ns.saturating_add(tail_remap_ns);
+        done.dither_ns = done.dither_ns.saturating_add(tail_dither_ns);
+        done.tail_remap_ns = done.tail_remap_ns.saturating_add(tail_remap_ns);
         done.support_merge_ns = done.support_merge_ns.saturating_add(tail_support_merge_ns);
 
         return forward_to_encode(
@@ -1292,8 +1307,7 @@ fn enqueue_post_processed_layer(
             cross_blend_ns,
             cross_blend_touched_pixels,
             cross_blend_contributing_layers,
-            post_blur_ns,
-            support_merge_ns,
+            post,
             forwarded_layers,
         );
     };
@@ -1317,9 +1331,10 @@ fn enqueue_post_processed_layer(
             z_blur_weights,
         );
 
-        let (tail_remap_ns, tail_support_merge_ns) =
+        let (tail_dither_ns, tail_remap_ns, tail_support_merge_ns) =
             apply_tail_remap_and_support_merge(&mut next, tail_lut, dither_palette);
-        next.post_blur_ns = next.post_blur_ns.saturating_add(tail_remap_ns);
+        next.dither_ns = next.dither_ns.saturating_add(tail_dither_ns);
+        next.tail_remap_ns = next.tail_remap_ns.saturating_add(tail_remap_ns);
         next.support_merge_ns = next.support_merge_ns.saturating_add(tail_support_merge_ns);
 
         forward_to_encode(
@@ -1333,8 +1348,7 @@ fn enqueue_post_processed_layer(
             cross_blend_ns,
             cross_blend_touched_pixels,
             cross_blend_contributing_layers,
-            post_blur_ns,
-            support_merge_ns,
+            post,
             forwarded_layers,
         )?;
 
@@ -1362,8 +1376,7 @@ fn flush_post_processed_layers(
     cross_blend_ns: &AtomicU64,
     cross_blend_touched_pixels: &AtomicU64,
     cross_blend_contributing_layers: &AtomicU64,
-    post_blur_ns: &AtomicU64,
-    support_merge_ns: &AtomicU64,
+    post: &PostStageCounters,
     forwarded_layers: &AtomicU64,
 ) -> Result<(), SlicerV3Error> {
     let Some(state) = z_blur_state.as_mut() else {
@@ -1383,9 +1396,10 @@ fn flush_post_processed_layers(
             z_blur_weights,
         );
 
-        let (tail_remap_ns, tail_support_merge_ns) =
+        let (tail_dither_ns, tail_remap_ns, tail_support_merge_ns) =
             apply_tail_remap_and_support_merge(&mut next, tail_lut, dither_palette);
-        next.post_blur_ns = next.post_blur_ns.saturating_add(tail_remap_ns);
+        next.dither_ns = next.dither_ns.saturating_add(tail_dither_ns);
+        next.tail_remap_ns = next.tail_remap_ns.saturating_add(tail_remap_ns);
         next.support_merge_ns = next.support_merge_ns.saturating_add(tail_support_merge_ns);
 
         forward_to_encode(
@@ -1399,8 +1413,7 @@ fn flush_post_processed_layers(
             cross_blend_ns,
             cross_blend_touched_pixels,
             cross_blend_contributing_layers,
-            post_blur_ns,
-            support_merge_ns,
+            post,
             forwarded_layers,
         )?;
 
@@ -1425,6 +1438,8 @@ struct PumpStats {
     cross_blend_touched_pixels: u64,
     cross_blend_contributing_layers: u64,
     post_blur_ns: u64,
+    dither_ns: u64,
+    tail_remap_ns: u64,
     support_merge_ns: u64,
     /// Total time spent inside the topology-sweep step across all layers.
     callback_sweep_ns: u64,
@@ -1569,6 +1584,8 @@ fn process_pending_layer_post(
             cross_blend_touched_pixels: 0,
             cross_blend_contributing_layers: 0,
             post_blur_ns: 0,
+            dither_ns: 0,
+            tail_remap_ns: 0,
             support_merge_ns: 0,
         };
     };
@@ -1645,6 +1662,8 @@ fn process_pending_layer_post(
         cross_blend_touched_pixels: kernel_stats.cross_blend_touched_pixels,
         cross_blend_contributing_layers: kernel_stats.cross_blend_contributing_layers,
         post_blur_ns,
+        dither_ns: 0,
+        tail_remap_ns: 0,
         support_merge_ns,
     }
 }
@@ -1668,8 +1687,7 @@ fn forward_to_encode(
     cross_blend_ns: &AtomicU64,
     cross_blend_touched_pixels: &AtomicU64,
     cross_blend_contributing_layers: &AtomicU64,
-    post_blur_ns: &AtomicU64,
-    support_merge_ns: &AtomicU64,
+    post: &PostStageCounters,
     forwarded_layers: &AtomicU64,
 ) -> Result<(), SlicerV3Error> {
     // Perf counters (cheap atomics).
@@ -1679,8 +1697,10 @@ fn forward_to_encode(
     cross_blend_touched_pixels.fetch_add(done.cross_blend_touched_pixels, Ordering::Relaxed);
     cross_blend_contributing_layers
         .fetch_add(done.cross_blend_contributing_layers, Ordering::Relaxed);
-    post_blur_ns.fetch_add(done.post_blur_ns, Ordering::Relaxed);
-    support_merge_ns.fetch_add(done.support_merge_ns, Ordering::Relaxed);
+    post.post_blur_ns.fetch_add(done.post_blur_ns, Ordering::Relaxed);
+    post.dither_ns.fetch_add(done.dither_ns, Ordering::Relaxed);
+    post.tail_remap_ns.fetch_add(done.tail_remap_ns, Ordering::Relaxed);
+    post.support_merge_ns.fetch_add(done.support_merge_ns, Ordering::Relaxed);
 
     // Topology window for future cross-blend priors (consumer-thread state).
     if keep_emitted_topologies {
@@ -1761,8 +1781,7 @@ fn rasterize_vertical_aa_streaming_v3(
     let blur_sigma_x = job.blur_brush_sigma_x();
     let blur_sigma_y = job.blur_brush_sigma_y();
     let tail_cure_lut = job.normalized_tail_cure_lut();
-    let dither_palette = if job.dither_enabled {
-        let bit_depth = job.dither_bit_depth.unwrap_or(3);
+    let dither_palette = if let Some(bit_depth) = job.effective_dither_bit_depth() {
         let active_lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
             let mut identity = [0u8; 256];
             for (i, v) in identity.iter_mut().enumerate() {
@@ -1821,6 +1840,11 @@ fn rasterize_vertical_aa_streaming_v3(
     // letting the thread exit cleanly).  Rust's reverse-drop order ensures this
     // even on early `?` returns.
     let encode_handle_guard: EncodeThreadHandle;
+    // The encode thread is a single consumer; these make its cost visible to the
+    // caller instead of only to the [3DAA] stderr diagnostic.
+    let enc_format_ns = Arc::new(AtomicU64::new(0));
+    let enc_png_ns = Arc::new(AtomicU64::new(0));
+    let enc_wall_ns = Arc::new(AtomicU64::new(0));
     // Encode channel capacity.  Each in-flight 12K layer is ~59 MB.
     //
     // Depth=3 for huge layers (RLE baseline): absorbs short encode bursts while
@@ -1880,6 +1904,9 @@ fn rasterize_vertical_aa_streaming_v3(
         let encoded_layers_enc = Arc::clone(&encoded_layers);
         let mut png_layers_enc = png_layers;
         let mut raw_mask_layers_enc = raw_mask_layers;
+        let enc_format_ns_t = Arc::clone(&enc_format_ns);
+        let enc_png_ns_t = Arc::clone(&enc_png_ns);
+        let enc_wall_ns_t = Arc::clone(&enc_wall_ns);
         let encode_thread = std::thread::Builder::new()
             .name("3daa-encode".to_string())
             .spawn(
@@ -1968,6 +1995,12 @@ fn rasterize_vertical_aa_streaming_v3(
                         }
                     }
                     let total_encode_s = encode_start.elapsed().as_secs_f64();
+                    enc_format_ns_t.store(format_ns, Ordering::Relaxed);
+                    enc_png_ns_t.store(png_ns, Ordering::Relaxed);
+                    enc_wall_ns_t.store(
+                        encode_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                        Ordering::Relaxed,
+                    );
                     let enc_n = enc_total_layers.max(1) as f64;
                     let ms = |ns: u64| ns as f64 / 1_000_000.0;
                     eprintln!(
@@ -2214,8 +2247,7 @@ fn rasterize_vertical_aa_streaming_v3(
             let cross_blend_ns = AtomicU64::new(0);
             let cross_blend_touched_pixels = AtomicU64::new(0);
             let cross_blend_contributing_layers = AtomicU64::new(0);
-            let post_blur_ns = AtomicU64::new(0);
-            let support_merge_ns = AtomicU64::new(0);
+            let post = PostStageCounters::default();
             let callback_sweep_ns = AtomicU64::new(0);
             let callback_drain_ns = AtomicU64::new(0);
             let callback_total_ns = AtomicU64::new(0);
@@ -2569,8 +2601,7 @@ fn rasterize_vertical_aa_streaming_v3(
                                             &cross_blend_ns,
                                             &cross_blend_touched_pixels,
                                             &cross_blend_contributing_layers,
-                                            &post_blur_ns,
-                                            &support_merge_ns,
+                                            &post,
                                             forwarded_layers.as_ref(),
                                         )?;
                                         post_next_emit_seq = post_next_emit_seq.wrapping_add(1);
@@ -2663,8 +2694,7 @@ fn rasterize_vertical_aa_streaming_v3(
                                 &cross_blend_ns,
                                 &cross_blend_touched_pixels,
                                 &cross_blend_contributing_layers,
-                                &post_blur_ns,
-                                &support_merge_ns,
+                                &post,
                                 forwarded_layers.as_ref(),
                             )?;
                             // Advance the backward-prior window after dispatch.
@@ -2798,8 +2828,7 @@ fn rasterize_vertical_aa_streaming_v3(
                                     &cross_blend_ns,
                                     &cross_blend_touched_pixels,
                                     &cross_blend_contributing_layers,
-                                    &post_blur_ns,
-                                    &support_merge_ns,
+                                    &post,
                                     forwarded_layers.as_ref(),
                                 )?;
                                 post_next_emit_seq = post_next_emit_seq.wrapping_add(1);
@@ -2863,8 +2892,7 @@ fn rasterize_vertical_aa_streaming_v3(
                         &cross_blend_ns,
                         &cross_blend_touched_pixels,
                         &cross_blend_contributing_layers,
-                        &post_blur_ns,
-                        &support_merge_ns,
+                        &post,
                         forwarded_layers.as_ref(),
                     )?;
                     dispatched_topo_window.push_back(dispatched_topo);
@@ -2896,8 +2924,7 @@ fn rasterize_vertical_aa_streaming_v3(
                             &cross_blend_ns,
                             &cross_blend_touched_pixels,
                             &cross_blend_contributing_layers,
-                            &post_blur_ns,
-                            &support_merge_ns,
+                            &post,
                             forwarded_layers.as_ref(),
                         )?;
                         post_next_emit_seq = post_next_emit_seq.wrapping_add(1);
@@ -2919,8 +2946,7 @@ fn rasterize_vertical_aa_streaming_v3(
                 &cross_blend_ns,
                 &cross_blend_touched_pixels,
                 &cross_blend_contributing_layers,
-                &post_blur_ns,
-                &support_merge_ns,
+                &post,
                 forwarded_layers.as_ref(),
             )?;
 
@@ -2934,8 +2960,10 @@ fn rasterize_vertical_aa_streaming_v3(
                 cross_blend_touched_pixels: cross_blend_touched_pixels.load(Ordering::Relaxed),
                 cross_blend_contributing_layers: cross_blend_contributing_layers
                     .load(Ordering::Relaxed),
-                post_blur_ns: post_blur_ns.load(Ordering::Relaxed),
-                support_merge_ns: support_merge_ns.load(Ordering::Relaxed),
+                post_blur_ns: post.post_blur_ns.load(Ordering::Relaxed),
+                dither_ns: post.dither_ns.load(Ordering::Relaxed),
+                tail_remap_ns: post.tail_remap_ns.load(Ordering::Relaxed),
+                support_merge_ns: post.support_merge_ns.load(Ordering::Relaxed),
                 callback_sweep_ns: callback_sweep_ns.load(Ordering::Relaxed),
                 callback_drain_ns: callback_drain_ns.load(Ordering::Relaxed),
                 callback_total_ns: callback_total_ns.load(Ordering::Relaxed),
@@ -2991,7 +3019,12 @@ fn rasterize_vertical_aa_streaming_v3(
     perf.cross_blend_touched_pixels = pump_stats.cross_blend_touched_pixels;
     perf.cross_blend_contributing_layers = pump_stats.cross_blend_contributing_layers;
     perf.post_blur_ns = pump_stats.post_blur_ns;
+    perf.encode_dither_ns = pump_stats.dither_ns;
+    perf.tail_remap_ns = pump_stats.tail_remap_ns;
     perf.support_merge_ns = pump_stats.support_merge_ns;
+    perf.encode_format_ns = enc_format_ns.load(Ordering::Relaxed);
+    perf.encode_png_ns = enc_png_ns.load(Ordering::Relaxed);
+    perf.encode_thread_wall_ns = enc_wall_ns.load(Ordering::Relaxed);
     perf.daa_post_threads = post_worker_count as u32;
     perf.daa_post_buffer_depth = post_buffer_depth as u32;
 
@@ -3892,6 +3925,126 @@ pub fn slice_and_rasterize_rle_blocks_v3(
 /// The rasterizer emits Z-perturbed grayscale RLE directly.  This function then
 /// applies the Aaron-style ordering while staying RLE/row-streamed:
 /// per-layer XY blur → bounded symmetric Z blur → LUT/remap → support merge.
+// 3DAA Stats: monotonic max update on an atomic.
+fn atomic_max(cell: &AtomicUsize, val: usize) {
+    let mut cur = cell.load(Ordering::Relaxed);
+    while val > cur {
+        match cell.compare_exchange_weak(cur, val, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(prev) => cur = prev,
+        }
+    }
+}
+
+// 3DAA Stats: process resident set size in MB.
+//
+// Was /proc/self/statm, which exists only on Linux — on macOS and Windows this
+// silently reported 0 MB, so the stats line lied on two of the three platforms
+// we ship. sysinfo reports the same figure everywhere.
+//
+// The System is reused: this runs every 32 emitted layers, and building a fresh
+// one per call would allocate its way into the very RSS it is measuring.
+fn diag_read_rss_mb() -> f64 {
+    static SYS: OnceLock<Mutex<sysinfo::System>> = OnceLock::new();
+    let Ok(pid) = sysinfo::get_current_pid() else {
+        return 0.0;
+    };
+    let Ok(mut sys) = SYS.get_or_init(|| Mutex::new(sysinfo::System::new())).lock() else {
+        return 0.0;
+    };
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        false,
+        sysinfo::ProcessRefreshKind::nothing().with_memory(),
+    );
+    sys.process(pid)
+        .map(|proc| proc.memory() as f64 / 1_048_576.0)
+        .unwrap_or(0.0)
+}
+
+/// Best-effort currently-available physical RAM, in bytes. `None` when the
+/// platform can't be queried, so callers fall back to a fixed cap (issue #386).
+fn available_ram_bytes() -> Option<u64> {
+    // Ask for the RAM figures and nothing else: System::new_all() enumerates
+    // every process, disk, network and component on the machine to read one
+    // number, and then refresh_memory() went over the memory again.
+    let sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing()
+            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+    );
+    Some(sys.available_memory())
+}
+
+/// Counting semaphore bounding the number of outstanding (dispatched-but-unfinished)
+/// perturbation-3DAA post/z-blur tasks. Each outstanding task pins ~one more model
+/// layer resident (the z-blur window is Arc-shared across neighbours), so an
+/// unbounded spawn count is the #386 OOM driver. Acquiring here blocks the single
+/// `post_worker` dispatch thread, which propagates backpressure through
+/// `post_rx`/`post_tx` up to the rasterizer.
+///
+/// `max` is adjustable at runtime via [`PostTaskGate::retune`] so the cap can track
+/// whichever resource is scarcer: `post_worker_count` sets the floor (keep the post
+/// pool fed) while available RAM sets the ceiling. It lives inside the same mutex as
+/// the count so cap changes and the acquire predicate can't race (issue #386).
+struct GateState {
+    count: usize,
+    max: usize,
+}
+
+struct PostTaskGate {
+    state: std::sync::Mutex<GateState>,
+    cv: std::sync::Condvar,
+}
+
+impl PostTaskGate {
+    fn new(max: usize) -> Self {
+        Self {
+            state: std::sync::Mutex::new(GateState {
+                count: 0,
+                max: max.max(1),
+            }),
+            cv: std::sync::Condvar::new(),
+        }
+    }
+
+    fn acquire(&self) {
+        let mut s = self.state.lock().unwrap();
+        while s.count >= s.max {
+            s = self.cv.wait(s).unwrap();
+        }
+        s.count += 1;
+    }
+
+    fn release(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.count = s.count.saturating_sub(1);
+        drop(s);
+        self.cv.notify_one();
+    }
+
+    /// #386 adaptive: resize the in-flight cap while slicing. Raising it wakes any
+    /// blocked dispatch; lowering it just makes the next `acquire` block sooner.
+    /// No-op when the cap is unchanged, so a monotonically-shrinking cap won't
+    /// spam wakeups.
+    fn retune(&self, new_max: usize) {
+        let new_max = new_max.max(1);
+        let mut s = self.state.lock().unwrap();
+        if s.max == new_max {
+            return;
+        }
+        let old_max = s.max;
+        let grew = new_max > old_max;
+        s.max = new_max;
+        drop(s);
+        // Log every real cap change so a future debugger can see when RAM
+        // pressure resized the in-flight queue and by how much (issue #386).
+        eprintln!("[In-flight Cap] post-task in-flight cap {old_max} -> {new_max}");
+        if grew {
+            self.cv.notify_all();
+        }
+    }
+}
+
 pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     job: &SliceJobV3,
     compute_area_stats: bool,
@@ -3955,8 +4108,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
         job.z_blur_sigma(),
     );
     let tail_cure_lut = job.normalized_tail_cure_lut();
-    let dither_palette = if job.dither_enabled {
-        let bit_depth = job.dither_bit_depth.unwrap_or(3);
+    let dither_palette = if let Some(bit_depth) = job.effective_dither_bit_depth() {
         let active_lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
             let mut identity = [0u8; 256];
             for (i, v) in identity.iter_mut().enumerate() {
@@ -3972,33 +4124,99 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     } else {
         None
     };
-    let post_blur_ns_accum = Arc::new(AtomicU64::new(0));
-    let support_merge_ns_accum = Arc::new(AtomicU64::new(0));
+    let post_counters = Arc::new(PostStageCounters::default());
     let max_post_threads = choose_3daa_post_threads(width, height, job.total_layers);
-    let post_worker_count = max_post_threads.max(1);
+    // #386: never run a single post worker. `pool.scope` runs the dispatch loop on
+    // a pool worker; with only one worker it blocks in PostTaskGate::acquire() while
+    // the finalize tasks that would release the gate have no other worker to run on
+    // → deadlock (repros only when this was 1, i.e. hw<=4). Keep >=2 in all cases.
+    let post_worker_count = max_post_threads.max(2);
 
     let post_buffer = z_blur_radius
         .saturating_mul(2)
         .saturating_add(post_worker_count.saturating_mul(2))
         .clamp(4, 128);
+    // #386 fix: bound outstanding post/z-blur tasks so their RLE windows can't
+    // accumulate without limit. The cap tracks whichever resource is scarcer:
+    // `post_worker_count` is the throughput-optimal depth (extra queue beyond it
+    // buys no parallelism, only buffering), and available RAM is the ceiling.
+    //   - DF_3DAA_POST_MAX_INFLIGHT pins the cap and disables adaptation.
+    //   - DF_3DAA_RAM_BUDGET_MB forces the RAM budget (emulate a low-RAM box).
+    // We start at `default_cap` and shrink toward `budget / max_layer_cost` as the
+    // real per-layer window sizes arrive. Divisor is the worst MODEL LAYER seen,
+    // not the whole window: with the Arc-shared window, one more in-flight task
+    // pins ~one extra model layer resident, not (2·radius+1) of them.
+    let gate_floor = post_worker_count.max(1);
+    let default_cap = post_worker_count
+        .saturating_add(z_blur_radius.saturating_mul(2))
+        .max(gate_floor);
+    let cap_override = env_override_usize("DF_3DAA_POST_MAX_INFLIGHT");
+    let ram_budget_bytes: u64 = if cap_override.is_some() {
+        0 // pinned cap => no adaptation
+    } else if let Some(mb) = env_override_usize("DF_3DAA_RAM_BUDGET_MB") {
+        (mb as u64).saturating_mul(1024 * 1024)
+    } else {
+        // Spend at most ~half of currently-free RAM on in-flight z-blur windows.
+        available_ram_bytes().map(|a| a / 2).unwrap_or(0)
+    };
+    let post_max_inflight = cap_override.map(|o| o.max(1)).unwrap_or(default_cap);
+    let post_gate = Arc::new(PostTaskGate::new(post_max_inflight));
+    // #386 adaptive: worst model-layer window bytes observed so far (production,
+    // survives 3DAA Stats removal). Drives the RAM-aware cap in `dispatch_ready`.
+    let post_worst_layer_bytes = Arc::new(AtomicUsize::new(0));
+    // 3DAA Stats: live accounting of in-flight post-task memory. Each dispatched
+    // task deep-clones its z-blur window (history+future+model) as RLE runs;
+    // this measures how much that costs and whether it's the OOM driver.
+    let diag_inflight_tasks = Arc::new(AtomicUsize::new(0));
+    let diag_inflight_bytes = Arc::new(AtomicUsize::new(0));
+    let diag_peak_inflight_bytes = Arc::new(AtomicUsize::new(0));
+    let diag_max_layer_run_bytes = Arc::new(AtomicUsize::new(0));
+    let diag_max_out_run_bytes = Arc::new(AtomicUsize::new(0));
+    eprintln!(
+        "[3DAA Stats] width={width} height={height} z_blur_radius={z_blur_radius} \
+         blur_radius={blur_radius} post_worker_count={post_worker_count} \
+         post_buffer={post_buffer} max_inflight={post_max_inflight} \
+         default_cap={default_cap} gate_floor={gate_floor} \
+         ram_budget_mb={} adaptive={} dither={} run_bytes={}",
+        ram_budget_bytes / (1024 * 1024),
+        ram_budget_bytes > 0,
+        dither_palette.is_some(),
+        std::mem::size_of::<crate::rle::RleRun>(),
+    );
     let (rendered_layers, layer_area_stats, mut perf) = std::thread::scope(
         |scope| -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
             let (post_tx, post_rx) = mpsc::sync_channel::<PerturbRlePostInput>(post_buffer);
             let (post_out_tx, post_out_rx) =
                 mpsc::sync_channel::<PerturbRlePostOutput>(post_buffer);
-            let post_blur_ns_worker = Arc::clone(&post_blur_ns_accum);
-            let support_merge_ns_worker = Arc::clone(&support_merge_ns_accum);
+            let post_counters_worker = Arc::clone(&post_counters);
+            // #386 fix: gate moved into the post_worker closure.
+            let post_gate_w = Arc::clone(&post_gate);
+            // #386 adaptive: worst-layer tracker for the RAM-aware cap.
+            let post_worst_layer_bytes_w = Arc::clone(&post_worst_layer_bytes);
+            // 3DAA Stats: counters moved into the post_worker closure.
+            let diag_inflight_tasks_w = Arc::clone(&diag_inflight_tasks);
+            let diag_inflight_bytes_w = Arc::clone(&diag_inflight_bytes);
+            let diag_peak_inflight_bytes_w = Arc::clone(&diag_peak_inflight_bytes);
+            let diag_max_layer_run_bytes_w = Arc::clone(&diag_max_layer_run_bytes);
+            let diag_max_out_run_bytes_w = Arc::clone(&diag_max_out_run_bytes);
 
             let post_worker = scope.spawn(move || -> Result<(), SlicerV3Error> {
-                let mut history: VecDeque<PerturbRleModelLayer> =
+                let mut history: VecDeque<Arc<PerturbRleModelLayer>> =
                     VecDeque::with_capacity(z_blur_radius.saturating_add(1));
                 let mut pending: VecDeque<PendingPerturbRleLayer> =
                     VecDeque::with_capacity(z_blur_radius.saturating_add(2));
 
                 let dispatch_ready =
                     |pending: &mut VecDeque<PendingPerturbRleLayer>,
-                     history: &mut VecDeque<PerturbRleModelLayer>,
+                     history: &mut VecDeque<Arc<PerturbRleModelLayer>>,
                      scope: &rayon::Scope<'_>| {
+                        // #386 fix: block here until an in-flight slot frees. This
+                        // is the single dispatch thread, so blocking it backpressures
+                        // post_rx -> post_tx -> the rasterizer. Acquire before the
+                        // window clone below so the clone only happens with a slot.
+                        post_gate_w.acquire();
+                        let post_gate_t = Arc::clone(&post_gate_w);
+
                         let PendingPerturbRleLayer {
                             layer_idx,
                             model,
@@ -4009,11 +4227,61 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
 
                         let task = PerturbRlePostReadyTask {
                             layer_idx,
-                            model: model.clone(),
+                            // #386 fix (Arc window): refcount bumps, not deep copies.
+                            model: Arc::clone(&model),
                             support_runs,
                             history: history.iter().cloned().collect(),
-                            future: pending.iter().cloned().collect(),
+                            future: pending.iter().map(|p| Arc::clone(&p.model)).collect(),
                         };
+
+                        // 3DAA Stats: LOGICAL z-blur window bytes this task references.
+                        // With the Arc window these are SHARED across tasks, so this
+                        // over-counts true resident memory — trust RSS for the real
+                        // figure; this still shows the logical window is bounded by K.
+                        let rr = std::mem::size_of::<crate::rle::RleRun>();
+                        let model_run_bytes = task.model.runs.len() * rr;
+                        let task_bytes = model_run_bytes
+                            + task.history.iter().map(|l| l.runs.len() * rr).sum::<usize>()
+                            + task
+                                .future
+                                .iter()
+                                .map(|l| l.runs.len() * rr)
+                                .sum::<usize>()
+                            + task
+                                .support_runs
+                                .as_ref()
+                                .map(|r| r.len() * rr)
+                                .unwrap_or(0);
+                        atomic_max(&diag_max_layer_run_bytes_w, model_run_bytes);
+
+                        // #386 adaptive: shrink the in-flight cap toward what RAM
+                        // can hold. Each extra in-flight task pins ~one worst-case
+                        // model layer resident (the window is Arc-shared), plus a
+                        // fixed (2·radius+1)-layer frontier the dispatcher holds.
+                        // Solve (K + window)·worst_layer ≤ budget for K, clamp to
+                        // [2, default_cap]. Runs on the single dispatch thread, so
+                        // the cap reflects the worst layer seen before the next
+                        // acquire. RAM may shrink K, but never below 2 — a cap of 1
+                        // would reintroduce the single-drainer deadlock even with a
+                        // 2-worker pool, so 2 is the hard floor (issue #386).
+                        if ram_budget_bytes > 0 {
+                            atomic_max(&post_worst_layer_bytes_w, model_run_bytes.max(1));
+                            let worst =
+                                post_worst_layer_bytes_w.load(Ordering::Relaxed).max(1) as u64;
+                            let window_layers = (z_blur_radius as u64) * 2 + 1;
+                            let ram_cap = (ram_budget_bytes / worst)
+                                .saturating_sub(window_layers)
+                                .max(2) as usize;
+                            post_gate_w.retune(ram_cap.min(default_cap));
+                        }
+
+                        let now = diag_inflight_bytes_w.fetch_add(task_bytes, Ordering::Relaxed)
+                            + task_bytes;
+                        diag_inflight_tasks_w.fetch_add(1, Ordering::Relaxed);
+                        atomic_max(&diag_peak_inflight_bytes_w, now);
+                        let diag_inflight_tasks_t = Arc::clone(&diag_inflight_tasks_w);
+                        let diag_inflight_bytes_t = Arc::clone(&diag_inflight_bytes_w);
+                        let diag_max_out_run_bytes_t = Arc::clone(&diag_max_out_run_bytes_w);
 
                         history.push_back(model);
                         while history.len() > z_blur_radius {
@@ -4023,8 +4291,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                         let post_out_tx = post_out_tx.clone();
                         let z_blur_weights = z_blur_weights.clone();
                         let tail_cure_lut = tail_cure_lut;
-                        let post_blur_ns_worker = Arc::clone(&post_blur_ns_worker);
-                        let support_merge_ns_worker = Arc::clone(&support_merge_ns_worker);
+                        let post_counters_worker = Arc::clone(&post_counters_worker);
                         let active_dither = dither_palette.clone();
                         let parallel_encode_fn = parallel_encode_fn.clone();
                         scope.spawn(move |_| {
@@ -4036,9 +4303,20 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                                 active_dither.as_deref(),
                                 width,
                                 height,
-                                &post_blur_ns_worker,
-                                &support_merge_ns_worker,
+                                &post_counters_worker,
                             );
+
+                            // 3DAA Stats: post-blur/dither output run-vector size, and
+                            // release this task's in-flight window accounting.
+                            let rr = std::mem::size_of::<crate::rle::RleRun>();
+                            if let Some(ref out_runs) = output.runs {
+                                atomic_max(&diag_max_out_run_bytes_t, out_runs.len() * rr);
+                            }
+                            diag_inflight_bytes_t.fetch_sub(task_bytes, Ordering::Relaxed);
+                            diag_inflight_tasks_t.fetch_sub(1, Ordering::Relaxed);
+                            // #386 fix: free the in-flight slot. The window (the big
+                            // memory) was already dropped when finalize consumed `task`.
+                            post_gate_t.release();
 
                             let mut encoded_bytes = None;
                             let runs = output.runs.take().expect("runs must exist");
@@ -4076,10 +4354,12 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
 
                         pending.push_back(PendingPerturbRleLayer {
                             layer_idx: input.layer_idx,
-                            model: PerturbRleModelLayer {
+                            // #386 fix (Arc window): one allocation, shared into the
+                            // window and every task that references this layer.
+                            model: Arc::new(PerturbRleModelLayer {
                                 runs: model_runs,
                                 bounds: model_bounds,
-                            },
+                            }),
                             support_runs: input.support_runs,
                         });
                         while pending.len() > z_blur_radius {
@@ -4119,6 +4399,22 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                         on_rle_layer(output.layer_idx, runs)?;
                     }
                     emitted_progress_layers = emitted_progress_layers.saturating_add(1);
+                    // 3DAA Stats: periodic memory attribution (every 32 emitted layers).
+                    if emitted_progress_layers % 32 == 0 {
+                        let mb = 1_048_576.0;
+                        eprintln!(
+                            "[3DAA Stats] emitted={} RSS={:.0}MB | inflight_tasks={} \
+                             inflight_window={:.0}MB peak_window={:.0}MB | \
+                             max_layer_runs={:.0}MB max_out_runs={:.0}MB",
+                            emitted_progress_layers,
+                            diag_read_rss_mb(),
+                            diag_inflight_tasks.load(Ordering::Relaxed),
+                            diag_inflight_bytes.load(Ordering::Relaxed) as f64 / mb,
+                            diag_peak_inflight_bytes.load(Ordering::Relaxed) as f64 / mb,
+                            diag_max_layer_run_bytes.load(Ordering::Relaxed) as f64 / mb,
+                            diag_max_out_run_bytes.load(Ordering::Relaxed) as f64 / mb,
+                        );
+                    }
                     if let Some(cb) = on_progress.as_ref() {
                         cb(SliceProgressUpdateV3 {
                             done: emitted_progress_layers.min(job.total_layers),
@@ -4160,7 +4456,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                     Vec<crate::rle::RleRun>,
                     Option<(usize, usize, usize, usize)>,
                 )>(1);
-                let post_blur_ns_worker = Arc::clone(&post_blur_ns_accum);
+                let post_counters_worker = Arc::clone(&post_counters);
                 rayon::spawn(move || {
                     let result = if blur_radius > 0 {
                         let xy_blur_start = std::time::Instant::now();
@@ -4171,7 +4467,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                             blur_radius,
                             0,
                         );
-                        post_blur_ns_worker.fetch_add(
+                        post_counters_worker.post_blur_ns.fetch_add(
                             xy_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
                             Ordering::Relaxed,
                         );
@@ -4249,8 +4545,10 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     )?;
 
     perf.index_build_ns = index_ns;
-    perf.post_blur_ns = post_blur_ns_accum.load(Ordering::Relaxed);
-    perf.support_merge_ns = support_merge_ns_accum.load(Ordering::Relaxed);
+    perf.post_blur_ns = post_counters.post_blur_ns.load(Ordering::Relaxed);
+    perf.encode_dither_ns = post_counters.dither_ns.load(Ordering::Relaxed);
+    perf.tail_remap_ns = post_counters.tail_remap_ns.load(Ordering::Relaxed);
+    perf.support_merge_ns = post_counters.support_merge_ns.load(Ordering::Relaxed);
     perf.daa_post_threads = post_worker_count as u32;
     perf.daa_post_buffer_depth = post_buffer as u32;
     Ok((rendered_layers, layer_area_stats, perf))
@@ -4357,8 +4655,10 @@ pub fn slice_and_rasterize_rle_encoded_v3(
     // downstream encoders (CTB threshold, 1-bit PNG) undo any multi-level
     // output, making the Floyd-Steinberg pass pure overhead.
     let output_is_binary = job.produces_binary_output();
-    let dither_palette = if job.dither_enabled && !output_is_binary {
-        let bit_depth = job.dither_bit_depth.unwrap_or(3);
+    let dither_palette = if let Some(bit_depth) = job
+        .effective_dither_bit_depth()
+        .filter(|_| !output_is_binary)
+    {
         let active_lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
             let mut identity = [0u8; 256];
             for (i, v) in identity.iter_mut().enumerate() {
@@ -4375,6 +4675,10 @@ pub fn slice_and_rasterize_rle_encoded_v3(
         None
     };
 
+    // Per-stage timers for the encode closure below.  `png_encode_ns` covers the
+    // whole closure, which hides four pre-passes behind one number; these split it.
+    let stage_counters = Arc::new(EncodeStageCounters::default());
+
     let effective_encode_fn: Arc<
         dyn Fn(
                 u32,
@@ -4383,53 +4687,66 @@ pub fn slice_and_rasterize_rle_encoded_v3(
             ) -> Result<Vec<u8>, SlicerV3Error>
             + Send
             + Sync,
-    > = if ssaa_factor > 1 || blur_radius > 0 || (job.dither_enabled && !output_is_binary) {
+    > = if ssaa_factor > 1 || blur_radius > 0 || dither_palette.is_some() {
         let super_width = raster_job.effective_render_width_px() as usize;
         let super_height = raster_job.source_height_px as usize;
         let out_width = job.effective_render_width_px() as usize;
         let out_height = job.source_height_px as usize;
         let inner = encode_fn.clone();
         let dither_palette = dither_palette.clone();
+        let counters = stage_counters.clone();
         Arc::new(
             move |layer_idx: u32,
                   super_runs: &[crate::rle::RleRun],
                   support_super_runs: Option<&[crate::rle::RleRun]>| {
                 let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, 0);
                 let gray_runs = if ssaa_factor > 1 {
-                    downsample_binary_rle_to_gray_rle(
+                    let start = std::time::Instant::now();
+                    let downsampled = downsample_binary_rle_to_gray_rle(
                         super_runs,
                         super_width,
                         super_height,
                         ssaa_factor,
                         downsample_min_alpha_u8,
-                    )
+                    );
+                    add_elapsed(&counters.ssaa_downsample_ns, start);
+                    downsampled
                 } else {
                     super_runs.to_vec()
                 };
 
                 let post_aa_runs = if blur_radius > 0 {
                     // Streaming separable box blur: O((2r+1)×width) memory, no full-image allocation.
+                    let start = std::time::Instant::now();
                     let blurred =
                         blur_gray_rle_streaming(&gray_runs, out_width, out_height, blur_radius, 0);
+                    add_elapsed(&counters.blur_ns, start);
                     blurred
                 } else {
                     gray_runs
                 };
 
                 let final_runs = if let Some(ref palette) = dither_palette {
-                    crate::dither::dither_rle_layer_with_lut_and_gamma(
+                    let start = std::time::Instant::now();
+                    let dithered = crate::dither::dither_rle_layer_with_lut_and_gamma(
                         &post_aa_runs,
                         palette,
                         out_width,
                         out_height,
-                    )
+                    );
+                    add_elapsed(&counters.dither_ns, start);
+                    dithered
                 } else if let Some(lut) = tail_cure_lut.as_ref() {
-                    remap_gray_rle_with_lut(&post_aa_runs, lut)
+                    let start = std::time::Instant::now();
+                    let remapped = remap_gray_rle_with_lut(&post_aa_runs, lut);
+                    add_elapsed(&counters.dither_ns, start);
+                    remapped
                 } else {
                     post_aa_runs
                 };
 
                 let final_runs = if let Some(support_super_runs) = support_super_runs {
+                    let start = std::time::Instant::now();
                     let support_runs = if ssaa_factor > 1 {
                         downsample_binary_rle_to_gray_rle(
                             support_super_runs,
@@ -4441,17 +4758,28 @@ pub fn slice_and_rasterize_rle_encoded_v3(
                     } else {
                         support_super_runs.to_vec()
                     };
-                    merge_rle_max(final_runs, &support_runs)
+                    let merged = merge_rle_max(final_runs, &support_runs);
+                    add_elapsed(&counters.support_merge_ns, start);
+                    merged
                 } else {
                     final_runs
                 };
 
-                inner(layer_idx, &final_runs)
+                let start = std::time::Instant::now();
+                let encoded = inner(layer_idx, &final_runs);
+                add_elapsed(&counters.format_ns, start);
+                encoded
             },
         )
     } else {
         let inner = encode_fn.clone();
-        Arc::new(move |layer_idx, runs, _support_runs| inner(layer_idx, runs))
+        let counters = stage_counters.clone();
+        Arc::new(move |layer_idx, runs, _support_runs| {
+            let start = std::time::Instant::now();
+            let encoded = inner(layer_idx, runs);
+            add_elapsed(&counters.format_ns, start);
+            encoded
+        })
     };
 
     let (rendered_layers, layer_area_stats, mut perf) = render_layers_rle_encoded(
@@ -4466,6 +4794,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
         cancel_flag,
     )?;
     perf.index_build_ns = index_ns;
+    stage_counters.apply_to(&mut perf);
 
     Ok((rendered_layers, layer_area_stats, perf))
 }
@@ -5098,8 +5427,6 @@ mod tests {
             mirror_x: false,
             mirror_y: false,
             z_blend_look_back: 2,
-            z_blend_fade_px: 20,
-            z_blend_auto_fade: false,
             z_blend_minimum_alpha_percent: 0.0,
             z_blend_max_alpha_percent: 90.0,
             z_blend_custom_lut: None,
@@ -5303,8 +5630,6 @@ mod tests {
             mirror_x: false,
             mirror_y: false,
             z_blend_look_back: 2,
-            z_blend_fade_px: 20,
-            z_blend_auto_fade: false,
             z_blend_minimum_alpha_percent: 0.0,
             z_blend_max_alpha_percent: 90.0,
             z_blend_custom_lut: None,
@@ -5380,8 +5705,6 @@ mod tests {
             mirror_x: false,
             mirror_y: false,
             z_blend_look_back: 2,
-            z_blend_fade_px: 20,
-            z_blend_auto_fade: false,
             z_blend_minimum_alpha_percent: 0.0,
             z_blend_max_alpha_percent: 90.0,
             z_blend_custom_lut: None,
@@ -5457,8 +5780,6 @@ mod tests {
             mirror_x: false,
             mirror_y: false,
             z_blend_look_back: 2,
-            z_blend_fade_px: 20,
-            z_blend_auto_fade: false,
             z_blend_minimum_alpha_percent: 0.0,
             z_blend_max_alpha_percent: 90.0,
             z_blend_custom_lut: None,
@@ -5498,6 +5819,29 @@ mod tests {
                 .iter()
                 .any(|run| run.value > 0 && run.value < 255),
             "support-only layers should retain grayscale AA runs when support AA is enabled"
+        );
+    }
+
+    /// The RSS diagnostic used to read /proc/self/statm, so it silently reported
+    /// 0 MB on macOS and Windows. Any running process has a non-zero resident
+    /// set, so this fails on any platform where the reading is broken again.
+    #[test]
+    fn diag_rss_is_reported_on_every_platform() {
+        let rss = super::diag_read_rss_mb();
+        assert!(
+            rss > 0.0,
+            "resident set size reported as {rss} MB; the platform reading is broken"
+        );
+    }
+
+    /// A zero here silently disables the #386 RAM-aware cap on in-flight
+    /// post tasks, so the narrowed sysinfo refresh must still return a figure.
+    #[test]
+    fn available_ram_is_reported() {
+        let available = super::available_ram_bytes();
+        assert!(
+            available.is_some_and(|bytes| bytes > 0),
+            "available RAM reported as {available:?}; the 3DAA gate would fall back to no budget"
         );
     }
 }

@@ -2,7 +2,12 @@
 
 import React from 'react';
 import { CheckCircle2, ExternalLink, FolderOpen } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import { Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 
 type SliceCompletedModalProps = {
   isOpen: boolean;
@@ -20,20 +25,9 @@ export function SliceCompletedModal({
   slicingTimeMs,
   onOpenInUvTools,
 }: SliceCompletedModalProps) {
+  const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const [openDirectoryError, setOpenDirectoryError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-  }, [isOpen, onClose]);
 
   React.useEffect(() => {
     if (!isOpen) {
@@ -48,69 +42,65 @@ export function SliceCompletedModal({
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('reveal_in_file_manager', { path: filePath });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error ?? 'Failed to open directory.');
-      setOpenDirectoryError(message || 'Failed to open directory.');
+      const message = error instanceof Error ? error.message : String(error ?? _(msg`Failed to open directory.`));
+      setOpenDirectoryError(message || _(msg`Failed to open directory.`));
       console.error('Failed to open directory:', error);
     }
   };
 
   const formatTime = (ms: number | null): string => {
     if (ms === null || ms === undefined) return '—';
-    if (ms < 1000) return `${ms.toFixed(0)} ms`;
-    return `${(ms / 1000).toFixed(2)} s`;
+    if (ms < 1000) return fmt.quantity(ms, 0, 'ms');
+    return fmt.quantity(ms / 1000, 2, 's');
   };
 
   return (
     <StructuredDialogModal
       open={isOpen}
-      ariaLabel="Slicing completed"
-      title="Slicing Finished"
+      ariaLabel={_(msg`Slicing completed`)}
+      title={_(msg`Slicing Finished`)}
       icon={<CheckCircle2 className="h-4 w-4" />}
       iconTone="accent"
       zIndexClassName="z-[130]"
       maxWidthClassName="max-w-md"
-      closeAriaLabel="Close slicing finished modal"
+      closeAriaLabel={_(msg`Close slicing finished modal`)}
       onClose={onClose}
       onBackdropClick={onClose}
       actions={onOpenInUvTools ? (
         <>
-          <button
-            type="button"
+          <Button
+            variant="tinted-accent"
             onClick={() => filePath && onOpenInUvTools(filePath)}
             disabled={!filePath}
-            className="ui-button ui-button-accent !h-9 px-3 text-sm inline-flex items-center gap-1.5 disabled:opacity-45"
+            className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
           >
             <ExternalLink className="w-4 h-4" />
-            Open in UVTools
-          </button>
-          <button
-            type="button"
+            <Trans>Open in UVTools</Trans>
+          </Button>
+          <Button
+            variant="tinted-accent"
             onClick={handleOpenDirectory}
             disabled={!filePath}
-            className="ui-button ui-button-secondary !h-9 px-3 text-sm inline-flex items-center gap-1.5 disabled:opacity-45"
+            className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
           >
             <FolderOpen className="w-4 h-4" />
-            Open Directory
-          </button>
+            <Trans>Open Directory</Trans>
+          </Button>
         </>
       ) : (
         <>
-          <button
-            type="button"
-            onClick={onClose}
-            className="ui-button ui-button-secondary !h-9 px-3 text-sm"
-          >
-            Close
-          </button>
-          <button
-            type="button"
+          <Button variant="secondary" onClick={onClose}>
+            <Trans>Close</Trans>
+          </Button>
+          <Button
+            variant="tinted-accent"
             onClick={handleOpenDirectory}
             disabled={!filePath}
-            className="ui-button ui-button-accent !h-9 px-3 text-sm inline-flex items-center gap-1.5 disabled:opacity-45"
+            className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
           >
             <FolderOpen className="w-4 h-4" />
-            Open Directory
-          </button>
+            <Trans>Open Directory</Trans>
+          </Button>
         </>
       )}
     >
@@ -119,7 +109,7 @@ export function SliceCompletedModal({
         style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
       >
         <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-          File Location
+          <Trans>File Location</Trans>
         </div>
         <div
           className="text-sm font-mono break-all"
@@ -133,7 +123,7 @@ export function SliceCompletedModal({
       {slicingTimeMs !== null && (
         <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
           <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-            Slicing Time
+            <Trans>Slicing Time</Trans>
           </div>
           <div className="text-sm font-semibold mt-1" style={{ color: 'var(--text-strong)' }}>
             {formatTime(slicingTimeMs)}

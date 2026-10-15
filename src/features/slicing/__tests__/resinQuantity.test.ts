@@ -53,7 +53,7 @@ test('legacy volume and independent weight variants survive storage and bundle r
     setItem: (key: string, value: string) => { storage.set(key, value); },
   };
   const previousWindow = (globalThis as { window?: unknown }).window;
-  (globalThis as { window?: unknown }).window = { localStorage: storageApi, sessionStorage: storageApi };
+  (globalThis as { window?: unknown }).window = { document: {}, localStorage: storageApi, sessionStorage: storageApi };
   try {
     hydrateProfilesFromStorage();
     const printerId = addPrinterProfile({ name: 'Resin Test Printer',

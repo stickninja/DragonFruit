@@ -19,9 +19,9 @@ import {
     normalizeFormatVersion,
     normalizeSettingsMode,
     normalizeWebcamRotationDeg,
-    DEFAULT_OUTPUT_FORMAT,
     DEFAULT_WEBCAM_ROTATION_DEG,
 } from '@/features/profiles/outputFormatUtils';
+import { hasWindow } from '@/utils/dom';
 
 export type PrinterOutputFormat = string;
 export type PrinterNetworkSupport = string;
@@ -86,6 +86,29 @@ export type PrinterPreset = {
     pixelSize?: PrinterPixelSize;
     bitDepth?: PrinterBitDepth;
     buildDimensionMode?: PrinterBuildDimensionMode;
+    /**
+     * Concrete variant presetIds for a "family" preset (e.g. an Athena II 16K
+     * entry that resolves to separate 3-bit / 8-bit variants). When set, the
+     * library shows a single card that resolves to one variant on add.
+     */
+    modelVariants?: string[];
+    /**
+     * Optional cleaner display name shown on the library card for a family
+     * preset, e.g. "Athena II 16K" when `name` is "Athena II 16K · 8-bit".
+     * Variant contexts keep using `name`.
+     */
+    libraryDisplayName?: string;
+    /**
+     * Optional HTTP path a plugin network adapter can probe to auto-detect
+     * which variant a physical printer is running. Absent when the preset has
+     * no network-detectable variants.
+     */
+    modelVariantDetectPath?: string;
+    /**
+     * Marks a preset as a hidden variant of a family preset — not shown as a
+     * standalone library card, but still addable via its presetId.
+     */
+    isModelVariant?: boolean;
     buildVolumeMm: {
         width: number;
         depth: number;
@@ -223,10 +246,7 @@ export type MaterialAntiAliasingSettings = {
     zBlurSigma: number;
     zBlendLookBack: number;
     useCustomZBlendLookBack: boolean;
-    zBlendFadePx: number;
-    zBlendFadeMode: 'auto' | 'manual';
     zBlendAutoMode: boolean;
-    useCustomZBlendFadePx: boolean;
     zaaPattern: 'uniform' | 'halton' | 'base2';
     zaaDuplicateZ: boolean;
     blurGraySourceMode: 'minimum' | 'lut';
@@ -236,6 +256,10 @@ export type MaterialAntiAliasingSettings = {
     ditherEnabled: boolean;
     ditherBitDepth: number;
     ditherDeviceGamma: number;
+    tipOffsetMode: 'disabled' | 'auto' | 'manual';
+    tipOffsetMm: number;
+    tipOffsetDisplayInUi: boolean;
+    supportTipShrinkPercent: number;
 };
 
 export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
@@ -255,10 +279,7 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     zBlurSigma: 0.5,
     zBlendLookBack: 2,
     useCustomZBlendLookBack: false,
-    zBlendFadePx: 20,
-    zBlendFadeMode: 'auto',
     zBlendAutoMode: true,
-    useCustomZBlendFadePx: false,
     zaaPattern: 'halton',
     zaaDuplicateZ: true,
     blurGraySourceMode: 'lut',
@@ -266,8 +287,12 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     selectedLutCurveId: 'default',
     aaOnSupports: false,
     ditherEnabled: false,
-    ditherBitDepth: 3,
-    ditherDeviceGamma: 3.0,
+    ditherBitDepth: 8,
+    ditherDeviceGamma: 2.2,
+    tipOffsetMode: 'auto',
+    tipOffsetMm: 0.05,
+    tipOffsetDisplayInUi: false,
+    supportTipShrinkPercent: 10,
 };
 
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
@@ -286,6 +311,13 @@ export type MaterialProfile = {
     printerProfileId: string;
     officialTemplateId?: string;
     officialTemplateVersion?: number;
+    /**
+     * User-applied lock on a non-official (custom) material profile. When true,
+     * the profile is treated as read-only in the UI, mirroring official
+     * profiles, but can be unlocked by the user. Official profiles are always
+     * locked regardless of this flag.
+     */
+    locked?: boolean;
     name: string;
     brand: string;
     colorName?: string;
@@ -346,7 +378,6 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         ? source.zaaPattern
         : defaults.zaaPattern;
     const blurGraySourceMode = source.blurGraySourceMode === 'minimum' ? 'minimum' : defaults.blurGraySourceMode;
-    const zBlendFadeMode = source.zBlendFadeMode === 'manual' ? 'manual' : defaults.zBlendFadeMode;
     const zBlendResinType = source.zBlendResinType === 'clear' || source.zBlendResinType === 'custom'
         ? source.zBlendResinType
         : defaults.zBlendResinType;
@@ -356,12 +387,19 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
     const levelRaw = typeof source.level === 'string' ? source.level.trim().toLowerCase() : defaults.level;
     const levelSteps = Number(levelRaw.endsWith('x') ? levelRaw.slice(0, -1) : levelRaw);
     const level = `${Math.max(2, Math.min(64, Number.isFinite(levelSteps) ? Math.round(levelSteps) : 4))}x`;
+    const tipOffsetMode = source.tipOffsetMode === 'auto' || source.tipOffsetMode === 'manual' || source.tipOffsetMode === 'disabled'
+        ? source.tipOffsetMode
+        : defaults.tipOffsetMode;
+
+    const enableCustomSettings = typeof source.enableCustomSettings === 'boolean'
+        ? source.enableCustomSettings
+        : (typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableCustomSettings);
+    const rawEnableOverride = typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableOverride;
+    const enableOverride = enableCustomSettings ? rawEnableOverride : false;
 
     return {
-        enableCustomSettings: typeof source.enableCustomSettings === 'boolean'
-            ? source.enableCustomSettings
-            : (typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableCustomSettings),
-        enableOverride: typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableOverride,
+        enableCustomSettings,
+        enableOverride,
         mode,
         level,
         useCustomLevel: typeof source.useCustomLevel === 'boolean' ? source.useCustomLevel : defaults.useCustomLevel,
@@ -376,10 +414,7 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         zBlurSigma: clampNumber(source.zBlurSigma, defaults.zBlurSigma, 0.05, 16),
         zBlendLookBack: Math.round(clampNumber(source.zBlendLookBack, defaults.zBlendLookBack, 1, 16)),
         useCustomZBlendLookBack: typeof source.useCustomZBlendLookBack === 'boolean' ? source.useCustomZBlendLookBack : defaults.useCustomZBlendLookBack,
-        zBlendFadePx: Math.round(clampNumber(source.zBlendFadePx, defaults.zBlendFadePx, 1, 256)),
-        zBlendFadeMode,
         zBlendAutoMode: typeof source.zBlendAutoMode === 'boolean' ? source.zBlendAutoMode : defaults.zBlendAutoMode,
-        useCustomZBlendFadePx: typeof source.useCustomZBlendFadePx === 'boolean' ? source.useCustomZBlendFadePx : defaults.useCustomZBlendFadePx,
         zaaPattern,
         zaaDuplicateZ: typeof source.zaaDuplicateZ === 'boolean' ? source.zaaDuplicateZ : defaults.zaaDuplicateZ,
         blurGraySourceMode,
@@ -389,6 +424,12 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         ditherEnabled: typeof source.ditherEnabled === 'boolean' ? source.ditherEnabled : defaults.ditherEnabled,
         ditherBitDepth: Math.round(clampNumber(source.ditherBitDepth, defaults.ditherBitDepth, 2, 7)),
         ditherDeviceGamma: clampNumber(source.ditherDeviceGamma, defaults.ditherDeviceGamma, 0.5, 4.0),
+        tipOffsetMode,
+        tipOffsetMm: Number.isFinite(Number(source.tipOffsetMm)) ? Number(source.tipOffsetMm) : defaults.tipOffsetMm,
+        tipOffsetDisplayInUi: Boolean(source.tipOffsetDisplayInUi ?? defaults.tipOffsetDisplayInUi),
+        supportTipShrinkPercent: source.supportTipShrinkPercent == null
+            ? defaults.supportTipShrinkPercent
+            : Math.round(clampNumber(source.supportTipShrinkPercent, defaults.supportTipShrinkPercent, 0, 90)),
     };
 }
 
@@ -417,7 +458,8 @@ function sanitizeLocalSettingsByOutput(input: unknown): Record<string, LocalMate
     Object.entries(source).forEach(([outputFormatRaw, value]) => {
         const outputFormat = normalizeOutputFormat(outputFormatRaw);
         const sanitized = sanitizeLocalMaterialSettingsMap(value);
-        if (!sanitized) return;
+        // A key that is not a format has nothing to key settings by.
+        if (!sanitized || !outputFormat) return;
         next[outputFormat] = sanitized;
     });
 
@@ -485,6 +527,9 @@ function resolveMaterialProfileWithLocalSettings(
     if (!printerProfile) return materialProfile;
 
     const normalizedOutput = normalizeOutputFormat(printerProfile.display.outputFormat);
+    // A printer profile with no resolvable format has no plugin-owned material
+    // settings to apply, so the material stays as it is.
+    if (!normalizedOutput) return materialProfile;
     const outputWithoutDot = normalizedOutput.replace(/^\./, '');
     const adapter = getProfileLocalMaterialSettingsAdapter(
         normalizedOutput,
@@ -583,7 +628,7 @@ function readActiveMaterialByPrinterProfileFromStorage(): Record<string, string>
         return { ...activeMaterialByPrinterProfileCache };
     }
 
-    if (typeof window === 'undefined') return {};
+    if (!hasWindow()) return {};
 
     const raw = window.localStorage.getItem(ACTIVE_MATERIAL_BY_PRINTER_PROFILE_STORAGE_KEY)
         ?? window.sessionStorage.getItem(ACTIVE_MATERIAL_BY_PRINTER_PROFILE_STORAGE_KEY);
@@ -611,7 +656,7 @@ function readActiveMaterialByPrinterProfileFromStorage(): Record<string, string>
 }
 
 function writeActiveMaterialByPrinterProfileToStorage(next: Record<string, string>): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
 
     const sanitized: Record<string, string> = {};
     Object.entries(next).forEach(([printerId, materialId]) => {
@@ -854,7 +899,7 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
     ...preset,
     display: {
         ...preset.display,
-        outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
+        outputFormat: normalizeOutputFormat(preset.display?.outputFormat) ?? '',
         formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown } | undefined)?.formatVersion),
         settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown } | undefined)?.settingsMode),
         webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1125,7 +1170,9 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     display: {
                         resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
                         resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
-                        outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
+                        outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat)
+                            ?? normalizeOutputFormat(fallbackDisplay?.outputFormat)
+                            ?? '',
                         formatVersion: normalizeFormatVersion(rawDisplay?.formatVersion ?? fallbackDisplay?.formatVersion),
                         settingsMode: normalizeSettingsMode(rawDisplay?.settingsMode ?? fallbackDisplay?.settingsMode),
                         webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1183,6 +1230,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         printerProfileId,
                         officialTemplateId: inferredTemplateId || undefined,
                         officialTemplateVersion: normalizeProfileVersion(materialProfile.officialTemplateVersion, normalizeProfileVersion((matchedTemplate as any)?.profileVersion, 1)),
+                        locked: materialProfile.locked === true,
                         name: profile.name,
                         brand: typeof (profile as any).brand === 'string' ? (profile as any).brand : 'Default',
                         colorName: normalizeMaterialColorName(materialProfile.colorName),
@@ -1292,7 +1340,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
 }
 
 function persist(next: ProfileStoreState): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     try {
         const payload: PersistedProfileStoreEnvelope = {
             version: PROFILE_STORE_SCHEMA_VERSION,
@@ -1326,14 +1374,14 @@ function parsePersistedState(raw: string | null): Partial<ProfileStoreState> | n
 }
 
 function ensureHydrated(): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     if (isHydrated) return;
     hydratePluginRegistry();
     hydrateProfilesFromStorage();
 }
 
 export function hydrateProfilesFromStorage(): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     if (isHydrated) return;
 
     isHydrated = true;
@@ -1612,7 +1660,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
         display: {
             resolutionX: partial?.display?.resolutionX ?? 2560,
             resolutionY: partial?.display?.resolutionY ?? 1620,
-            outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
+            outputFormat: normalizeOutputFormat(partial?.display?.outputFormat) ?? '',
             formatVersion: normalizeFormatVersion(partial?.display?.formatVersion),
             settingsMode: normalizeSettingsMode(partial?.display?.settingsMode),
             webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1644,6 +1692,39 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
 export function getAvailablePrinterPresets(): PrinterPreset[] {
     ensureHydrated();
     return getAllPrinterPresets();
+}
+
+/**
+ * Presets shown as standalone cards in the printer library: the full set minus
+ * hidden variants (`isModelVariant`). Family presets that carry `modelVariants`
+ * remain, and resolve to a concrete variant via {@link getPrinterPresetVariants}.
+ */
+export function getLibraryPrinterPresets(): PrinterPreset[] {
+    ensureHydrated();
+    return getAllPrinterPresets().filter((preset) => preset.isModelVariant !== true);
+}
+
+/**
+ * Resolve the concrete variant presets of a family preset, ordered as declared
+ * in its `modelVariants`. Returns [] for non-family presets or unknown ids.
+ */
+export function getPrinterPresetVariants(presetId: string): PrinterPreset[] {
+    ensureHydrated();
+    const presets = getAllPrinterPresets();
+    const family = presets.find((preset) => preset.presetId === presetId);
+    if (!family?.modelVariants?.length) return [];
+    return family.modelVariants
+        .map((variantId) => presets.find((preset) => preset.presetId === variantId))
+        .filter((preset): preset is PrinterPreset => preset != null);
+}
+
+/**
+ * Match a detected bit-depth (e.g. from a plugin `printerData` probe) to a
+ * variant preset by comparing against each variant's declared `bitDepth.bits`.
+ */
+export function matchPrinterVariantByBitDepth(variants: PrinterPreset[], detectedBitDepth: number | null | undefined): PrinterPreset | null {
+    if (!Number.isFinite(detectedBitDepth)) return null;
+    return variants.find((variant) => variant.bitDepth?.bits === detectedBitDepth) ?? null;
 }
 
 export function addPrinterProfileFromPreset(presetId: string): string {
@@ -1703,7 +1784,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
         display: {
             resolutionX: preset.display.resolutionX,
             resolutionY: preset.display.resolutionY,
-            outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+            outputFormat: normalizeOutputFormat(preset.display.outputFormat) ?? '',
             formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
             settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
             webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1735,6 +1816,7 @@ export function addMaterialProfile(
         officialTemplateVersion: Number.isFinite(Number((partial as any)?.officialTemplateVersion))
             ? normalizeProfileVersion((partial as any).officialTemplateVersion, 1)
             : undefined,
+        locked: (partial as any)?.locked === true,
         name: partial?.name?.trim() || `Material ${state.materialProfiles.length + 1}`,
         brand: partial?.brand?.trim() || 'Default',
         colorName: normalizeMaterialColorName(partial?.colorName),
@@ -1903,7 +1985,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
                 ? {
                     resolutionX: Number(appliedUpdates.display.resolutionX) || profile.display.resolutionX,
                     resolutionY: Number(appliedUpdates.display.resolutionY) || profile.display.resolutionY,
-                    outputFormat: normalizeOutputFormat(appliedUpdates.display.outputFormat ?? profile.display.outputFormat),
+                    outputFormat: normalizeOutputFormat(appliedUpdates.display.outputFormat)
+                        ?? normalizeOutputFormat(profile.display.outputFormat)
+                        ?? profile.display.outputFormat,
                     formatVersion: normalizeFormatVersion(appliedUpdates.display.formatVersion ?? profile.display.formatVersion),
                     settingsMode: normalizeSettingsMode(appliedUpdates.display.settingsMode ?? profile.display.settingsMode),
                     webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -2060,12 +2144,14 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
         if (profile.id !== id) return profile;
         // Official template materials are read-only; only internal update paths (applyOfficialMaterialProfileUpdate) may change them.
         const isOfficial = typeof profile.officialTemplateId === 'string' && profile.officialTemplateId.trim().length > 0;
-        if (isOfficial) return profile;
+        // User-locked custom materials are read-only too; only setMaterialProfileLocked may change them.
+        if (isOfficial || profile.locked === true) return profile;
         changed = true;
         return {
             ...profile,
             ...updates,
             printerProfileId: profile.printerProfileId,
+            locked: profile.locked,
             brand: updates.brand !== undefined ? updates.brand : profile.brand,
             colorName: Object.prototype.hasOwnProperty.call(updates, 'colorName')
                 ? normalizeMaterialColorName(updates.colorName)
@@ -2090,6 +2176,34 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             antiAliasingSettings: updates.antiAliasingSettings !== undefined
                 ? sanitizeMaterialAntiAliasingSettings(updates.antiAliasingSettings)
                 : profile.antiAliasingSettings,
+        };
+    });
+
+    if (!changed) return;
+
+    setState(ensureActiveMaterialForActivePrinter({
+        ...state,
+        materialProfiles,
+    }));
+}
+
+/**
+ * Lock or unlock a user-made (non-official) material profile. Official
+ * profiles are always locked and cannot be toggled here.
+ */
+export function setMaterialProfileLocked(id: string, locked: boolean): void {
+    ensureHydrated();
+    let changed = false;
+
+    const materialProfiles = state.materialProfiles.map((profile) => {
+        if (profile.id !== id) return profile;
+        const isOfficial = typeof profile.officialTemplateId === 'string' && profile.officialTemplateId.trim().length > 0;
+        if (isOfficial) return profile;
+        if (profile.locked === locked) return profile;
+        changed = true;
+        return {
+            ...profile,
+            locked,
         };
     });
 
@@ -2308,7 +2422,7 @@ export function importPrinterBundle(payload: unknown): string {
         display: {
             resolutionX: sourcePrinter.display?.resolutionX ?? 2560,
             resolutionY: sourcePrinter.display?.resolutionY ?? 1620,
-            outputFormat: normalizeOutputFormat(sourcePrinter.display?.outputFormat),
+            outputFormat: normalizeOutputFormat(sourcePrinter.display?.outputFormat) ?? '',
             formatVersion: normalizeFormatVersion(sourcePrinter.display?.formatVersion),
             settingsMode: normalizeSettingsMode(sourcePrinter.display?.settingsMode),
             webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -2768,7 +2882,9 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
                     display: {
                         resolutionX: preset.display.resolutionX,
                         resolutionY: preset.display.resolutionY,
-                        outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+                        outputFormat: normalizeOutputFormat(preset.display.outputFormat)
+                            ?? normalizeOutputFormat(item.display.outputFormat)
+                            ?? item.display.outputFormat,
                         formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
                         settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
                         mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),

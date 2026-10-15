@@ -1,12 +1,11 @@
 import * as THREE from 'three';
+import {
+  type TauriInvoke,
+  loadTauriCore,
+  readPositionsFromCommand,
+  stageGeometryToStagedMesh,
+} from './tauriMeshBridge';
 
-type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView, opts?: { headers?: Record<string, string> }) => Promise<T>;
-
-interface TauriCoreModule {
-  invoke: TauriInvoke;
-}
-
-let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 let stagedHollowPreviewSourceKey: string | null = null;
 
 export type HollowMode = 'cavity' | 'infill' | 'shell_open_face';
@@ -65,87 +64,32 @@ export interface HollowResult {
   removedVoxelCenters?: Float32Array;
   removedVoxelIndices?: Uint32Array;
   blockedVoxelCenters?: Float32Array;
+  blockedVoxelIndices?: Uint32Array;
 }
 
-export function isTauriRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  return '__TAURI_INTERNALS__' in window;
-}
-
-async function loadTauriCore(): Promise<TauriCoreModule | null> {
-  if (!isTauriRuntime()) return null;
-  if (!tauriCorePromise) {
-    tauriCorePromise = import('@tauri-apps/api/core')
-      .then((mod) => ({ invoke: mod.invoke as TauriInvoke }))
-      .catch(() => null);
-  }
-  return tauriCorePromise;
-}
-
-async function readStagedPositions(invoke: TauriInvoke): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>('mesh_repair_read_positions');
-  let u8: Uint8Array;
-  if (bytes instanceof ArrayBuffer) {
-    u8 = new Uint8Array(bytes);
-  } else if (bytes instanceof Uint8Array) {
-    u8 = bytes;
-  } else if (Array.isArray(bytes)) {
-    u8 = new Uint8Array(bytes);
-  } else {
-    throw new Error('mesh_repair_read_positions returned unexpected type');
-  }
-
-  const copy = new Uint8Array(u8.byteLength);
-  copy.set(u8);
-  return new Float32Array(copy.buffer);
-}
-
-async function stageGeometryToStagedMesh(
-  invoke: TauriInvoke,
-  geometry: THREE.BufferGeometry,
-): Promise<void> {
-  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
-  if (!posAttr) throw new Error('stageGeometryToStagedMesh: geometry has no position attribute');
-
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
-  await invoke('stage_mesh_binary_set', bytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
-}
-
-async function readPositionsFromCommand(
-  invoke: TauriInvoke,
-  command:
-    | 'mesh_repair_read_positions'
-    | 'mesh_hollow_preview_read_positions'
-    | 'mesh_hollow_preview_read_infill_positions'
-    | 'mesh_hollow_preview_read_removed_voxel_centers'
-    | 'mesh_hollow_preview_read_blocked_voxel_centers'
-    | 'mesh_hollow_preview_read_cavity_positions'
-    | 'mesh_hollow_staged_read_cavity_positions',
-): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
-  let u8: Uint8Array;
-  if (bytes instanceof ArrayBuffer) {
-    u8 = new Uint8Array(bytes);
-  } else if (bytes instanceof Uint8Array) {
-    u8 = bytes;
-  } else if (Array.isArray(bytes)) {
-    u8 = new Uint8Array(bytes);
-  } else {
-    throw new Error(`${command} returned unexpected type`);
-  }
-
-  const copy = new Uint8Array(u8.byteLength);
-  copy.set(u8);
-  return new Float32Array(copy.buffer);
+/** Request for the Rust-side lasso voxel selection. Mirrors the model
+ *  transform + camera projection the frontend lasso resolver used before the
+ *  per-voxel projection moved into Rust. */
+export interface SelectRemovedVoxelsInPolygonRequest {
+  /** Lasso polygon in container-pixel space (same space as the resolver's
+   *  projectWorldPoint output): [[px, py], ...]. */
+  polygon: Array<[number, number]>;
+  /** Column-major camera.projectionMatrix * matrixWorldInverse (16 floats). */
+  viewProj: number[];
+  rectWidth: number;
+  rectHeight: number;
+  geometryCenter: [number, number, number];
+  scale: [number, number, number];
+  rotationQuat: [number, number, number, number];
+  position: [number, number, number];
+  options: HollowOptions;
 }
 
 async function readUint32FromCommand(
   invoke: TauriInvoke,
-  command: 'mesh_hollow_preview_read_removed_voxel_indices',
+  command:
+    | 'mesh_hollow_preview_read_removed_voxel_indices'
+    | 'mesh_hollow_preview_read_blocked_voxel_indices',
 ): Promise<Uint32Array> {
   const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
   let u8: Uint8Array;
@@ -164,28 +108,6 @@ async function readUint32FromCommand(
   return new Uint32Array(copy.buffer);
 }
 
-function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {
-  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const positions = posAttr.array as Float32Array;
-  const index = geometry.getIndex();
-
-  if (!index) {
-    if (positions instanceof Float32Array) return positions;
-    return new Float32Array(positions as unknown as ArrayLike<number>);
-  }
-
-  const indexArr = index.array as Uint16Array | Uint32Array;
-  const out = new Float32Array(indexArr.length * 3);
-  for (let i = 0; i < indexArr.length; i += 1) {
-    const vi = indexArr[i] * 3;
-    const oi = i * 3;
-    out[oi] = positions[vi];
-    out[oi + 1] = positions[vi + 1];
-    out[oi + 2] = positions[vi + 2];
-  }
-  return out;
-}
-
 export async function hollowFromGeometry(
   geometry: THREE.BufferGeometry,
   options: HollowOptions,
@@ -199,7 +121,7 @@ export async function hollowFromGeometry(
   const optionsJson = JSON.stringify(options);
   const reportJson = await core.invoke<string>('mesh_hollow_staged', { optionsJson });
   const report = JSON.parse(reportJson) as HollowReport;
-  const positions = await readStagedPositions(core.invoke);
+  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
   let cavityPositions: Float32Array | undefined;
   try {
     cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
@@ -268,7 +190,13 @@ export async function hollowPreviewFromCapturedSource(
   } catch {
     blockedVoxelCenters = undefined;
   }
-  return { report, positions, cavityPositions, infillPositions, removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters };
+  let blockedVoxelIndices: Uint32Array | undefined;
+  try {
+    blockedVoxelIndices = await readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_indices');
+  } catch {
+    blockedVoxelIndices = undefined;
+  }
+  return { report, positions, cavityPositions, infillPositions, removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters, blockedVoxelIndices };
 }
 
 export async function hollowApplyFromCapturedSource(
@@ -280,7 +208,7 @@ export async function hollowApplyFromCapturedSource(
   const optionsJson = JSON.stringify(options);
   const reportJson = await core.invoke<string>('mesh_hollow_apply_from_captured_source', { optionsJson });
   const report = JSON.parse(reportJson) as HollowReport;
-  const positions = await readStagedPositions(core.invoke);
+  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
   let cavityPositions: Float32Array | undefined;
   try {
     cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
@@ -288,6 +216,37 @@ export async function hollowApplyFromCapturedSource(
     cavityPositions = undefined;
   }
   return { report, positions, cavityPositions };
+}
+
+/** Rust-side lasso selection of the FULL through-depth cavity voxel column
+ *  under the polygon. Returns the selected grid indices, or null outside the
+ *  Tauri runtime. Decoupled from the boundary-filtered / capped rendered set,
+ *  which is why selection can no longer only reach the surface layer. */
+export async function selectRemovedVoxelsInPolygon(
+  request: SelectRemovedVoxelsInPolygonRequest,
+): Promise<Uint32Array | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+
+  const requestJson = JSON.stringify(request);
+  const bytes = await core.invoke<ArrayBuffer | Uint8Array | number[]>(
+    'mesh_hollow_preview_select_removed_voxels_in_polygon',
+    { requestJson },
+  );
+  let u8: Uint8Array;
+  if (bytes instanceof ArrayBuffer) {
+    u8 = new Uint8Array(bytes);
+  } else if (bytes instanceof Uint8Array) {
+    u8 = bytes;
+  } else if (Array.isArray(bytes)) {
+    u8 = new Uint8Array(bytes);
+  } else {
+    throw new Error('mesh_hollow_preview_select_removed_voxels_in_polygon returned unexpected type');
+  }
+
+  const copy = new Uint8Array(u8.byteLength);
+  copy.set(u8);
+  return new Uint32Array(copy.buffer);
 }
 
 export function applyHollowedPositions(geometry: THREE.BufferGeometry, positions: Float32Array): void {

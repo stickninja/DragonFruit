@@ -237,3 +237,13 @@ test('estimate uses effective overridden travel while preserving raw LOD and exp
   // Layer 3 moves for 121 seconds instead of being covered by raw LOD 9.
   assert.equal(estimateCtbPlanSeconds(after) - estimateCtbPlanSeconds(before), 112);
 });
+
+
+test('named ranges survive profile JSON round trips without affecting layer values', () => {
+  const draft = createCtbTimingConfig();
+  draft.overrides = [{ id: 'named', name: '  Initial settle  ', startLayer: 1, endLayer: 2, values: { lightOffDelaySec: 5 } }];
+  const stored = sanitizeCtbTimingConfig(JSON.parse(JSON.stringify(draft)))!;
+  assert.equal(stored.overrides[0].name, 'Initial settle');
+  assert.equal(resolveCtbTimingValues(stored, 2, 1).lightOffDelaySec, 5);
+  assert.deepEqual(sanitizeCtbTimingConfig(JSON.parse(JSON.stringify(stored))), stored);
+});

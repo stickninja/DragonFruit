@@ -1,5 +1,22 @@
 {
+  "build": {
+    "beforeBundleCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-windows-runtime.ps1"
+  },
   "bundle": {
-    "licenseFile": "nsis/assets/license.txt"
+    "licenseFile": "nsis/assets/license.txt",
+    "resources": {
+      "windows-resources/nsis-plugins/InetC.txt": "licenses/InetC.txt"
+    },
+    "windows": {
+      "wix": {
+        "fragmentPaths": ["wix/runtime-prerequisite.wxs"],
+        "componentGroupRefs": ["DfRuntimePrerequisite"]
+      },
+      "nsis": {
+        "installerHooks": "nsis/thumbnail-hooks.nsh",
+        "headerImage": "nsis/assets/header.bmp",
+        "sidebarImage": "nsis/assets/sidebar.bmp"
+      }
+    }
   }
 }

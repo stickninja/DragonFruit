@@ -1,0 +1,205 @@
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { AlertTriangle, CheckCircle2, Info, Redo2, RefreshCw, Undo2 } from 'lucide-react';
+import { Spinner, Toast, ToastViewport } from '@/components/atoms';
+import type { SceneImportReport } from '@/features/scene/useSceneCollectionManager';
+import type { OrientationToastReport } from '@/features/notifications/useEditorToasts';
+
+/** Module-level labels (React Compiler must not rename Lingui locals). */
+const ALREADY_OPTIMAL = msg`Already optimal for this goal.`;
+
+// Static ICU pattern in a module-level formatter (see page.tsx): inline
+// interpolation loses its placeholder names to the React Compiler in production
+// builds. Concatenating a prefix instead would hard-code English word order.
+function formatOrientedLabel(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  modelName: string,
+): string {
+  return translate(msg({
+    message: 'Successfully oriented {modelName}',
+    comment: '{modelName} is the display name of the model that was reoriented.',
+  }), { modelName });
+}
+
+type IdText = { id: number; text: string };
+
+export type NotificationStackProps = {
+  isSaveToastVisible: boolean;
+  isSaveToastAnimatedVisible: boolean;
+  saveToastMode: 'saving' | 'autosaving';
+
+  historyActionToast: { id: number; label: MessageDescriptor; direction: 'undo' | 'redo' } | null;
+  isHistoryActionToastVisible: boolean;
+
+  printingMonitorErrorToast: IdText | null;
+  isPrintingMonitorErrorToastVisible: boolean;
+
+  sceneImportReport: SceneImportReport | null;
+  isSceneImportToastVisible: boolean;
+  onOpenMeshRepairReport: () => void;
+
+  exportSuccessToast: { id: number; path: string } | null;
+  isExportSuccessToastVisible: boolean;
+
+  exportErrorToast: IdText | null;
+  isExportErrorToastVisible: boolean;
+
+  orientationToast: OrientationToastReport | null;
+  isOrientationToastVisible: boolean;
+};
+
+/** Bottom-corner toast/notification stack for the editor shell. */
+export function NotificationStack({
+  isSaveToastVisible,
+  isSaveToastAnimatedVisible,
+  saveToastMode,
+  historyActionToast,
+  isHistoryActionToastVisible,
+  printingMonitorErrorToast,
+  isPrintingMonitorErrorToastVisible,
+  sceneImportReport,
+  isSceneImportToastVisible,
+  onOpenMeshRepairReport,
+  exportSuccessToast,
+  isExportSuccessToastVisible,
+  exportErrorToast,
+  isExportErrorToastVisible,
+  orientationToast,
+  isOrientationToastVisible,
+}: NotificationStackProps) {
+  const { _ } = useLingui();
+  return (
+    <>
+      {isSaveToastVisible && (
+        <ToastViewport zIndex={126} offset="1.25rem">
+          <Toast tone="info" animated visible={isSaveToastAnimatedVisible} className="flex items-center gap-2">
+            <Spinner size="md" icon={RefreshCw} />
+            {saveToastMode === 'saving' ? _(msg`Saving…`) : _(msg`Autosaving…`)}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {historyActionToast && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast
+            tone={historyActionToast.direction === 'undo' ? 'warning' : 'info'}
+            animated
+            visible={isHistoryActionToastVisible}
+            className="flex items-center gap-2"
+          >
+            {historyActionToast.direction === 'undo' ? (
+              <Undo2 className="h-4 w-4 motion-safe:animate-pulse" />
+            ) : (
+              <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
+            )}
+            {_(historyActionToast.label)}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {printingMonitorErrorToast && (
+        <ToastViewport
+          zIndex={126}
+          offset={(historyActionToast || sceneImportReport || orientationToast) ? '4.5rem' : '1.25rem'}
+        >
+          <Toast
+            tone="error"
+            animated
+            visible={isPrintingMonitorErrorToastVisible}
+            className="flex items-center gap-2"
+          >
+            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            {printingMonitorErrorToast.text}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {sceneImportReport && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast
+            tone={
+              sceneImportReport.tone === 'error'
+                ? 'error'
+                : sceneImportReport.tone === 'warning'
+                  ? 'warning'
+                  : 'success'
+            }
+            animated
+            visible={isSceneImportToastVisible}
+            className={`flex items-center gap-2 ${
+              sceneImportReport.clickAction === 'openMeshRepairReport'
+                ? 'pointer-events-auto cursor-pointer select-none'
+                : ''
+            }`}
+            role={sceneImportReport.clickAction === 'openMeshRepairReport' ? 'button' : undefined}
+            tabIndex={sceneImportReport.clickAction === 'openMeshRepairReport' ? 0 : undefined}
+            onClick={() => {
+              if (sceneImportReport?.clickAction === 'openMeshRepairReport') {
+                onOpenMeshRepairReport();
+              }
+            }}
+            onKeyDown={(event) => {
+              if (sceneImportReport?.clickAction !== 'openMeshRepairReport') {
+                return;
+              }
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onOpenMeshRepairReport();
+              }
+            }}
+          >
+            {sceneImportReport.tone === 'error' ? (
+              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            ) : sceneImportReport.tone === 'warning' ? (
+              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4" />
+            )}
+            {sceneImportReport.text}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {exportSuccessToast && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="success" animated visible={isExportSuccessToastVisible} className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4" />
+            Saved to: {exportSuccessToast.path}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {exportErrorToast && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="error" animated visible={isExportErrorToastVisible} className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            {exportErrorToast.text}
+          </Toast>
+        </ToastViewport>
+      )}
+      {orientationToast && (
+        <ToastViewport
+          zIndex={125}
+          offset={(historyActionToast || sceneImportReport) ? '4.5rem' : '1.25rem'}
+        >
+          <Toast
+            tone={orientationToast.status === 'applied' ? 'success' : 'info'}
+            animated
+            visible={isOrientationToastVisible}
+            className="flex items-center gap-2"
+          >
+            {orientationToast.status === 'applied' ? (
+              <CheckCircle2 className="h-4 w-4" />
+            ) : (
+              <Info className="h-4 w-4" />
+            )}
+            {orientationToast.status === 'applied'
+              ? formatOrientedLabel(_, orientationToast.modelName)
+              : _(ALREADY_OPTIMAL)}
+          </Toast>
+        </ToastViewport>
+      )}
+    </>
+  );
+}

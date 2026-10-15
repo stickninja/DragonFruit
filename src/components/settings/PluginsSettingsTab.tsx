@@ -1,7 +1,9 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Loader2, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
+import { Button, Spinner } from '@/components/atoms';
+import { Tooltip } from '@/components/ui/Tooltip';
 import {
   getInstalledPlugins,
   getProfileStoreSnapshot,
@@ -342,7 +344,7 @@ export function PluginsSettingsTab() {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
+      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
         <div className="flex items-start gap-2">
           <span
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
@@ -351,15 +353,17 @@ export function PluginsSettingsTab() {
             <Plug className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Plugin Loader</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Plugin Loader</h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
               Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.
             </p>
           </div>
         </div>
-        <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-          Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
-        </p>
+        {isDevRuntime && (
+          <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+            Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
+          </p>
+        )}
 
         <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-2">
           <input
@@ -369,16 +373,18 @@ export function PluginsSettingsTab() {
             placeholder="https://github.com/<owner>/<repo> or df://debug_plugin_official"
             className="ui-input h-[34px] px-2.5 py-1.5 text-sm"
           />
-          <button
+          <Button
             type="button"
             onClick={() => { void handleInstall(); }}
             disabled={isInstalling}
-            className="ui-button ui-button-secondary !h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+            variant="secondary"
+            size="auto"
+            className="!h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
             style={accentSecondaryActionStyle92}
           >
-            {isInstalling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
             {isInstalling ? 'Installing…' : 'Install Plugin'}
-          </button>
+          </Button>
         </div>
 
         {status.kind !== 'idle' && (
@@ -407,42 +413,46 @@ export function PluginsSettingsTab() {
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   Unverified Plugin Liability Warning
                 </div>
-                <div className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                <div className="mt-1 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
                   This repository is not on the trusted allowlist. You can still install this <strong>simple/data-only</strong> plugin,
                   but you accept responsibility for validating the source and manifest contents.
                 </div>
               </div>
             </div>
-            <div className="mt-3 rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 <span style={{ color: 'var(--text-strong)' }}>Repo:</span>{' '}
                 {pendingLiabilityInstall.unverifiedRepo?.owner}/{pendingLiabilityInstall.unverifiedRepo?.name}
               </div>
               {Array.isArray(pendingLiabilityInstall.allowlistRules) && pendingLiabilityInstall.allowlistRules.length > 0 && (
-                <div className="mt-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <div className="mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <span style={{ color: 'var(--text-strong)' }}>Allowlist:</span> {pendingLiabilityInstall.allowlistRules.join(', ')}
                 </div>
               )}
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 disabled={isInstalling}
                 onClick={() => setPendingLiabilityInstall(null)}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }}
                 disabled={isInstalling}
                 onClick={() => { void handleConfirmLiabilityInstall(); }}
               >
                 {isInstalling ? 'Installing…' : 'I Understand, Install Anyway'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -474,18 +484,18 @@ export function PluginsSettingsTab() {
                   <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                     Review Plugin Before Install
                   </div>
-                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
                     Confirm source and metadata before adding this plugin to your profile library.
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
                       {pendingInstallPreview.manifest.name}
                     </span>
-                    <span className="text-[10px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+                    <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
                       v{pendingInstallPreview.manifest.version}
                     </span>
                     <span
-                      className="text-[10px] rounded-full border px-1.5 py-0.5 font-semibold"
+                      className="text-[11px] rounded-full border px-1.5 py-0.5 font-semibold"
                       style={{
                         borderColor: pendingInstallPreview.trust === 'allowlisted'
                           ? 'color-mix(in srgb, #86efac, var(--border-subtle) 45%)'
@@ -504,8 +514,8 @@ export function PluginsSettingsTab() {
             </div>
 
             <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Identity</div>
+              <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Identity</div>
                 <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <div><span style={{ color: 'var(--text-strong)' }}>ID:</span> {pendingInstallPreview.manifest.id}</div>
                   {pendingInstallPreview.manifest.author && (
@@ -519,8 +529,8 @@ export function PluginsSettingsTab() {
                 </div>
               </div>
 
-              <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Origin</div>
+              <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Origin</div>
                 <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>Repo:</span> {pendingInstallPreview.repoUrl}</div>
                   {pendingInstallPreview.originUrl && (
@@ -534,32 +544,36 @@ export function PluginsSettingsTab() {
             </div>
 
             {pendingInstallPreview.manifest.description && (
-              <div className="mt-3 rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Description</div>
-                <div className="mt-1.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Description</div>
+                <div className="mt-1.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
                   {pendingInstallPreview.manifest.description}
                 </div>
               </div>
             )}
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 disabled={isInstalling}
                 onClick={() => setPendingInstallPreview(null)}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 style={{ color: 'var(--accent-secondary)' }}
                 disabled={isInstalling}
                 onClick={handleInstallFromPreview}
               >
                 {isInstalling ? 'Installing…' : 'Install'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -591,28 +605,32 @@ export function PluginsSettingsTab() {
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs"
                 onClick={() => setPendingRemovePlugin(null)}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1"
                 style={{ color: '#fca5a5' }}
                 onClick={handleConfirmUninstall}
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 Remove
-              </button>
+              </Button>
             </div>
           </div>
         </div>
       )}
 
-      <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2">
           <span
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
@@ -621,7 +639,7 @@ export function PluginsSettingsTab() {
             <PackageCheck className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
               Manage built-in and user-installed plugin packs.
             </p>
@@ -643,24 +661,45 @@ export function PluginsSettingsTab() {
                 className="rounded-md border px-2.5 py-2"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
               >
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      {isBuiltin ? (
-                        <ShieldCheck className="h-3.5 w-3.5" style={{ color: builtinShieldIconColor }} />
-                      ) : (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {!isBuiltin && (
                         <Github className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
                       )}
-                      <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{manifest.name}</span>
-                      <span className="text-[10px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+                      {hasRepositoryLink ? (
+                        <button
+                          onClick={async () => {
+                            const url = repositoryUrl as string;
+                            try {
+                              const { invoke } = await import('@tauri-apps/api/core');
+                              await invoke('open_external_url', { url });
+                            } catch {
+                              window.open(url, '_blank');
+                            }
+                          }}
+                          className="text-sm font-semibold truncate inline-flex items-center gap-1 underline underline-offset-2"
+                          style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                          title={repositoryUrl as string}
+                        >
+                          {manifest.name}
+                          <ExternalLink className="h-3 w-3 shrink-0" />
+                        </button>
+                      ) : (
+                        <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{manifest.name}</span>
+                      )}
+                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+                        {manifest.id}
+                      </span>
+                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+                        {isBuiltin ? 'Built-in' : 'GitHub'}
+                      </span>
+                      <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
                         v{manifest.version}
                       </span>
                     </div>
-                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                      {manifest.id} • {isBuiltin ? 'Built-in' : 'GitHub'}
-                    </div>
                     {isUnverifiedGithubPlugin && (
-                      <div className="text-[11px] mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5"
+                      <div className="text-xs mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5"
                         style={{
                           borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
                           color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
@@ -672,61 +711,39 @@ export function PluginsSettingsTab() {
                       </div>
                     )}
                     {manifest.description && (
-                      <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
                         {manifest.description}
                       </div>
                     )}
 
-                    {hasRepositoryLink && (
-                      <div className="mt-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        <div className="flex items-center gap-1.5">
-                          <Github className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
-                          <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>Repository:</span>
-                          <button
-                            onClick={async () => {
-                              const url = repositoryUrl;
-                              try {
-                                const { invoke } = await import('@tauri-apps/api/core');
-                                await invoke('open_external_url', { url });
-                              } catch {
-                                window.open(url, '_blank');
-                              }
-                            }}
-                            className="inline-flex items-center gap-1 underline underline-offset-2"
-                            style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                          >
-                            {truncateRepositoryUrl(repositoryUrl)}
-                            <ExternalLink className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
+
                   </div>
 
-                  {isOraVerifiedBuiltin ? (
-                    <span
-                      className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold"
-                      style={{
-                        borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 40%)',
-                        color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
-                        background: 'color-mix(in srgb, #d97706, var(--surface-2) 86%)',
-                      }}
-                      title="Built-in and hosted by Open Resin Alliance"
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      ORA Verified
-                    </span>
-                  ) : !isBuiltin ? (
-                    <button
-                      type="button"
-                      onClick={() => handleUninstall(manifest.id, manifest.name)}
-                      className="ui-button ui-button-secondary !h-7 !px-2 !py-0 text-[11px] inline-flex items-center gap-1"
-                      style={{ color: '#fca5a5' }}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Remove
-                    </button>
-                  ) : null}
+                  <div className="flex items-center gap-1.5 shrink-0 self-center">
+                    {isBuiltin && (
+                      <Tooltip content="Built-in plugin" wrapperClassName="flex items-center">
+                        <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
+                      </Tooltip>
+                    )}
+                    {isOraVerifiedBuiltin ? (
+                      <Tooltip content="Officially verified by ORA" wrapperClassName="flex items-center">
+                        <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
+                      </Tooltip>
+                    ) : null}
+                    {!isBuiltin && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="auto"
+                        onClick={() => handleUninstall(manifest.id, manifest.name)}
+                        className="!h-7 !px-2 !py-0 text-xs inline-flex items-center gap-1"
+                        style={{ color: '#fca5a5' }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Remove
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -739,7 +756,7 @@ export function PluginsSettingsTab() {
           <button
             type="button"
             onClick={() => setStudioOpen(true)}
-            className="text-[11px] underline-offset-2 hover:underline"
+            className="text-xs underline-offset-2 hover:underline"
             style={{ color: 'var(--text-faint, var(--text-muted))' }}
           >
             Plugin Creation Studio

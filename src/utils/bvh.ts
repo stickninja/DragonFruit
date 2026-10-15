@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-// Use drei's bundled three-mesh-bvh to avoid version conflicts
-import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from '@react-three/drei/node_modules/three-mesh-bvh';
+// Pinned to three-mesh-bvh@0.8.3 (same version drei bundles) to avoid version conflicts
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
 /**
  * Augment THREE.BufferGeometry with BVH acceleration methods.
@@ -24,11 +24,11 @@ export function initializeBVH() {
  */
 export function accelerateGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
   // Check if computeBoundsTree is available (should be after initializeBVH)
-  if (typeof (geometry as any).computeBoundsTree === 'function') {
+  if (typeof geometry.computeBoundsTree === 'function') {
     console.log('[BVH] Computing bounds tree for geometry...');
     const startTime = performance.now();
     
-    (geometry as any).computeBoundsTree();
+    geometry.computeBoundsTree();
     
     const endTime = performance.now();
     console.log(`[BVH] Bounds tree computed in ${(endTime - startTime).toFixed(2)}ms`);
@@ -45,7 +45,7 @@ export function accelerateGeometry(geometry: THREE.BufferGeometry): THREE.Buffer
  * @param geometry - The geometry to clean up
  */
 export function disposeGeometryBVH(geometry: THREE.BufferGeometry): void {
-  if (typeof (geometry as any).disposeBoundsTree === 'function') {
-    (geometry as any).disposeBoundsTree();
+  if (typeof geometry.disposeBoundsTree === 'function') {
+    geometry.disposeBoundsTree();
   }
 }

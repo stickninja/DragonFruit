@@ -1,4 +1,8 @@
+import { clamp } from '@/utils/math';
 import React from 'react';
+import { LayoutPanelTop, RotateCcw } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import windowLayouts from '@/config/window-layouts.json';
 import {
   type FloatingLayoutDebugRequestDetail,
@@ -8,6 +12,7 @@ import {
   FLOATING_LAYOUT_STORAGE_KEY,
   isFloatingLayoutPersistenceEnabled,
 } from '@/components/layout/floatingLayoutPreferences';
+import { ContextMenu } from '@/components/ui/ContextMenu';
 
 type PanelPosition = {
   x: number;
@@ -108,20 +113,32 @@ type WindowContextMenuState = {
   y: number;
 };
 
-const PANEL_MARGIN = 12;
+const PANEL_MARGIN = 4;
 const EDGE_SNAP_THRESHOLD = 20;
 const EDGE_MAGNET_THRESHOLD = 22;
 const EDGE_HINT_THRESHOLD = 36;
 const PANEL_MAGNET_THRESHOLD = 24;
-const PANEL_GAP = 12;
+const PANEL_GAP = 4;
 const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const PANEL_WIDTH_OVERRIDES: Record<string, number> = {
   'visual-settings': 48,
   'transform-debug-overlay': 420,
 };
-const PANEL_SCALE_EXEMPT_IDS = new Set<string>(['support-settings']);
-const LOCKED_PANEL_IDS = new Set<string>(['visual-settings']);
+// Panels the layout does not let the user move. `always` is the shell chrome. The
+// model list is only pinned while the tool rail is a column down the left edge,
+// which is what it would collide with — with the rail parked as a bar under the
+// app bar the list is an ordinary panel again, draggable and collapsible.
+const LOCKED_PANELS: Record<string, 'always' | 'rail-column'> = {
+    'visual-settings': 'always',
+    'prepare-models': 'rail-column',
+    'support-models': 'rail-column',
+};
+
+function isPanelLocked(panelId: string, railIsColumn: boolean): boolean {
+    const rule = LOCKED_PANELS[panelId];
+    return rule === 'always' || (rule === 'rail-column' && railIsColumn);
+}
 const CHAIN_ATTACH_TOLERANCE = 30;
 
 function getPanelBaseWidth(panelId: string) {
@@ -152,9 +169,6 @@ type LayoutConfig = {
 
 const WINDOW_LAYOUTS: LayoutConfig = windowLayouts as unknown as LayoutConfig;
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
 
 function overlaps(a: PanelRect, b: PanelRect, gap = PANEL_GAP) {
   return !(
@@ -227,6 +241,10 @@ function findNearestFreePosition(
 function isDragBlockedByTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
   return Boolean(
+    // Only `data-no-drag` opts a control out of a panel drag. `data-no-window-drag`
+    // is deliberately NOT honoured here: the app shell carries it on its root, so
+    // `closest` would match every element in the window and no panel could be
+    // dragged at all. The two attributes mean different things — see ui-atoms.md.
     target.closest('button, input, select, textarea, label, a, [role="button"], [data-no-drag], [data-no-drag="true"], .react-colorful'),
   );
 }
@@ -596,6 +614,10 @@ function buildSeededPositions(
   const occupied: PanelRect[] = [];
   const next: Record<string, PanelPosition> = {};
 
+  // Two passes, for the same reason as the seeding effect: a profile can anchor
+  // two panels to each other, and one pass cannot resolve that.
+  for (let pass = 0; pass < 2; pass += 1) {
+  occupied.length = 0;
   for (const panelId of orderedPanelIds) {
     const size = getPanelSize(panelId);
     const anchored = getAnchoredDesiredPosition(panelId, size, profile, next, {}, {}, bounds, getPanelSize, panelGap);
@@ -616,7 +638,10 @@ function buildSeededPositions(
       ? desired
       : findNearestFreePosition(desired, size, occupied, bounds, panelGap);
     next[panelId] = freePosition;
-    occupied.push({ ...freePosition, ...size });
+    if (size.height > 0 && size.width > 0) {
+      occupied.push({ ...freePosition, ...size });
+    }
+  }
   }
 
   return next;
@@ -671,27 +696,12 @@ function FloatingPanelItem({
 }: FloatingPanelItemProps) {
   const itemRef = React.useRef<HTMLDivElement | null>(null);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
-
   React.useLayoutEffect(() => {
     const element = itemRef.current;
     if (!element) return;
 
-    const emitSize = () => {
-      onSizeChange(id, {
-        width: element.offsetWidth || panelWidth,
-        height: element.offsetHeight || DEFAULT_PANEL_HEIGHT,
-      });
-    };
-
-    emitSize();
-
-    const observer = new ResizeObserver(() => {
-      emitSize();
-    });
-
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [id, onSizeChange, panelWidth]);
+    onSizeChange(id, { width: element.offsetWidth, height: element.offsetHeight });
+  });
 
   return (
     <div
@@ -708,7 +718,13 @@ function FloatingPanelItem({
           ? '0 0 0 1px color-mix(in srgb, var(--accent), white 15%), 0 0 0 5px color-mix(in srgb, var(--accent), transparent 76%), 0 14px 24px rgba(0, 0, 0, 0.28)'
           : undefined,
         borderRadius: magnetic ? '12px' : undefined,
-        transition: isDragging ? 'none' : 'box-shadow 140ms ease',
+        // Positions are not transitioned. A panel's position is derived, and the
+        // derivation can land a frame or three after whatever caused it — a mode
+        // switch re-seating the stack, a panel measuring itself. Gliding to it made
+        // that visible as a float-in from wherever the panel last sat, and every
+        // attempt to gate the glide was beaten by a case where the correction
+        // arrived late. Snapping is what "spawns in the right place".
+        transition: 'box-shadow 140ms ease',
       }}
       onPointerDown={(event) => {
         if (event.button === 2) {
@@ -750,7 +766,8 @@ function FloatingPanelItem({
  * A container for floating UI panels that overlays the canvas.
  * Allows clicking through empty spaces to the canvas below.
  */
-export function FloatingPanelStack({ children }: { children: React.ReactNode }) {
+export function FloatingPanelStack({ children, leftInsetPx = 0, railIsColumn = true }: { children: React.ReactNode; leftInsetPx?: number; railIsColumn?: boolean }) {
+  const { _ } = useLingui();
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const panelSizesRef = React.useRef<Record<string, PanelSize>>({});
   const expandedPanelSizesRef = React.useRef<Record<string, PanelSize>>({});
@@ -759,7 +776,13 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   const dragRef = React.useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
 
   const [panelPositions, setPanelPositions] = React.useState<Record<string, PanelPosition>>({});
-  const [containerSize, setContainerSize] = React.useState<PanelSize>({ width: 1200, height: 800 });
+  // The viewport, not the container. The container is `left: inset, right: 0`, so
+  // its own width changes with the rail's inset — and a ResizeObserver callback
+  // that sets state re-renders on the *next* frame, which left every anchored
+  // panel computed against the old width for a frame: it rendered unsnapped and
+  // then snapped. Measuring the viewport keeps the inset out of the measurement
+  // and it is subtracted during render instead.
+  const [viewportSize, setViewportSize] = React.useState<PanelSize>({ width: 1200, height: 800 });
   const [panelSizeVersion, setPanelSizeVersion] = React.useState(0);
   const [activeDragPanelId, setActiveDragPanelId] = React.useState<string | null>(null);
   const [edgeHint, setEdgeHint] = React.useState<EdgeHint>({ left: false, right: false, top: false, bottom: false });
@@ -783,48 +806,14 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     () => (panelIdsSignature.length > 0 ? panelIdsSignature.split('\u001f') : []),
     [panelIdsSignature],
   );
-  const panelWidthScale = React.useMemo(() => {
-    const width = containerSize.width;
-    const height = containerSize.height;
-
-    if (width >= 3200 && height >= 1100) return 1.14;
-    if (width >= 2600 && height >= 980) return 1.08;
-    if (width <= 1100 || height <= 700) return 0.72;
-    if (width <= 1366 || height <= 820) return 0.82;
-    if (width <= 1600 || height <= 900) return 0.9;
-    if (width <= 1800 || height <= 980) return 0.95;
-    return 1;
-  }, [containerSize.height, containerSize.width]);
-
-  const panelGap = React.useMemo(() => {
-    if (panelWidthScale <= 0.72) return 7;
-    if (panelWidthScale <= 0.82) return 8;
-    if (panelWidthScale <= 0.9) return 9;
-    if (panelWidthScale <= 0.95) return 10;
-    return PANEL_GAP;
-  }, [panelWidthScale]);
+  // Panel widths and gaps are fixed; no resolution-based scale factor is applied.
+  // Native webview DPI scaling (plus the user UI-scale setting via useUiScale)
+  // keeps the UI at a consistent physical size on every monitor.
+  const panelGap = PANEL_GAP;
 
   const getPanelWidth = React.useCallback((panelId: string) => {
-    const baseWidth = getPanelBaseWidth(panelId);
-    if (panelId === 'visual-settings') {
-      const visualSettingsScale = Math.min(1, panelWidthScale);
-      return Math.max(44, Math.round(baseWidth * visualSettingsScale));
-    }
-    if (PANEL_SCALE_EXEMPT_IDS.has(panelId)) {
-      if (panelWidthScale <= 1) {
-        return baseWidth;
-      }
-      const supportUltrawideBoost = panelId === 'support-settings'
-        ? (panelWidthScale >= 1.14 ? 1.1 : panelWidthScale >= 1.08 ? 1.06 : 1)
-        : 1;
-      return Math.max(panelId === 'visual-settings' ? 44 : 72, Math.round(baseWidth * panelWidthScale * supportUltrawideBoost));
-    }
-    const analysisCompactFactor = panelId.startsWith('analysis-')
-      ? (panelWidthScale < 1 ? 0.88 : 1)
-      : 1;
-    const scaledWidth = Math.round(baseWidth * panelWidthScale * analysisCompactFactor);
-    return Math.max(panelId === 'visual-settings' ? 44 : 72, scaledWidth);
-  }, [panelWidthScale]);
+    return getPanelBaseWidth(panelId);
+  }, []);
 
   const getPanelSize = React.useCallback((panelId: string): PanelSize => {
     return panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
@@ -833,10 +822,31 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   const layoutProfile = React.useMemo(() => resolveLayoutProfile(stablePanelIds), [stablePanelIds]);
   const orderedPanelIds = React.useMemo(() => buildOrderedPanelIds(stablePanelIds, layoutProfile), [layoutProfile, stablePanelIds]);
   const orderedPanelIdsSignature = React.useMemo(() => orderedPanelIds.join('\u001f'), [orderedPanelIds]);
-  const seededPositions = React.useMemo(
-    () => buildSeededPositions(orderedPanelIds, layoutProfile, containerSize, getPanelSize, panelGap),
-    [containerSize, getPanelSize, layoutProfile, orderedPanelIds, panelGap],
+  // The container spans the viewport: its right edge is the window's right edge, so
+  // the rail does not belong in the coordinate space at all — it only means a panel
+  // must not start left of it, which is a clamp applied where positions are derived.
+  // Treating it as a space (subtracting it here and offsetting the container) meant
+  // every panel position had to be re-derived whenever the rail appeared or went
+  // away, which is one commit after the frame that caused it.
+  const containerSize = React.useMemo<PanelSize>(
+    () => ({ width: viewportSize.width, height: viewportSize.height }),
+    [viewportSize],
   );
+
+  // `panelSizeVersion` belongs here: `getPanelSize` reads a ref, so its identity is
+  // stable and nothing else in this list changes when a panel reports a new size.
+  // Without it the seeded layout was computed once, from fallback heights, and kept
+  // — which is what "Reset all windows layout" applied (the auto-support panel
+  // landing 200px low and staying there) and what the first frame of a mode switch
+  // used before correcting itself.
+  const seededPositions = React.useMemo(() => {
+    // Read on purpose: this cache is keyed by the panels' measured sizes, and
+    // `getPanelSize` cannot express that because it reads a ref, so its identity
+    // never changes. Without this the seed kept the layout it computed from
+    // fallback heights for the life of the session.
+    void panelSizeVersion;
+    return buildSeededPositions(orderedPanelIds, layoutProfile, containerSize, getPanelSize, panelGap);
+  }, [containerSize, getPanelSize, layoutProfile, orderedPanelIds, panelGap, panelSizeVersion]);
 
   const buildVerticalAssociationEdges = React.useCallback(() => {
     const validIds = new Set(panelIdsRef.current);
@@ -981,9 +991,9 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     if (!element) return;
 
     const updateContainerSize = () => {
-      const nextWidth = element.clientWidth;
-      const nextHeight = element.clientHeight;
-      setContainerSize((previous) => {
+      const nextWidth = window.innerWidth;
+      const nextHeight = window.innerHeight - element.offsetTop;
+      setViewportSize((previous) => {
         if (previous.width === nextWidth && previous.height === nextHeight) {
           return previous;
         }
@@ -1042,7 +1052,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
       const restored: Record<string, PanelPosition> = {};
       for (const panelId of stablePanelIds) {
-        if (LOCKED_PANEL_IDS.has(panelId)) continue;
+        if (isPanelLocked(panelId, railIsColumn)) continue;
         const pos = saved[panelId];
         if (!pos) continue;
         if (typeof pos.x !== 'number' || typeof pos.y !== 'number') continue;
@@ -1080,7 +1090,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     } finally {
       layoutHydratedRef.current = true;
     }
-  }, [getPanelSize, panelGap, persistLayout, stablePanelIds]);
+  }, [getPanelSize, panelGap, persistLayout, railIsColumn, stablePanelIds]);
 
   React.useEffect(() => {
     if (!layoutHydratedRef.current) return;
@@ -1091,6 +1101,12 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     const positionsToSave: Record<string, PanelPosition> = {};
     for (const [panelId, pos] of Object.entries(panelMemoryRef.current)) {
       if (!pos) continue;
+      // Only panels the user actually moved. Everything else is derived from the
+      // profile, and saving a derived position turns it into a permanent override:
+      // the `support` profile once placed the rotation and auto panels in the wrong
+      // order, and every layout saved back then kept re-applying that order, so the
+      // panels swapped places on each visit and were corrected a frame later.
+      if (manualOverrideRef.current[panelId] !== true) continue;
       positionsToSave[panelId] = pos;
     }
 
@@ -1101,17 +1117,30 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     }
   }, [panelIdsSignature, panelPositions, persistLayout]);
 
-  React.useEffect(() => {
+  // Positions live in the container's coordinate space, so a change to the
+  // container's left inset has to re-derive them in the same paint. As a plain
+  // effect this ran a frame or three late and every panel was drawn at the old
+  // space plus the new origin — an 80px jump, visible for three frames.
+  React.useLayoutEffect(() => {
     setPanelPositions((previous) => {
       const occupied: PanelRect[] = [];
       const next: Record<string, PanelPosition> = {};
 
+      // Two passes over the same accumulator. A profile may anchor two panels to
+      // each other — `support` anchors the settings panel and the visual settings
+      // panel to each other — and neither can resolve until the other is placed.
+      // A single pass parks one of them in a fallback slot (which is how the
+      // support panel ends up under the cross-section slider) and a later pass
+      // snaps it across. The second pass sees every target already placed, so the
+      // first paint is correct.
+      for (let pass = 0; pass < 2; pass += 1) {
+      occupied.length = 0;
       orderedPanelIds.forEach((panelId) => {
         const size = getPanelSize(panelId);
         const existing = previous[panelId];
         const remembered = panelMemoryRef.current[panelId];
         const linkedCandidates = attachmentMemoryRef.current[panelId] ?? [];
-        const isLockedPanel = LOCKED_PANEL_IDS.has(panelId);
+        const isLockedPanel = isPanelLocked(panelId, railIsColumn);
         const hasManualOverride = !isLockedPanel && manualOverrideRef.current[panelId] === true;
         const anchorRule = layoutProfile?.anchors?.[panelId];
         let effectiveAnchorTarget: string | undefined;
@@ -1200,12 +1229,19 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
           : findNearestFreePosition(desired, size, occupied, containerSize, panelGap);
         next[panelId] = freePosition;
         panelMemoryRef.current[panelId] = freePosition;
-        occupied.push({ ...freePosition, ...size });
+        // A panel that is not in the layout — the rail hides the unselected Support
+        // panels with `display: none`, so they measure nothing — must not occupy a
+        // slot. The overlap test adds the gap, so even a zero-height rect collides
+        // and every panel after the first was pushed a gap further down.
+        if (size.height > 0 && size.width > 0) {
+          occupied.push({ ...freePosition, ...size });
+        }
       });
+      }
 
       return positionsEqual(previous, next, stablePanelIds) ? previous : next;
     });
-  }, [containerSize, getPanelSize, layoutProfile, orderedPanelIdsSignature, panelGap, panelIdsSignature, panelSizeVersion, stablePanelIds, orderedPanelIds]);
+  }, [containerSize, getPanelSize, layoutProfile, orderedPanelIdsSignature, panelGap, panelIdsSignature, panelSizeVersion, railIsColumn, stablePanelIds, orderedPanelIds]);
 
   const handlePanelSizeChange = React.useCallback((panelId: string, size: PanelSize) => {
     const prev = panelSizesRef.current[panelId];
@@ -1491,7 +1527,11 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
         const current = currentPreview?.id === activeDragPanelId
           ? currentPreview.position
           : previous[activeDragPanelId] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
+        // Same clamp as at render: the state and the drawn position have to agree
+        // after a drop, or dragging into the rail's band would leave the panel
+        // drawn beside the rail but stored under it.
         const snapped = snapPanelToNearestSpot(activeDragPanelId, current);
+        snapped.x = Math.max(leftInsetPx, snapped.x);
 
         const otherPanels = panelIdsRef.current
           .filter((id) => id !== activeDragPanelId)
@@ -1559,7 +1599,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };
-  }, [activeDragPanelId, containerSize, getPanelSize, panelGap, snapPanelToNearestSpot]);
+  }, [activeDragPanelId, containerSize, getPanelSize, leftInsetPx, panelGap, snapPanelToNearestSpot]);
 
   React.useEffect(() => {
     const validIds = new Set(panelIdsRef.current);
@@ -1585,7 +1625,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
   const handlePointerDown = React.useCallback((panelId: string, event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    if (LOCKED_PANEL_IDS.has(panelId)) return;
+    if (isPanelLocked(panelId, railIsColumn)) return;
     if (!isPanelHeaderDragHandleTarget(event.target)) return;
     if (isDragBlockedByTarget(event.target)) return;
 
@@ -1602,7 +1642,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       offsetY: event.clientY - containerRect.top - panelPosition.y,
     };
     event.preventDefault();
-  }, [getPanelSize, panelPositions, seededPositions]);
+  }, [getPanelSize, panelPositions, railIsColumn, seededPositions]);
 
   const closeWindowContextMenu = React.useCallback(() => {
     setWindowContextMenu(null);
@@ -1641,25 +1681,22 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       const panelEl = document.querySelector(`[data-panel-id="${panelId}"]`) as HTMLElement | null;
       if (panelEl) {
         const base = PANEL_WIDTH_OVERRIDES[panelId] ?? DEFAULT_PANEL_WIDTH;
-        const scale = panelWidthScale;
-        const defaultWidth = Math.max(72, Math.round(base * scale));
+        const defaultWidth = Math.max(72, base);
         panelEl.style.width = `${defaultWidth}px`;
       }
     }
-  }, [closeWindowContextMenu, seededPositions, panelWidthScale]);
+  }, [closeWindowContextMenu, seededPositions]);
 
   const resetAllWindows = React.useCallback(() => {
     closeWindowContextMenu();
-    setPanelPositions(() => {
-      const next: Record<string, PanelPosition> = {};
-      for (const panelId of panelIdsRef.current) {
-        next[panelId] = seededPositions[panelId] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
-      }
-      panelMemoryRef.current = { ...panelMemoryRef.current, ...next };
-      attachmentMemoryRef.current = {};
-      manualOverrideRef.current = {};
-      return next;
-    });
+    // Clear what the user did, then let the seeding effect re-derive from the
+    // profile. Applying `seededPositions` directly looked equivalent but the memo
+    // can be one panel measurement behind — that is what landed the auto-support
+    // panel 200px low, and left it there.
+    attachmentMemoryRef.current = {};
+    manualOverrideRef.current = {};
+    panelMemoryRef.current = {};
+    setPanelSizeVersion((version) => version + 1);
 
     if (typeof window !== 'undefined') {
       try {
@@ -1668,24 +1705,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
         // ignore storage failures
       }
     }
-  }, [closeWindowContextMenu, seededPositions]);
-
-  React.useEffect(() => {
-    if (!windowContextMenu) return;
-
-    const handlePointerDown = () => closeWindowContextMenu();
-    const handleEscape = (e: CustomEvent) => {
-      if (e.detail.key === 'Escape') closeWindowContextMenu();
-    };
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    };
-  }, [windowContextMenu, closeWindowContextMenu]);
+  }, [closeWindowContextMenu]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1723,21 +1743,27 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     };
   }, [persistLayout, seededPositions]);
 
-  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
-  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080;
-
   return (
     <FloatingPanelStackContext.Provider value={floatingPanelStackContext}>
       <div
         ref={containerRef}
-        className="absolute left-0 right-0 top-[var(--topbar-height)] bottom-0 z-10 pointer-events-none"
+        className="absolute right-0 top-[var(--topbar-height)] bottom-0 z-10 pointer-events-none"
+        // The origin glides with the same timing as the panels: the rail's inset
+        // moves it, and the panels re-derive their positions against it, so the
+        // two have to move together or the panel appears to jump by the inset.
+        style={{ left: 0 }}
       >
       {panelEntries.map((entry, index) => {
         const panelId = entry.id;
-        const panelPosition = panelPositions[panelId] ?? seededPositions[panelId] ?? {
+        const rawPosition = panelPositions[panelId] ?? seededPositions[panelId] ?? {
           x: PANEL_MARGIN,
           y: PANEL_MARGIN + index * 18,
         };
+        // The rail is a minimum x, not a coordinate space. A panel parked at the
+        // left edge renders beside the rail while it is a column and returns to the
+        // edge when it is a bar — decided while rendering, so the frame that changes
+        // the rail is the frame that has the right position.
+        const panelPosition = { x: Math.max(leftInsetPx, rawPosition.x), y: rawPosition.y };
 
         const magnetic = activeDragPanelId === panelId && hasEdgeHint(edgeHint);
 
@@ -1777,47 +1803,21 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
         />
       ) : null}
 
-      {windowContextMenu ? (
-        <div
-          className="fixed z-[140] pointer-events-auto w-56 rounded-lg border p-1.5 shadow-xl"
-          style={{
-            left: Math.max(8, Math.min(windowContextMenu.x, viewportWidth - 232)),
-            top: Math.max(8, Math.min(windowContextMenu.y, viewportHeight - 120)),
-            borderColor: 'var(--border-subtle)',
-            background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="w-full rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-            style={{ color: 'var(--text-strong)' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-            }}
-            onClick={() => resetSingleWindow(windowContextMenu.panelId)}
-          >
-            Reset this window
-          </button>
-          <button
-            type="button"
-            className="w-full rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-            style={{ color: 'var(--text-strong)' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-            }}
-            onClick={resetAllWindows}
-          >
-            Reset all windows layout
-          </button>
-        </div>
-      ) : null}
+      <ContextMenu
+        position={windowContextMenu}
+        entries={[
+          { id: 'reset-window', label: _(msg`Reset Window`), icon: RotateCcw },
+          { id: 'reset-all-windows', label: _(msg`Reset Layout`), icon: LayoutPanelTop },
+        ]}
+        onSelect={(id) => {
+          if (!windowContextMenu) return;
+          if (id === 'reset-window') resetSingleWindow(windowContextMenu.panelId);
+          if (id === 'reset-all-windows') resetAllWindows();
+        }}
+        onClose={closeWindowContextMenu}
+        title={_(msg({ message: 'Window', comment: 'Heading of the floating panel right-click menu that resets panel positions.' }))}
+        ariaLabel={_(msg({ message: 'Window context menu', comment: 'Accessible name of the floating panel right-click menu that resets panel positions.' }))}
+      />
       </div>
     </FloatingPanelStackContext.Provider>
   );

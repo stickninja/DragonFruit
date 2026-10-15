@@ -8,6 +8,7 @@ import type { GizmoAxis as AxisType } from '../types';
 import { getCachedConeGeometry, getCachedMoveShaftGeometry, getCachedSphereGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 interface GizmoMoveProps {
   axis: AxisType;
@@ -78,7 +79,17 @@ export function GizmoMove({
   const axisDeltaRef = useRef(new THREE.Vector3());
   const scratchAxisDirRef = useRef(new THREE.Vector3());
   const scratchAxisToRayRef = useRef(new THREE.Vector3());
+  const scratchCameraOffsetRef = useRef(new THREE.Vector3());
   const { camera, gl } = useThree();
+
+  // World-space axis direction. Falls back to hardcoded world axis when
+  // worldAxisDir prop is not provided (existing behavior with no rotation).
+  const axisDirection = useMemo(() => {
+    if (worldAxisDir) return worldAxisDir.clone();
+    if (axis === 'x') return new THREE.Vector3(1, 0, 0);
+    if (axis === 'y') return new THREE.Vector3(0, 1, 0);
+    return new THREE.Vector3(0, 0, 1);
+  }, [axis, worldAxisDir]);
 
   const pickMeshRef = useRef<THREE.Group>(null);
   const pickIdRef = useRef<number | null>(null);
@@ -112,9 +123,17 @@ export function GizmoMove({
   const headRadius = Math.max(0.03, GIZMO_SIZES.arrowHeadRadius * moveHandleThicknessScale);
   const headLength = Math.max(0.08, GIZMO_SIZES.arrowHeadLength * moveHandleLengthScale);
 
-  const shouldFlipX = axis === 'x' && !disableArrowFlip && (camera.position.x - gizmoPosition.x > 0);
-  const shouldFlipY = axis === 'y' && !disableArrowFlip && (camera.position.y - gizmoPosition.y > 0);
-  const shouldFlipZ = axis === 'z' && !disableArrowFlip && (camera.position.z - gizmoPosition.z > 0);
+  // An arrow sits on whichever side of the model the camera is on, so it never
+  // hides behind the mesh. Which side that is has to be asked of the direction the
+  // arrow really points: in the model's own frame, comparing world components
+  // would answer for an axis this arrow does not follow.
+  const pointsTowardCamera = axisDirection.dot(
+    scratchCameraOffsetRef.current.subVectors(camera.position, gizmoPosition),
+  ) > 0;
+
+  const shouldFlipX = axis === 'x' && !disableArrowFlip && pointsTowardCamera;
+  const shouldFlipY = axis === 'y' && !disableArrowFlip && pointsTowardCamera;
+  const shouldFlipZ = axis === 'z' && !disableArrowFlip && pointsTowardCamera;
 
   const positiveAxisRotation: [number, number, number] =
     axis === 'x' ? [0, 0, -Math.PI / 2]
@@ -139,7 +158,7 @@ export function GizmoMove({
     );
 
     const raycaster = raycasterRef.current;
-    raycaster.setFromCamera(ndc, camera);
+    setPickRayFromCamera(raycaster, ndc, camera);
 
     // Use the world-space axis direction if provided (rotated gizmo),
     // otherwise fall back to the hardcoded world axis (existing behavior).
@@ -208,15 +227,6 @@ export function GizmoMove({
     e.stopPropagation();
     onPointerLeave();
   };
-
-  // World-space axis direction. Falls back to hardcoded world axis when
-  // worldAxisDir prop is not provided (existing behavior with no rotation).
-  const axisDirection = useMemo(() => {
-    if (worldAxisDir) return worldAxisDir.clone();
-    if (axis === 'x') return new THREE.Vector3(1, 0, 0);
-    if (axis === 'y') return new THREE.Vector3(0, 1, 0);
-    return new THREE.Vector3(0, 0, 1);
-  }, [axis, worldAxisDir]);
 
   useEffect(() => {
     if (!isDragging) return;

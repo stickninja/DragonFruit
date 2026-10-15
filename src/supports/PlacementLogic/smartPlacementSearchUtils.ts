@@ -66,6 +66,27 @@ export function segmentAngleFromVerticalDeg(start: Vec3, end: Vec3): number {
     return 90 - angleFromHorizontal;
 }
 
+/**
+ * The angle a member's shaft leaves its host at, in degrees from vertical.
+ *
+ * Rise-aware, unlike {@link segmentAngleFromVerticalDeg}, which describes a
+ * *descending* chain segment and answers Infinity for anything that rises. A
+ * branch leaves its knot going up, so the trunk-chain helper cannot measure it,
+ * and a caller that reaches for it will refuse every member.
+ *
+ * This is the gate that matters for attached members. The contact cone is
+ * clamped toward the surface normal at the tip, so a member can satisfy a
+ * knot-to-tip chord gate and still leave the host nearly level, bending into a
+ * steep cone only at the tip: gate the shaft, not the chord.
+ */
+export function memberDepartureAngleFromVerticalDeg(
+    knotPos: Vec3,
+    firstJointPos: Vec3,
+): number {
+    const lateral = distanceXY(knotPos, firstJointPos);
+    return (Math.atan2(lateral, firstJointPos.z - knotPos.z) * 180) / Math.PI;
+}
+
 export function segmentSatisfiesMaxAngleFromVertical(start: Vec3, end: Vec3, maxAngleFromVerticalDeg: number): boolean {
     return segmentAngleFromVerticalDeg(start, end) <= maxAngleFromVerticalDeg;
 }
@@ -73,19 +94,80 @@ export function segmentSatisfiesMaxAngleFromVertical(start: Vec3, end: Vec3, max
 const LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM = 5;
 const LENGTH_AWARE_UPPER_SPAN_MIN_MAX_ANGLE_FROM_VERTICAL_DEG = 15;
 const LENGTH_AWARE_UPPER_SPAN_TIGHTEN_DEGREES_PER_MM = 3;
+// Short-span detour slack: segments this short may bend up to the routing
+// detour angle (the old A* exploration budget) even when the trunk's base
+// angle is tighter. Local detours around bumps/crowns are geometrically
+// impossible within the base trunk angle (the clearance envelope around an
+// obstacle is locally steeper than any fixed cap), and a short strut segment
+// at 60° is mechanically sound. Long spans keep the existing tightening.
+export const SHORT_SPAN_DETOUR_MAX_LENGTH_MM = 3;
+export const SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG = 60;
 
+/**
+ * Lean of a trunk's diagonal, degrees from vertical: the shape rule. A routed
+ * trunk is one 45° diagonal and one joint, and it does not escalate to 60° or
+ * 75° when no 45° leg reaches a clear column, because a flatter member reads as
+ * a strut leaning off the model rather than a support. A contact the shape
+ * cannot serve takes a pillar instead.
+ *
+ * Lives here rather than beside the router so callers that build or move trunk
+ * geometry can hold a snapped shape to the same limit: see
+ * `PlacementLogic/Grid/gridPlacement.ts`.
+ */
+export const TRUNK_DIAGONAL_LEAN_FROM_VERTICAL_DEG = 45;
+
+/**
+ * Lean of a span, in degrees from vertical, measured on its vertical extent.
+ *
+ * Direction-agnostic on purpose: a chain is passed socket-first by the router and
+ * base-first by anything that reads geometry, and measuring the signed rise made
+ * every descending span read as a violation. A span that is level with any
+ * lateral offset returns Infinity, because that is as flat as a member gets.
+ * Callers compare the result against the allowance for that span's length.
+ */
+export function spanLeanFromVerticalDeg(start: Vec3, end: Vec3): number {
+    const lateral = distanceXY(start, end);
+    const vertical = Math.abs(end.z - start.z);
+    if (vertical <= 1e-6) return Number.POSITIVE_INFINITY;
+    return (Math.atan2(lateral, vertical) * 180) / Math.PI;
+}
+
+/**
+ * The angle a segment of this length is allowed to sit at, from vertical.
+ *
+ * Long spans tighten, because a long slanted shaft sags and shears. That
+ * tightening exists to keep spans upright, not to forbid the angle the app
+ * itself configures for routed trunks: a caller that knows that angle passes it
+ * as `floorMaxAngleFromVerticalDeg`, and the result is never stricter than it.
+ * Without the floor a span over ~8mm is capped well below the configured angle,
+ * which is what pushed the router into satisfying a lateral offset with a short
+ * horizontal step instead of a straight diagonal.
+ */
 export function getLengthAwareMaxAngleFromVerticalDeg(
     segmentLengthMm: number,
-    baseMaxAngleFromVerticalDeg: number
+    baseMaxAngleFromVerticalDeg: number,
+    floorMaxAngleFromVerticalDeg: number = LENGTH_AWARE_UPPER_SPAN_MIN_MAX_ANGLE_FROM_VERTICAL_DEG,
 ): number {
+    const shortSpanMaxAngle = Math.max(
+        baseMaxAngleFromVerticalDeg,
+        SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG,
+    );
+
+    if (segmentLengthMm <= SHORT_SPAN_DETOUR_MAX_LENGTH_MM) {
+        return shortSpanMaxAngle;
+    }
+
     if (segmentLengthMm <= LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM) {
-        return baseMaxAngleFromVerticalDeg;
+        // Taper from the detour slack back to the base angle.
+        const t = (segmentLengthMm - SHORT_SPAN_DETOUR_MAX_LENGTH_MM)
+            / (LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM - SHORT_SPAN_DETOUR_MAX_LENGTH_MM);
+        return shortSpanMaxAngle + (baseMaxAngleFromVerticalDeg - shortSpanMaxAngle) * t;
     }
 
     const excessLength = segmentLengthMm - LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM;
     const tightened = baseMaxAngleFromVerticalDeg - excessLength * LENGTH_AWARE_UPPER_SPAN_TIGHTEN_DEGREES_PER_MM;
     return Math.max(
-        LENGTH_AWARE_UPPER_SPAN_MIN_MAX_ANGLE_FROM_VERTICAL_DEG,
+        floorMaxAngleFromVerticalDeg,
         Math.min(baseMaxAngleFromVerticalDeg, tightened),
     );
 }
@@ -93,11 +175,39 @@ export function getLengthAwareMaxAngleFromVerticalDeg(
 export function segmentSatisfiesLengthAwareMaxAngleFromVertical(
     start: Vec3,
     end: Vec3,
+    baseMaxAngleFromVerticalDeg: number,
+    floorMaxAngleFromVerticalDeg?: number,
+): boolean {
+    const segmentLengthMm = distance3D(start, end);
+    const allowedMaxAngle = getLengthAwareMaxAngleFromVerticalDeg(
+        segmentLengthMm,
+        baseMaxAngleFromVerticalDeg,
+        floorMaxAngleFromVerticalDeg,
+    );
+    return segmentSatisfiesMaxAngleFromVertical(start, end, allowedMaxAngle);
+}
+
+// Socket elbow: the FIRST chain segment below the contact-cone socket may form
+// a short, steep "elbow" to dodge small obstacles directly under the tip —
+// the standard shape mainstream mSLA slicers emit. Longer first segments fall
+// back to the regular length-aware rule.
+export const SOCKET_ELBOW_MAX_LENGTH_MM = 2.5;
+export const SOCKET_ELBOW_MAX_ANGLE_FROM_VERTICAL_DEG = 75;
+
+export function firstSegmentSatisfiesSocketElbowMaxAngle(
+    start: Vec3,
+    end: Vec3,
     baseMaxAngleFromVerticalDeg: number
 ): boolean {
     const segmentLengthMm = distance3D(start, end);
-    const allowedMaxAngle = getLengthAwareMaxAngleFromVerticalDeg(segmentLengthMm, baseMaxAngleFromVerticalDeg);
-    return segmentSatisfiesMaxAngleFromVertical(start, end, allowedMaxAngle);
+    if (segmentLengthMm <= SOCKET_ELBOW_MAX_LENGTH_MM) {
+        const allowedMaxAngle = Math.max(
+            getLengthAwareMaxAngleFromVerticalDeg(segmentLengthMm, baseMaxAngleFromVerticalDeg),
+            SOCKET_ELBOW_MAX_ANGLE_FROM_VERTICAL_DEG,
+        );
+        return segmentSatisfiesMaxAngleFromVertical(start, end, allowedMaxAngle);
+    }
+    return segmentSatisfiesLengthAwareMaxAngleFromVertical(start, end, baseMaxAngleFromVerticalDeg);
 }
 
 export function chainSatisfiesLengthAwareUpperSpanRule(

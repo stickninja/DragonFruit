@@ -7,6 +7,11 @@ export type SliceFilenameContext = {
   materialName: string;
   layerHeightMm: number;
   timestamp: Date;
+  /** One-based index. Supplying it guarantees a distinct output for each plate. */
+  plateIndex?: number;
+  plateName?: string;
+  /** Output extension, used to place an implicit plate suffix before it. */
+  extension?: string;
 };
 
 export type SliceFilenameResult = {
@@ -15,12 +20,38 @@ export type SliceFilenameResult = {
   warning: string | null;
 };
 
-const TOKENS = ['printer_name', 'timestamp', 'material_name', 'layer_height', 'layer_height_um'] as const;
+export const SLICE_FILENAME_TOKENS = ['printer_name', 'timestamp', 'material_name', 'layer_height', 'layer_height_um', 'plate_index', 'plate_name'] as const;
+const TOKENS = SLICE_FILENAME_TOKENS;
 type Token = typeof TOKENS[number];
 const TOKEN_SET = new Set<string>(TOKENS);
 const UNSAFE_LITERAL_RE = /[<>:"/\\|?*\u0000-\u001f\u007f]/;
 const MAX_BASENAME_BYTES = 220;
 const MAX_BASENAME_UTF16_UNITS = 220;
+const SLICE_FILENAME_FORMAT_EVENT = 'dragonfruit:slice-filename-format-changed';
+
+export type SliceFilenameHeightUnit = 'mm' | 'um';
+
+export function inferSliceFilenameHeightUnit(format: string): SliceFilenameHeightUnit {
+  return format.includes('{layer_height_um}') ? 'um' : 'mm';
+}
+
+/** Keeps a saved pattern and the unit selector in sync, including legacy `um` suffixes. */
+export function convertSliceFilenameHeightUnit(format: string, unit: SliceFilenameHeightUnit): string {
+  return unit === 'mm'
+    ? format.replace(/\{layer_height_um\}(?:µm|um)?/g, '{layer_height}mm')
+    : format.replace(/\{layer_height\}(?:mm|µm|um)?/g, '{layer_height_um}µm')
+      .replace(/\{layer_height_um\}um/g, '{layer_height_um}µm');
+}
+
+export function subscribeSliceFilenameFormat(listener: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  window.addEventListener(SLICE_FILENAME_FORMAT_EVENT, listener);
+  window.addEventListener('storage', listener);
+  return () => {
+    window.removeEventListener(SLICE_FILENAME_FORMAT_EVENT, listener);
+    window.removeEventListener('storage', listener);
+  };
+}
 
 export function getSavedSliceFilenameFormat(): string {
   if (typeof window === 'undefined') return DEFAULT_SLICE_FILENAME_FORMAT;
@@ -35,6 +66,7 @@ export function saveSliceFilenameFormat(format: string): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(SLICE_FILENAME_FORMAT_STORAGE_KEY, format);
+    window.dispatchEvent(new Event(SLICE_FILENAME_FORMAT_EVENT));
   } catch {
     // Slicing still works for this session when storage is unavailable.
   }
@@ -54,7 +86,7 @@ function formatMillimeters(value: number): string {
 }
 
 /** Removes path syntax while preserving letters from international profile names. */
-export function sanitizeSliceFilenameBase(raw: string): string {
+export function sanitizeSliceFilenameBase(raw: string, reservedSuffix = ''): string {
   const cleaned = raw.normalize('NFC')
     .replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '_')
     .replace(/\s+/g, '_')
@@ -68,13 +100,14 @@ export function sanitizeSliceFilenameBase(raw: string): string {
   let byteCount = 0;
   for (const character of deviceSafe) {
     const characterBytes = encoder.encode(character).length;
-    if (byteCount + characterBytes > MAX_BASENAME_BYTES || shortened.length + character.length > MAX_BASENAME_UTF16_UNITS) break;
+    if (byteCount + characterBytes + encoder.encode(reservedSuffix).length > MAX_BASENAME_BYTES
+      || shortened.length + character.length + reservedSuffix.length > MAX_BASENAME_UTF16_UNITS) break;
     shortened += character;
     byteCount += characterBytes;
   }
   shortened = shortened.replace(/[. _]+$/g, '');
-  if (!shortened) return 'slice_export';
-  return shortened;
+  if (!shortened) return `slice_export${reservedSuffix}`;
+  return `${shortened}${reservedSuffix}`;
 }
 
 export function resolveSliceOutputExtension(printerOutputFormat: string | null | undefined, selectedOutputFormat: string | null | undefined): string {
@@ -95,6 +128,9 @@ export function resolveSliceFilenameFormat(format: string, context: SliceFilenam
   if (!format.trim()) return { basename: null, error: 'Enter a filename format.', warning: null };
   if (format.length > 500) return { basename: null, error: 'Filename format is too long (500 characters maximum).', warning: null };
 
+  const plateIndex = Number.isInteger(context.plateIndex) && (context.plateIndex ?? 0) > 0
+    ? context.plateIndex!
+    : undefined;
   const values: Record<Token, string> = {
     printer_name: context.printerName || 'Printer',
     material_name: context.materialName || 'Material',
@@ -105,6 +141,10 @@ export function resolveSliceFilenameFormat(format: string, context: SliceFilenam
     layer_height_um: Number.isFinite(context.layerHeightMm) && context.layerHeightMm > 0
       ? String(Number((context.layerHeightMm * 1000).toFixed(6)))
       : '50',
+    plate_index: plateIndex != null
+      ? String(plateIndex).padStart(2, '0')
+      : '01',
+    plate_name: context.plateName || `Plate_${plateIndex ?? 1}`,
   };
   let expanded = '';
   let adjustedProfileName = false;
@@ -134,11 +174,21 @@ export function resolveSliceFilenameFormat(format: string, context: SliceFilenam
   if (!expanded.replace(/[. _]/g, '')) {
     return { basename: null, error: 'The format does not produce a usable filename.', warning: null };
   }
-  const basename = sanitizeSliceFilenameBase(expanded);
+  const hasPlateIndex = format.includes('{plate_index}');
+  const indexMayBeTruncated = expanded.length > MAX_BASENAME_UTF16_UNITS
+    || new TextEncoder().encode(expanded).length > MAX_BASENAME_BYTES;
+  const plateSuffix = plateIndex != null && (!hasPlateIndex || indexMayBeTruncated)
+    ? `_plate${String(plateIndex).padStart(2, '0')}`
+    : '';
+  const extension = context.extension?.trim().replace(/^\.+/, '').toLowerCase() ?? '';
+  const extensionSuffix = extension && expanded.toLowerCase().endsWith(`.${extension}`) ? `.${extension}` : '';
+  const baseWithoutExtension = extensionSuffix ? expanded.slice(0, -extensionSuffix.length) : expanded;
+  const reservedSuffix = `${plateSuffix}${extensionSuffix}`;
+  const basename = sanitizeSliceFilenameBase(baseWithoutExtension, reservedSuffix);
   return {
     basename,
     error: null,
-    warning: adjustedProfileName || basename !== expanded
+    warning: adjustedProfileName || basename !== `${baseWithoutExtension}${reservedSuffix}`
       ? 'Unsafe characters or excess length were adjusted for the filename.'
       : null,
   };

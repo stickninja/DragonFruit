@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
+import { formatSweepDegrees } from './rotationDialModel';
 
 const AXIS_COLORS: Record<string, string> = {
   x: '#ff3120',
@@ -7,13 +9,8 @@ const AXIS_COLORS: Record<string, string> = {
   z: '#1596ff',
 };
 
-function wrapRotationDegrees(degrees: number): number {
-  if (!Number.isFinite(degrees)) return 0;
-  const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
-  return Object.is(wrapped, -0) ? 0 : wrapped;
-}
-
 export function SnapAngleReadout() {
+  const fmt = useLocaleFormat();
   const [snap, setSnap] = useState<{ active: boolean; angle?: number; axis?: string }>({ active: false });
 
   useEffect(() => {
@@ -26,7 +23,7 @@ export function SnapAngleReadout() {
 
   if (!snap.active || snap.angle === undefined) return null;
 
-  const degrees = Math.round(wrapRotationDegrees((snap.angle * 180) / Math.PI));
+  const degrees = fmt.unit('degree', formatSweepDegrees(snap.angle, fmt));
   const color = AXIS_COLORS[snap.axis ?? 'x'] ?? '#ffffff';
 
   return (
@@ -40,7 +37,7 @@ export function SnapAngleReadout() {
           textShadow: `0 0 6px ${color}88`,
         }}
       >
-        {degrees}°
+        {degrees}
       </div>
     </MouseTooltip>
   );

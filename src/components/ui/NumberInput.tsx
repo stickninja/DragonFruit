@@ -1,11 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
+import { wheelStepDirection } from '@/components/ui/wheelStepDirection';
+import { clamp } from '@/utils/math';
 
 interface NumberInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> {
   value: number;
   onChange: (value: number) => void;
   showStepper?: boolean;
 }
+
+/** Accepts a minus, decimals, and the transitional states '-', '.' and '-.'. */
+const NUMERIC_INPUT_PATTERN = /^-?(?:\d+)?(?:\.\d{0,2})?$/;
+/** The same without the minus, for fields whose minimum is 0 or more. */
+const NON_NEGATIVE_INPUT_PATTERN = /^(?:\d+)?(?:\.\d{0,2})?$/;
 
 function parseNumericBound(bound: string | number | undefined): number | null {
   if (typeof bound === 'number' && Number.isFinite(bound)) return bound;
@@ -55,7 +62,9 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
 
     // Allow optional leading minus, optional decimals, and up to 2 decimal places.
     // Also allows transitional editing states like '-', '.', and '-.'.
-    const numericPattern = /^-?(?:\d+)?(?:\.\d{0,2})?$/;
+    // A field whose minimum is 0 or more has no legal negative state, so the minus
+    // key never starts one there (the store clamps too, for non-typed writes).
+    const numericPattern = minBound != null && minBound >= 0 ? NON_NEGATIVE_INPUT_PATTERN : NUMERIC_INPUT_PATTERN;
     if (!numericPattern.test(newVal)) {
       return;
     }
@@ -89,8 +98,11 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
     const currentValue = Number.isFinite(parsedCurrent) ? parsedCurrent : safeValue;
     let next = currentValue + (stepSize * direction);
 
-    if (minBound != null) next = Math.max(minBound, next);
-    if (maxBound != null) next = Math.min(maxBound, next);
+    next = clamp(
+      next,
+      minBound ?? Number.NEGATIVE_INFINITY,
+      maxBound ?? Number.POSITIVE_INFINITY,
+    );
 
     const normalized = Number(next.toFixed(stepPrecision));
     setDisplayValue(formatValue(normalized));
@@ -101,10 +113,14 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
     if (props.onWheel) props.onWheel(e);
     if (e.defaultPrevented) return;
     if (props.disabled || props.readOnly) return;
-    if (e.deltaY === 0) return;
+
+    // Dominant axis, not deltaY: Shift+wheel arrives as horizontal scroll, and
+    // Shift is what ScrollLockedInputs requires to step an unfocused field.
+    const direction = wheelStepDirection(e);
+    if (direction === 0) return;
 
     e.preventDefault();
-    applyStepDelta(e.deltaY < 0 ? 1 : -1);
+    applyStepDelta(direction);
   };
 
   const parsedCurrent = Number.parseFloat(displayValue);

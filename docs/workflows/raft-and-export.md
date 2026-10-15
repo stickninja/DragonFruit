@@ -22,9 +22,9 @@ Rafts improve adhesion and support stability, especially in resin workflows.
 ## Export workflow
 
 1. Review supports and raft visually.
-2. In the Slicing panel, edit **Output filename format** if needed. The preview shows the printer's output extension; its timestamp is captured when slicing starts. The format is saved for later sessions.
-3. Slice to a printer file or export scene/model assets.
-4. Re-open output in downstream workflow for final validation.
+2. In **Settings → Slicing**, set the **Output filenames** pattern if needed. Insert printer, timestamp, material, height, or plate placeholders with the chips. The preview includes the output extension. Apply saves the pattern for later sessions.
+3. Slice the current plate or choose **Slice All** to save one file per populated plate in a selected folder. A plate index is appended when the pattern omits it, so batch files have distinct names. The save dialog can override an individual job's proposed name.
+4. Re-open output in the downstream workflow for final validation.
 
 ## Export quality checks
 

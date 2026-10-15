@@ -9,9 +9,9 @@ import { RootsRenderer } from '../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getSocketPosition, getFinalSocketPosition } from '../SupportPrimitives/ContactCone';
 import { ContactDiskRenderer } from '../SupportPrimitives/ContactDisk';
 import { KnotRenderer } from '../SupportPrimitives/Knot/KnotRenderer';
-import { getSettings } from '../Settings';
+import { getSettings } from '../Settings/state';
+import { contactEndpointsFor, type SupportTypeId } from '../supportTypeRegistry';
 import { useSyncExternalStore } from 'react';
-import { getRaftSettings, subscribeToRaftStore } from '../Rafts/Crenelated/RaftState';
 
 /**
  * Generic support data that SupportBuilder can render.
@@ -33,6 +33,29 @@ export interface SupportData {
     error?: LimitationCode;
     warning?: WarningCode;
     angle?: number;
+}
+
+/**
+ * The renderable form of a bridging entity, keyed on its declared contacts.
+ *
+ * Which fields hold an entity's contacts, and whether they are cones or disks,
+ * is declared per type -- so a caller holding a `typeId` builds this without
+ * naming either the type or its contact fields.
+ */
+export function supportDataForEntity(
+    typeId: SupportTypeId,
+    entity: { id: string; segments: Segment[] },
+): SupportData {
+    const data: SupportData = { id: entity.id, segments: entity.segments };
+    const fields = entity as unknown as Record<string, unknown>;
+
+    for (const { kind, field } of contactEndpointsFor(typeId)) {
+        const contact = fields[field];
+        if (!contact) continue;
+        if (kind === 'cone') (data.contactCones ??= []).push(contact as ContactCone);
+        else (data.contactDisks ??= []).push(contact as ContactDisk);
+    }
+    return data;
 }
 
 // --- Anatomy Highlight Colors ---
@@ -105,7 +128,6 @@ export function SupportBuilder({
     rootsDiskMaterialOverride,
     anatomyOverrides
 }: SupportBuilderProps) {
-    const storeRaft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
     // Determine colors based on preview/selected state
     const getBaseColor = () => {
@@ -210,12 +232,9 @@ export function SupportBuilder({
             data.roots.transform.pos.z
         );
 
-        const raft = raftOverride || storeRaft;
         const diskHeight = data.roots.diskHeight;
         const coneHeight = data.roots.coneHeight;
-        const hasSolidBottom = (raft as any).bottomMode === 'solid';
-        const effectiveDiskHeight = hasSolidBottom ? 0.05 : diskHeight;
-        currentStart = basePos.clone().add(new THREE.Vector3(0, 0, effectiveDiskHeight + coneHeight));
+        currentStart = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + coneHeight));
     } else if (data.startPos) {
         // Start from provided position (e.g., knot for branches)
         currentStart = new THREE.Vector3(data.startPos.x, data.startPos.y, data.startPos.z);
@@ -310,7 +329,7 @@ export function SupportBuilder({
                         color: 'white',
                         fontSize: '12px',
                         textShadow: '1px 1px 2px black',
-                        fontFamily: 'sans-serif',
+                        fontFamily: 'var(--font-geist-sans)',
                         pointerEvents: 'none',
                         whiteSpace: 'nowrap'
                     }}

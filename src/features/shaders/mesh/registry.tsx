@@ -3,7 +3,6 @@ import type { MatcapVariant, MeshShaderType } from './types';
 import { SoftClayMaterial } from './softClay';
 import { FlatUnlitMaterial } from './flatUnlit';
 import { MatcapMaterial } from './matcap';
-import { ToonMaterial } from './toon';
 import { NormalDebugMaterial } from './normalDebug';
 import { WireframeMaterial } from './wireframe';
 import { XrayMaterial } from './xray';
@@ -22,12 +21,12 @@ export function MeshShaderMaterial({
   materialRoughness,
   clippingPlanes,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   heatmapColors,
   matcapVariant,
   flatUseVertexColors,
-  toonSteps,
+  bakedAoStrength,
 }: {
   shaderType: MeshShaderType;
   isSelected: boolean;
@@ -41,12 +40,14 @@ export function MeshShaderMaterial({
   materialRoughness?: number;
   clippingPlanes: THREE.Plane[];
   xrayOpacity?: number;
-  heatmapBlend?: number;
-  heatmapContrast?: number;
+  heatmapMinAngle?: number;
+  heatmapMaxAngle?: number;
   heatmapColors?: string[];
   matcapVariant?: MatcapVariant;
   flatUseVertexColors?: boolean;
-  toonSteps?: number;
+  /** Forwarded to `soft_clay` only: how much of the geometry's baked per-vertex
+   *  occlusion to apply. Other view modes are diagnostics and ignore it. */
+  bakedAoStrength?: number;
 }) {
   switch (shaderType) {
     case 'flat_unlit':
@@ -76,22 +77,6 @@ export function MeshShaderMaterial({
           useVertexColors={useVertexColors}
           meshColor={meshColor}
           variant={matcapVariant}
-          clippingPlanes={clippingPlanes}
-        />
-      );
-
-    case 'toon':
-      return (
-        <ToonMaterial
-          isSelected={isSelected}
-          isHovered={isHovered}
-          hoverTintColor={hoverTintColor}
-          selectedTintColor={selectedTintColor}
-          hoverTintStrength={hoverTintStrength}
-          selectedTintStrength={selectedTintStrength}
-          useVertexColors={useVertexColors}
-          meshColor={meshColor}
-          toonSteps={toonSteps}
           clippingPlanes={clippingPlanes}
         />
       );
@@ -143,8 +128,8 @@ export function MeshShaderMaterial({
           meshColor={meshColor}
           materialRoughness={materialRoughness}
           clippingPlanes={clippingPlanes}
-          heatmapBlend={heatmapBlend}
-          heatmapContrast={heatmapContrast}
+          heatmapMinAngle={heatmapMinAngle}
+          heatmapMaxAngle={heatmapMaxAngle}
           heatmapColors={heatmapColors}
         />
       );
@@ -163,6 +148,7 @@ export function MeshShaderMaterial({
           meshColor={meshColor}
           materialRoughness={materialRoughness}
           clippingPlanes={clippingPlanes}
+          bakedAoStrength={bakedAoStrength}
         />
       );
   }

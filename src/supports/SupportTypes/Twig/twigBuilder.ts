@@ -1,25 +1,17 @@
 import * as THREE from 'three';
 import { ContactDisk, Joint, Segment, Twig, Vec3, LimitationCode } from '../../types';
 import type { ContactDiskProfile } from '../../SupportPrimitives/ContactCone/types';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { twigDiskJointStandoff } from './twigJointStandoff';
 import { twigJointDiameterForLocalDiameter } from './twigTaper';
-// DEBUG: temporary per-twig disk B diameter override. Remove with src/supports/__debug__/.
-import { getTwigDiskBOverrideMm } from '../../__debug__/twigDiameterOverride';
-import { isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
+import { checkShortBridgeCollision } from '../../PlacementLogic/CollisionUtils';
 import { clampConeAxisDeviationFromSurfaceNormal } from '../../PlacementLogic/ConeAxisPolicy';
+import { v4 as uuidv4 } from 'uuid';
 
 // Twig-local sizing: a joint at a disk-end is 10% larger than that disk's
 // contact diameter. SSOT for the 10% rule lives in ./twigTaper.ts.
 function twigJointDiameterForDisk(diskContactDiameter: number): number {
     return twigJointDiameterForLocalDiameter(diskContactDiameter);
-}
-
-function uuid() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
 }
 
 export interface TwigBuildInput {
@@ -29,6 +21,8 @@ export interface TwigBuildInput {
     bPos: Vec3;
     bNormal: Vec3;
     mesh?: THREE.Mesh;
+    /** Auto-support tier tip contact — absent for manual placement. */
+    tipContactDiameterMm?: number;
 }
 
 export interface TwigBuildResult {
@@ -54,12 +48,15 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? Math.PI / 4,
     };
 
-    // Twig sizing rule: each disk drives its own joint, and the shaft tapers
-    // between the two joints. Disk A keeps using the global tip.contactDiameterMm;
-    // disk B can be overridden via the temporary debug control to test taper.
-    const diskAContactDiameter = settings.tip.contactDiameterMm;
-    const diskBOverride = getTwigDiskBOverrideMm();
-    const diskBContactDiameter = diskBOverride ?? settings.tip.contactDiameterMm;
+    // Twig sizing rule: both disk ends share one diameter — twigs are
+    // CYLINDRICAL. Slightly smaller than the global tip contact (twigs are
+    // short, low-span supports). An earlier change scaled the free (B) end
+    // down with span, which accidentally rendered every twig as a cone;
+    // equal ends is the intended geometry (the taper machinery in
+    // twigTaper.ts still works — with equal ends it degenerates to a
+    // cylinder).
+    const diskAContactDiameter = (input.tipContactDiameterMm ?? settings.tip.contactDiameterMm) * 0.9;
+    const diskBContactDiameter = diskAContactDiameter;
 
     const jointDiameterA = twigJointDiameterForDisk(diskAContactDiameter);
     const jointDiameterB = twigJointDiameterForDisk(diskBContactDiameter);
@@ -67,7 +64,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     // Legacy uniform value for slicer/proxy and any consumer that reads
     // segment.diameter. The actual visible taper is carried per-end by the
     // joints and applied by TwigRenderer.
-    const shaftDiameter = settings.tip.contactDiameterMm;
+    const shaftDiameter = diskAContactDiameter;
 
     _aVec.set(aPos.x, aPos.y, aPos.z);
     _bVec.set(bPos.x, bPos.y, bPos.z);
@@ -118,26 +115,26 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     };
 
     const socketJointA: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: jointPosA,
         diameter: jointDiameterA,
     };
 
     const socketJointB: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: jointPosB,
         diameter: jointDiameterB,
     };
 
     const segment: Segment = {
-        id: uuid(),
+        id: uuidv4(),
         diameter: shaftDiameter,
         bottomJoint: socketJointA,
         topJoint: socketJointB,
     };
 
     const contactDiskA: ContactDisk = {
-        id: uuid(),
+        id: uuidv4(),
         pos: aPos,
         surfaceNormal: aNormal,
         profile: diskProfile,
@@ -147,7 +144,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     };
 
     const contactDiskB: ContactDisk = {
-        id: uuid(),
+        id: uuidv4(),
         pos: bPos,
         surfaceNormal: bNormal,
         profile: diskProfile,
@@ -156,7 +153,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
     };
 
-        const twigId = uuid();
+        const twigId = uuidv4();
     const twig: Twig = {
         id: twigId,
         modelId,
@@ -167,24 +164,21 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
 
     let error: LimitationCode | undefined = undefined;
     if (mesh) {
-        const shaftRadius = shaftDiameter / 2;
-
-        // 1. Check shaft segment (SDF adaptive sphere tracing)
-        const segmentBlocked = isShaftBlocked(
-            socketJointA.pos, socketJointB.pos, shaftRadius, mesh,
-        );
-
-        // 2. Check contact disks as tapered frustums (disk surface → joint)
-        const diskABlocked = isCollisionFrustumBlocked(
-            aPos, socketJointA.pos,
-            diskAContactDiameter / 2, jointDiameterA / 2, mesh,
-        );
-        const diskBBlocked = isCollisionFrustumBlocked(
-            bPos, socketJointB.pos,
-            diskBContactDiameter / 2, jointDiameterB / 2, mesh,
-        );
-
-        if (segmentBlocked || diskABlocked || diskBBlocked) {
+        // Twigs test with RAYS, not the signed SDF.
+        //
+        // A twig exists to span a gap between two model surfaces, and the SDF
+        // resolves the inside/outside sign from the nearest triangle: in a gap
+        // between two facing faces the nearest one changes across the gap, so
+        // the empty space reads as material (measured: the midpoint of a 1.5mm
+        // gap between a header and the body reports -0.75mm, "inside"). Every
+        // SDF-based gate therefore refused twigs by construction. Ray casts
+        // need no sign — they find surfaces the body actually crosses — and a
+        // twig's body is a cylinder whose shaft diameter already equals its
+        // disk contact diameter, so one cast at that radius covers shaft and
+        // disks alike. Sticks and trunks keep the SDF: they are long, and
+        // their clearance question is genuinely three-dimensional.
+        const twigRadius = Math.max(shaftDiameter, diskAContactDiameter) / 2;
+        if (checkShortBridgeCollision(socketJointA.pos, socketJointB.pos, twigRadius, mesh).hit) {
             error = 'COLLISION_WITH_MODEL';
         }
     }

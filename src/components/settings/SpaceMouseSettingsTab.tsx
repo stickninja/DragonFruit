@@ -1,22 +1,34 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { ArrowLeftRight, Ban, CheckCircle2, Gamepad2, MousePointer2, SlidersHorizontal } from 'lucide-react';
+import { SegmentedControl, Select, SettingRow } from '@/components/atoms';
 import type { SpaceMouseSettings } from '@/components/settings/spacemousePreferences';
 import { getCandidateGamepads, NAMED_3D_MOUSE } from '@/components/scene/camera/SpaceMouseController';
-import { Select } from '@/components/ui/primitives';
+import { getNativeSpaceMouseActive, subscribeNativeSpaceMouseActive } from '@/components/scene/camera/nativeSpaceMouseBridge';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 
 type SpaceMouseSettingsTabProps = {
   settings: SpaceMouseSettings;
   onChange: (partial: Partial<SpaceMouseSettings>) => void;
 };
 
-function formatNumber(value: number) {
-  return value.toFixed(2);
-}
-
 export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettingsTabProps) {
+  const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const [candidatePads, setCandidatePads] = React.useState<Gamepad[]>([]);
+
+  // When the native 3DxWare/navlib bridge is driving the camera, the 3Dconnexion
+  // driver computes all motion itself — the app never applies per-axis sensitivity
+  // or a deadzone — so the Motion Tuning controls below are inert. Hide them while
+  // navlib is active (tuning lives in the 3Dconnexion control panel instead).
+  const navlibActive = React.useSyncExternalStore(
+    subscribeNativeSpaceMouseActive,
+    getNativeSpaceMouseActive,
+    () => false,
+  );
 
   React.useEffect(() => {
     if (typeof window === 'undefined' || typeof navigator === 'undefined') return;
@@ -38,7 +50,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
   return (
     <div className="space-y-3">
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -55,7 +67,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
             <MousePointer2 className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               3D Mouse Input
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -64,36 +76,22 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Enable 3D Mouse
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Uses browser gamepad input from supported 3D mouse devices.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onChange({ enabled: !settings.enabled })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={settings.enabled
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {settings.enabled ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-3"
+          label={_(msg`Enable 3D Mouse`)}
+          description={_(msg`Uses browser gamepad input from supported 3D mouse devices.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Enable 3D Mouse`)}
+            options={[
+              { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
+            ]}
+            value={settings.enabled ? 'on' : 'off'}
+            onChange={(next) => onChange({ enabled: next === 'on' })}
+          />
+        </SettingRow>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="flex items-center gap-2 mb-2">
@@ -103,7 +101,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
             </div>
           </div>
           {candidatePads.length === 0 ? (
-            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
               No compatible input devices detected. Ensure your 3D mouse driver is installed.
             </p>
           ) : (
@@ -133,11 +131,11 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
                         ) : (
                           <CheckCircle2 className="h-3 w-3 flex-shrink-0" style={{ color: isNamed ? 'var(--accent)' : '#fb923c' }} />
                         )}
-                        <span className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                        <span className="text-xs font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
                           {pad.id}
                         </span>
                       </div>
-                      <div className="text-[10px] mt-0.5 pl-4.5" style={{ color: 'var(--text-muted)' }}>
+                      <div className="text-[11px] mt-0.5 pl-4.5" style={{ color: 'var(--text-muted)' }}>
                         {pad.axes.length} axes ·{' '}
                         {isBlocked ? 'blocked' : isNamed ? 'recognized 3D mouse' : 'unrecognized — used as fallback'}
                       </div>
@@ -150,7 +148,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
                           : [...settings.blockedDeviceIds, pad.id];
                         onChange({ blockedDeviceIds: next });
                       }}
-                      className="flex-shrink-0 rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors"
+                      className="flex-shrink-0 rounded border px-2 py-1 text-[11px] font-semibold uppercase tracking-wide transition-colors"
                       style={isBlocked
                         ? { borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }
                         : { borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 50%)', color: '#f87171', background: 'color-mix(in srgb, #f87171, var(--surface-0) 92%)' }}
@@ -164,12 +162,13 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           )}
         </div>
 
+        {!navlibActive && (
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="space-y-1">
             <label className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Pivot mode
             </label>
-            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
               Auto picks selected/single/nearest model center. Camera Raycast picks the model center nearest your current view beam.
             </p>
             <Select
@@ -182,10 +181,12 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
             </Select>
           </div>
         </div>
+        )}
       </section>
 
+      {!navlibActive && (
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -202,7 +203,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
             <SlidersHorizontal className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Motion Tuning
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -215,7 +216,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           <div className="space-y-0.5">
             <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
               <span>Translation</span>
-              <span style={{ color: 'var(--text-strong)' }}>{formatNumber(settings.translationSensitivity)}</span>
+              <span style={{ color: 'var(--text-strong)' }}>{fmt.fixed(settings.translationSensitivity, 2)}</span>
             </label>
             <input
               type="range"
@@ -224,15 +225,14 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
               step="0.05"
               value={settings.translationSensitivity}
               onChange={(e) => onChange({ translationSensitivity: parseFloat(e.target.value) })}
-              className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-              style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+              className="ui-range w-full"
             />
           </div>
 
           <div className="space-y-0.5">
             <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
               <span>Rotation</span>
-              <span style={{ color: 'var(--text-strong)' }}>{formatNumber(settings.rotationSensitivity)}</span>
+              <span style={{ color: 'var(--text-strong)' }}>{fmt.fixed(settings.rotationSensitivity, 2)}</span>
             </label>
             <input
               type="range"
@@ -241,15 +241,14 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
               step="0.05"
               value={settings.rotationSensitivity}
               onChange={(e) => onChange({ rotationSensitivity: parseFloat(e.target.value) })}
-              className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-              style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+              className="ui-range w-full"
             />
           </div>
 
           <div className="space-y-0.5">
             <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
               <span>Zoom</span>
-              <span style={{ color: 'var(--text-strong)' }}>{formatNumber(settings.zoomSensitivity)}</span>
+              <span style={{ color: 'var(--text-strong)' }}>{fmt.fixed(settings.zoomSensitivity, 2)}</span>
             </label>
             <input
               type="range"
@@ -258,15 +257,14 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
               step="0.05"
               value={settings.zoomSensitivity}
               onChange={(e) => onChange({ zoomSensitivity: parseFloat(e.target.value) })}
-              className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-              style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+              className="ui-range w-full"
             />
           </div>
 
           <div className="space-y-0.5">
             <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
               <span>Deadzone</span>
-              <span style={{ color: 'var(--text-strong)' }}>{formatNumber(settings.deadzone)}</span>
+              <span style={{ color: 'var(--text-strong)' }}>{fmt.fixed(settings.deadzone, 2)}</span>
             </label>
             <input
               type="range"
@@ -275,46 +273,33 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
               step="0.01"
               value={settings.deadzone}
               onChange={(e) => onChange({ deadzone: parseFloat(e.target.value) })}
-              className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-              style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+              className="ui-range w-full"
             />
           </div>
         </div>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Dominant axis mode
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Prioritize strongest axis per translation/rotation group for steadier input.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onChange({ dominantAxis: !settings.dominantAxis })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={settings.dominantAxis
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {settings.dominantAxis ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        </div>
+        <SettingRow
+          bordered
+          className="mt-2"
+          label={_(msg`Dominant axis mode`)}
+          description={_(msg`Prioritize strongest axis per translation/rotation group for steadier input.`)}
+        >
+          <SegmentedControl
+            label={_(msg`Dominant axis mode`)}
+            options={[
+              { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
+            ]}
+            value={settings.dominantAxis ? 'on' : 'off'}
+            onChange={(next) => onChange({ dominantAxis: next === 'on' })}
+          />
+        </SettingRow>
       </section>
+      )}
 
+      {!navlibActive && (
       <section
-        className="rounded-lg border p-3"
+        className="rounded-md border p-3"
         style={{
           background: 'var(--surface-1)',
           borderColor: 'var(--border-subtle)',
@@ -331,7 +316,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
             <ArrowLeftRight className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Axis Inversion
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -360,6 +345,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           ))}
         </div>
       </section>
+      )}
 
       <div
         className="rounded-md border px-3 py-2"
@@ -368,7 +354,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           background: 'color-mix(in srgb, var(--surface-1), var(--accent) 4%)',
         }}
       >
-        <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
           Supports 3Dconnexion SpaceMouse devices. “SpaceMouse” is a trademark of 3Dconnexion.
         </p>
       </div>

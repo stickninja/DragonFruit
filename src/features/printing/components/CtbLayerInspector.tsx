@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
 import { readCtbLayerSettings, type CtbStoredLayerSettings } from '../ctbLayerSettingsBridge';
-import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 export function CtbLayerInspector({ artifact, layerNumber, bodyMaxHeight = '22rem' }: { artifact: SliceExportArtifact; layerNumber: number; bodyMaxHeight?: string }) {
@@ -33,7 +33,7 @@ export function CtbLayerInspector({ artifact, layerNumber, bodyMaxHeight = '22re
           </svg>
         </IconButton>
         <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Encoded layer settings</h3>
-      </>} hideDivider={!expanded} />
+      </>} />
       {expanded && <section className="px-3 pb-3 space-y-2 text-xs overflow-y-auto custom-scrollbar" style={{ maxHeight: bodyMaxHeight, color: 'var(--text-strong)' }} aria-label="Encoded CTB layer settings">
       <p>File layer {layerNumber}{planned ? planned.isDummy ? ' · Startup dummy (no model layer)' : ` · Model layer ${planned.modelLayerNumber}` : ''}</p>
       {!path ? <p>Generated file path unavailable.</p> : current?.error ? <p role="alert">Unable to inspect this file: {current.error}</p> : !layer ? <p role="status">Reading settings from generated file…</p> : <>

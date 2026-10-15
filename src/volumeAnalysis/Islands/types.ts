@@ -1,3 +1,4 @@
+import type { VoxelFootprint } from './voxelFootprint';
 import type * as THREE from 'three';
 
 /**
@@ -5,12 +6,81 @@ import type * as THREE from 'three';
  *
  * Two detectors feed this shape — the rebuilt voxel/slice scanner (`detect.ts`)
  * and the mesh-minima scanner (`useMeshMinima.ts`). All coordinates are in
- * world / build-plate space (Z-up, millimetres) so both detectors, the
+ * world / build-plate space (Z-up, millimeters) so both detectors, the
  * intersection step, and the camera math share a single frame.
  */
 
 /** Which detector produced an island. */
-export type IslandSource = 'voxel' | 'minima';
+export type IslandSource = 'voxel' | 'minima' | 'overhang';
+
+/**
+ * Wire shape of the `scan_overhangs` Tauri command (mesh-normal overhang
+ * classification — catches shallow slopes the slice-growth detector cannot).
+ */
+export interface FootprintMask {
+  width: number;
+  height: number;
+  /** World XY of the mask's top-left pixel center (mm). */
+  originX: number;
+  originY: number;
+  pxMm: number;
+  /** Row-major pixels (1 = inside the projected region). */
+  data: number[];
+  /** Row-major surface Z (mm) on the region's own triangles (parallel to data). */
+  surfaceZ: number[];
+}
+
+export interface OverhangRegion {
+  triangleIds: number[];
+  areaMm2: number;
+  projectedAreaMm2: number;
+  angleDeg: number;
+  /** Area-weighted mean face normal (world space, points away from the model). */
+  normal: [number, number, number];
+  xyMin: [number, number];
+  xyMax: [number, number];
+  minZ: number;
+  maxZ: number;
+  footprint: FootprintMask;
+  /** Peel-drag moment this patch carries (mm³): `Σ A·sinθ·z` above the part's
+   *  own base — the same sum the stability report totals for the pose. A steep
+   *  face is self-supporting for formation, so contact on it only resists
+   *  toppling, and this share is the constant-free measure of how much of that
+   *  job the patch owns. */
+  dragMomentMm3?: number;
+  /** XY direction the patch's drag pushes the part toward (deg, 0 = +X,
+   *  90 = +Y) — the side that lifts. */
+  dragDirDeg?: number;
+  /** True when the patch came from `classify_steep_flats`: a large planar face
+   *  past the self-support angle, classified for toppling, not formation. */
+  steepFlat?: boolean;
+  /** Triangle-accurate perimeter loops, inset by 0.25 mm (world mm, each loop closed). */
+  perimeterLoops?: Vec3Loop[];
+}
+
+export type Vec3Loop = Array<[number, number, number]>;
+
+/** The `scan_overhangs` answer: the regions, plus the topple report for the
+ *  pose they were classified in. The overlay needs the verdict to show what the
+ *  placement will actually cover, rather than everything it classified. */
+export interface OverhangScan {
+  regions: OverhangRegion[];
+  stability?: PoseStabilityWire | null;
+}
+
+/** Wire shape of the Rust `StabilityReport` (camelCase). */
+export interface PoseStabilityWire {
+  bearingAreaMm2: number;
+  bearingEdges: number;
+  centroidDepthMm: number;
+  contactDepthMm: number;
+  dragMomentMm3: number;
+  marginMm: number;
+  adhesionRatio: number;
+  pushDirDeg: number;
+  dragTopMm: number;
+  bearingIsRaft: boolean;
+}
 
 /** Classification once the voxel and minima sets are intersected (Part C). */
 export type IslandClass = 'intersection' | 'voxelOnly' | 'minimaOnly';
@@ -28,12 +98,40 @@ export interface DetectedIsland {
   baseZ: number;
 
   // --- voxel-detector extras (undefined for minima) ---
-  /** Max cross-sectional contact area across the island's layers (mm^2). */
+  /** Contact footprint area at the island's base layer (mm^2). */
   areaMm2?: number;
+  // --- overhang-detector extras (undefined for others) ---
+  /** Mean surface angle from horizontal (degrees) — set by the overhang detector. */
+  overhangAngleDeg?: number;
+  /** Peel-drag moment this overhang patch carries (mm³) — see OverhangRegion. */
+  dragMomentMm3?: number;
+  /** Direction its drag pushes the part (deg) — the side that lifts. */
+  dragDirDeg?: number;
+  /** 3D surface area of the patch (mm²). A steep face's PROJECTED area is a
+   *  thin strip, so anything asking how big the flat is has to use this one. */
+  surfaceAreaMm2?: number;
+  /** Highest point of the patch (mm). The anchoring band on a steep flat is
+   *  measured from `baseZ` up to a fraction of this. */
+  maxZ?: number;
+  /** True when the patch is a large planar face past the self-support angle:
+   *  it forms fine on its own, so it is a toppling patch, not a formation one,
+   *  and the stabilization braces own it instead of the density grid. */
+  steepFlat?: boolean;
+  /** Model-triangle indices of the overhang region (for surface highlighting). */
+  triangleIds?: number[];
+  /** Region mean surface normal (world space, away from the model) — lets the
+   *  placement pipeline skip whole-mesh raycasts that hit the wrong face on
+   *  sloped geometry. */
+  surfaceNormal?: { x: number; y: number; z: number };
   /** Inclusive [firstLayer, lastLayer] of the unsupported contact region. */
   layerSpan?: readonly [number, number];
-  /** Contact voxel 2D positions (x, y coordinates in world mm) at the base layer. */
-  contactVoxels?: { x: number; y: number }[];
+  /** Contact voxel 2D positions (x, y coordinates in world mm) at the base layer.
+   *  Overhang regions also carry the surface Z at each voxel. */
+  contactVoxels?: VoxelFootprint;
+  /** Triangle-accurate perimeter loops, inset by 0.25 mm (world mm). Present for
+   *  overhang regions when `scan_overhangs` supplied them; used by the Poisson
+   *  anchor ring and grid boundary fill instead of voxel erosion for organic shapes. */
+  perimeterLoops?: Vec3Loop[];
 
   // --- minima-detector extras (undefined for voxel) ---
   /** Source mesh vertex index. */

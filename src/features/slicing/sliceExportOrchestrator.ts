@@ -1,10 +1,14 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { Box3, Vector3 } from 'three';
+import { computeApproxModelWorldBounds, computePreciseModelWorldBounds, isBoundsDisjointFromVolume } from '@/utils/modelBounds';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
+import { attachJobMetadataPayloads, getJobMetadataPayloadDeclarations } from './jobMetadataPayloads';
 import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
-import { resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
-import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
+import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from './formats/registry';
+import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import {
+    encodeStagePathHeader,
     isNativeSlicerAvailable,
     sliceSolidAndEncodeWithNativeSlicerToTempPath,
     type AntiAliasingLevel,
@@ -12,43 +16,11 @@ import {
     type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
-import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
-import { appendSliceExtension, resolveSliceOutputExtension } from './sliceFilenameFormat';
-import { buildCtbLayerPlan, isCtbTimingPlanSupported, type CtbLayerPlanV1 } from './ctbLayerTiming';
-import { getCtbMotionSupportError, hasCtbMotionOverrides } from './ctbMotionCapability';
+import { appendSliceExtension } from './sliceFilenameFormat';
+import type { CtbLayerPlanV1 } from './ctbLayerTiming';
 import { sliceProfileFingerprint } from '@/features/printing/ctbArtifact';
-
-function resolvePngCompressionStrategy(
-    mode: PngCompressionStrategy,
-    antiAliasingLevel: AntiAliasingLevel,
-    outputUsesPngLayers: boolean,
-): 'fastest' | 'balanced' | 'smallest' | 'optimal' {
-    if (!outputUsesPngLayers) {
-        return 'fastest';
-    }
-
-    if (mode !== 'auto') {
-        return mode;
-    }
-
-    if (antiAliasingLevel === 'Off') {
-        return 'fastest';
-    }
-
-    // Any level of AA (2x, 4x, 8x, 16x) benefits from balanced compression 
-    // to avoid ballooning file sizes from the gray anti-aliased pixels.
-    return 'balanced';
-}
-
-function resolveContainerCompressionLevel(strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal'): number {
-    switch (strategy) {
-        case 'fastest': return 1;
-        case 'balanced': return 3;
-        case 'smallest': return 6;
-        case 'optimal': return 9;
-        default: return 2;
-    }
-}
+import { assembleSliceJob, buildNativeSliceJob, resolveSliceRasterSettings, validateSliceJobCtbSupport } from './sliceJobAssembly';
+import { resolveSliceJobAntiAliasing, type SliceJobAntiAliasingRequest } from './sliceAntiAliasing';
 
 const DEBUG_PREFIX = '[SlicingDebug]';
 const BYTES_PER_TRIANGLE_XYZ = Float32Array.BYTES_PER_ELEMENT * 9;
@@ -62,7 +34,7 @@ const STAGE_MESH_SINGLE_SHOT_MAX_BYTES = 256 * 1024 * 1024;
 // File-backed staging incurs an additional disk write + read pass, so keep it as a
 // high-watermark fallback for very large meshes where in-memory staging becomes risky.
 const STAGE_MESH_FILE_BACKED_MIN_BYTES = 2 * 1024 * 1024 * 1024;
-const MESH_TRANSPORT_ENCODING = 'quantized_u16' as const;
+const MESH_TRANSPORT_ENCODING = 'raw_f32' as const;
 const STAGE_PROGRESS_UPDATE_MIN_INTERVAL_MS = 250;
 const STAGE_PROGRESS_UPDATE_MIN_BYTES = 64 * 1024 * 1024;
 
@@ -112,82 +84,25 @@ function resolveMeshChunkTargetBytes(initialMeshStagingBytes: number): number {
     );
 }
 
-function resolveMeshTransportQuantizationBounds(printerProfile: PrinterProfile) {
-    const widthMm = Math.max(1, Number(printerProfile.buildVolumeMm.width) || 1);
-    const depthMm = Math.max(1, Number(printerProfile.buildVolumeMm.depth) || 1);
-    const heightMm = Math.max(1, Number(printerProfile.buildVolumeMm.height) || 1);
-
-    return {
-        minX: -widthMm * 0.5,
-        minY: -depthMm * 0.5,
-        minZ: 0,
-        maxX: widthMm * 0.5,
-        maxY: depthMm * 0.5,
-        maxZ: heightMm,
-    };
-}
-
-function quantizeMeshChunkToUint16(chunk: Uint8Array, bounds: ReturnType<typeof resolveMeshTransportQuantizationBounds>): Uint8Array {
-    if (chunk.byteLength === 0) return chunk;
-    if (chunk.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
-        throw new Error(`Mesh chunk byte length ${chunk.byteLength} is not aligned to f32 boundaries.`);
-    }
-
-    const floats = new Float32Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / Float32Array.BYTES_PER_ELEMENT);
-    const quantized = new Uint16Array(floats.length);
-
-    const spans = [
-        Math.max(0, bounds.maxX - bounds.minX),
-        Math.max(0, bounds.maxY - bounds.minY),
-        Math.max(0, bounds.maxZ - bounds.minZ),
-    ];
-    const mins = [bounds.minX, bounds.minY, bounds.minZ];
-    const maxValue = 65535;
-
-    for (let i = 0; i < floats.length; i += 1) {
-        const axis = i % 3;
-        const span = spans[axis];
-        if (!Number.isFinite(span) || span <= 0) {
-            quantized[i] = 0;
-            continue;
-        }
-
-        const value = floats[i];
-        const normalized = (value - mins[axis]) / span;
-        const clamped = Math.max(0, Math.min(1, normalized));
-        quantized[i] = Math.round(clamped * maxValue);
-    }
-
-    return new Uint8Array(quantized.buffer);
-}
-
 export type SliceExportOrchestratorOptions = {
     models: LoadedModel[];
+    excludedModelIds?: readonly string[];
+    /**
+     * The build volume of the plate being sliced, in world coordinates. Given
+     * one, the in-bounds filter judges models against their own plate instead of
+     * a volume centred on the origin, which is what a cascade needs.
+     */
+    plateVolumeBoundsMm?: { minX: number; minY: number; maxX: number; maxY: number };
+    /** Where that plate sits in the cascade, so its geometry can be shifted to the origin. */
+    plateOffsetMm?: { dxMm: number; dyMm: number };
     printerProfile: PrinterProfile;
     materialProfile: MaterialProfile;
     filenameBase: string;
+    /** Stored-profile snapshot when the caller derives a separate effective material. */
+    sourceProfileFingerprint?: string;
     outputPath?: string | null;
-    antiAliasingLevel?: AntiAliasingLevel;
-    antiAliasingMode?: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
-    blurBrushRadiusPx?: number;
-    blurBrushKernel?: 'box' | 'gaussian';
-    blurBrushSigma?: number;
-    blurBrushSigmaX?: number;
-    blurBrushSigmaY?: number;
-    zBlurRadiusLayers?: number;
-    zBlurKernel?: 'box' | 'gaussian';
-    zBlurSigma?: number;
-    zBlendLookBack?: number;
-    zBlendFadePx?: number;
-    zBlendAutoFade?: boolean;
-    zBlendMinimumAlphaPercent?: number;
-    zBlendMaxAlphaPercent?: number;
-    zBlendCustomLut?: number[];
-    zaaKernel?: 'perturb';
-    zaaPattern?: 'uniform' | 'halton' | 'base2';
-    zaaDuplicateZ?: boolean;
-    minimumAaAlphaPercentOverride?: number;
-    aaOnSupports?: boolean;
+    /** The user's anti-aliasing choice; without one the job slices with anti-aliasing off. */
+    antiAliasing?: SliceJobAntiAliasingRequest;
     ditherEnabled?: boolean;
     ditherBitDepth?: number;
     ditherDeviceGamma?: number;
@@ -262,10 +177,8 @@ export type SliceExportResult = {
             widthPx: number;
             heightPx: number;
             xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
-            computeBackend: 'auto' | 'cpu' | 'gpu';
             pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
             containerCompressionLevel: number;
-            bvhAccelerationEnabled: boolean;
             antiAliasingLevel: AntiAliasingLevel;
             antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
             blurBrushRadiusPx: number;
@@ -299,7 +212,7 @@ export type SliceExportResult = {
                 maxX: number;
                 maxY: number;
                 maxZ: number;
-            };
+            } | null;
             meshTransferMode: 'single-shot' | 'streamed' | 'file-backed';
             meshStageFilePath: string | null;
         };
@@ -335,137 +248,6 @@ export type SliceExportResult = {
     };
 };
 
-function setMetadataPathValue(target: Record<string, unknown>, path: string, value: unknown): void {
-    const segments = path
-        .split('.')
-        .map((segment) => segment.trim())
-        .filter((segment) => segment.length > 0);
-
-    if (segments.length === 0) return;
-
-    let cursor: Record<string, unknown> = target;
-    for (let i = 0; i < segments.length - 1; i += 1) {
-        const segment = segments[i];
-        const existing = cursor[segment];
-        if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
-            cursor[segment] = {};
-        }
-        cursor = cursor[segment] as Record<string, unknown>;
-    }
-
-    cursor[segments[segments.length - 1]] = value;
-}
-
-function coerceLocalMaterialSettingValue(
-    rawValue: string | number | boolean,
-    kind: 'number' | 'integer' | 'text' | 'boolean' | 'select',
-): string | number | boolean {
-    if (kind === 'boolean') {
-        if (typeof rawValue === 'boolean') return rawValue;
-        if (typeof rawValue === 'string') {
-            const normalized = rawValue.trim().toLowerCase();
-            if (normalized === 'true') return true;
-            if (normalized === 'false') return false;
-        }
-        return Boolean(rawValue);
-    }
-
-    if (kind === 'number' || kind === 'integer') {
-        const parsed = Number(rawValue);
-        if (!Number.isFinite(parsed)) return kind === 'integer' ? 0 : 0;
-        return kind === 'integer' ? Math.round(parsed) : parsed;
-    }
-
-    return String(rawValue);
-}
-
-function mergeMetadataOverridesIntoMetadata(
-    metadataJson: string,
-    outputFormat: string,
-    materialProfile: MaterialProfile,
-    settingsMode?: string,
-    printerOutputFormat?: string,
-): string {
-    try {
-        const parsed = JSON.parse(metadataJson) as Record<string, unknown>;
-
-        if (settingsMode) {
-            const printer = (parsed.printer ?? {}) as Record<string, unknown>;
-            parsed.printer = {
-                ...printer,
-                settingsMode,
-            };
-
-            const exportNode = (parsed.export ?? {}) as Record<string, unknown>;
-            const formatKey = outputFormat.replace(/^\./, '').toLowerCase();
-            const formatNode = (exportNode[formatKey] ?? {}) as Record<string, unknown>;
-            exportNode[formatKey] = {
-                ...formatNode,
-                settingsMode,
-            };
-            parsed.export = exportNode;
-        }
-
-        const adapter = getProfileLocalMaterialSettingsAdapter(printerOutputFormat ?? outputFormat, settingsMode)
-            ?? getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
-        const fieldSchema = adapter?.fields ?? [];
-        if (fieldSchema.length > 0) {
-            const localForOutput = materialProfile.localSettingsByOutput?.[printerOutputFormat ?? outputFormat]
-                ?? materialProfile.localSettingsByOutput?.[outputFormat]
-                ?? {};
-
-            fieldSchema.forEach((field) => {
-                if (field.kind === 'spacer') return;
-
-                const fieldValue = Object.prototype.hasOwnProperty.call(localForOutput, field.key)
-                    ? localForOutput[field.key]
-                    : field.defaultValue;
-
-                const coercedValue = coerceLocalMaterialSettingValue(
-                    fieldValue,
-                    field.kind,
-                );
-
-                const targetPath = (field.metadataPath?.trim() || `material.${field.key}`);
-                setMetadataPathValue(parsed, targetPath, coercedValue);
-            });
-        }
-
-        return JSON.stringify(parsed);
-    } catch {
-        return metadataJson;
-    }
-}
-
-function resolveEffectiveDitherPolicy(options: SliceExportOrchestratorOptions): {
-    ditherEnabled: boolean;
-    ditherBitDepth: number;
-    ditherDeviceGamma: number;
-} {
-    const materialDitherEnabled = options.materialProfile.antiAliasingSettings?.ditherEnabled ?? false;
-    const materialDitherBitDepth = options.materialProfile.antiAliasingSettings?.ditherBitDepth ?? 3;
-    const materialDitherGamma = options.materialProfile.antiAliasingSettings?.ditherDeviceGamma ?? 3.0;
-
-    const configuredDitherEnabled = options.ditherEnabled ?? materialDitherEnabled;
-    const configuredDitherBitDepth = options.ditherBitDepth ?? materialDitherBitDepth;
-    const configuredDitherGamma = options.ditherDeviceGamma ?? materialDitherGamma;
-
-    const printerBitDepthRaw = Number(options.printerProfile.bitDepth?.bits);
-    const printerBitDepth = Number.isFinite(printerBitDepthRaw)
-        ? Math.round(printerBitDepthRaw)
-        : null;
-
-    const hasKnownNon8BitDisplay = printerBitDepth != null && printerBitDepth > 0 && printerBitDepth !== 8;
-    const derivedBitDepth = (printerBitDepth != null && printerBitDepth > 0)
-        ? Math.max(2, Math.min(7, printerBitDepth))
-        : Math.max(2, Math.min(7, Math.round(configuredDitherBitDepth)));
-
-    return {
-        ditherEnabled: hasKnownNon8BitDisplay ? true : configuredDitherEnabled,
-        ditherBitDepth: derivedBitDepth,
-        ditherDeviceGamma: Math.max(0.5, Math.min(4.0, Number(configuredDitherGamma))),
-    };
-}
 
 /**
  * Orchestrates export via DragonFruit Desktop native slicer.
@@ -485,26 +267,51 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         }));
     };
 
+    const excludedModelIdSet = new Set(options.excludedModelIds ?? []);
+    const halfWidth = Math.max(1, Number(options.printerProfile.buildVolumeMm.width) || 1) * 0.5;
+    const halfDepth = Math.max(1, Number(options.printerProfile.buildVolumeMm.depth) || 1) * 0.5;
+    const buildHeight = Math.max(1, Number(options.printerProfile.buildVolumeMm.height) || 1);
+    const plateBounds = options.plateVolumeBoundsMm;
+    const buildVolume = plateBounds
+        ? new Box3(
+            new Vector3(plateBounds.minX, plateBounds.minY, 0),
+            new Vector3(plateBounds.maxX, plateBounds.maxY, buildHeight),
+        )
+        : new Box3(new Vector3(-halfWidth, -halfDepth, 0), new Vector3(halfWidth, halfDepth, buildHeight));
+    const visibleModels = options.models.filter((model) => {
+        if (!model.visible || excludedModelIdSet.has(model.id)) return false;
+        const approximate = computeApproxModelWorldBounds(model.geometry, model.transform);
+        if (buildVolume.containsBox(approximate)) return true;
+        // An enclosing box that misses the volume cannot contribute any pixels.
+        // For rotated boxes that overlap, use the actual transformed vertices.
+        if (isBoundsDisjointFromVolume(approximate, buildVolume, 0.01)) return false;
+        return !isBoundsDisjointFromVolume(
+            computePreciseModelWorldBounds(model.geometry, model.transform),
+            buildVolume,
+            0.01,
+        );
+    });
+    if (visibleModels.length === 0) {
+        throw new Error('No in-bounds visible models available for slicing.');
+    }
+
     const format = resolveSlicingFormatDefinition({
         printerProfile: options.printerProfile,
         materialProfile: options.materialProfile,
     });
-
-    const formatVersion = resolveOutputFormatVersion(format.outputFormat, options.printerProfile.display.formatVersion);
-    const settingsMode = resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode);
-    const ctbTimingConfig = format.outputFormat.toLowerCase().includes('ctb') && options.materialProfile.ctbTimingV1?.enabled
-        ? options.materialProfile.ctbTimingV1 : undefined;
-    if (ctbTimingConfig && !isCtbTimingPlanSupported(formatVersion ?? '', settingsMode ?? '')) {
-        throw new Error('CTB timing and startup dummy require CTB V4 or V5 with Simple, Two Stage, or All Fields settings. Select a supported CTB version or disable CTB timing.');
-    }
-    if (options.materialProfile.ctbTimingV1?.enabled && hasCtbMotionOverrides(options.materialProfile.ctbTimingV1)) {
-        const motionError = getCtbMotionSupportError(
-            format.outputFormat.toLowerCase().includes('ctb') ? formatVersion ?? '' : '',
-            settingsMode ?? '',
+    // The profile's format is only as real as the plugin that declares it. Saying so
+    // is the whole point: the alternative - substituting another format's definition -
+    // writes bytes whose encoder does not match the file's name.
+    if (!format) {
+        throw new Error(
+            `No encoder is installed for "${options.printerProfile.display.outputFormat}". `
+            + 'Install the plugin that provides that output format, or pick another one for this printer profile.',
         );
-        if (motionError) throw new Error(motionError);
     }
-    const profileFingerprint = sliceProfileFingerprint(options.printerProfile, options.materialProfile);
+
+    validateSliceJobCtbSupport(options.printerProfile, options.materialProfile);
+    const profileFingerprint = options.sourceProfileFingerprint
+        ?? sliceProfileFingerprint(options.printerProfile, options.materialProfile);
 
     logDebug('Export orchestrator start', {
         format: format.outputFormat,
@@ -512,6 +319,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         printer: options.printerProfile.name,
         material: options.materialProfile.name,
         modelCount: options.models.length,
+        excludedModelCount: excludedModelIdSet.size,
     });
 
     throwIfAborted(options.abortSignal);
@@ -523,13 +331,16 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     options.onProgress?.(0, 1, 'Preparing');
     emitDiagnosticProgress('Preparing mesh', 0, 1, {
         format: format.outputFormat,
-        modelCount: options.models.length,
+        modelCount: visibleModels.length,
     });
 
-    const initialMeshStagingBytes = estimateInitialMeshStagingBytes(options.models);
-    const meshTransportBytesEstimate = Math.ceil(initialMeshStagingBytes / 2);
-    const meshTransportEncoding: 'raw_f32' | 'quantized_u16' = MESH_TRANSPORT_ENCODING;
-    const meshTransportQuantization = resolveMeshTransportQuantizationBounds(options.printerProfile);
+    const initialMeshStagingBytes = estimateInitialMeshStagingBytes(visibleModels);
+    // Keep outside crossings and closed surfaces intact. Plate-box quantization
+    // clamps those coordinates; surface clipping removes the closing crossings.
+    // The rasterizer alone crops the filled spans to the printable dimensions.
+    const meshTransportBytesEstimate = initialMeshStagingBytes;
+    const meshTransportEncoding = MESH_TRANSPORT_ENCODING;
+    const meshTransportQuantization = null;
     const meshChunkTargetBytes = resolveMeshChunkTargetBytes(meshTransportBytesEstimate);
     const meshTransferMode: 'single-shot' | 'streamed' | 'file-backed' = meshTransportBytesEstimate >= STAGE_MESH_FILE_BACKED_MIN_BYTES
         ? 'file-backed'
@@ -537,23 +348,6 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             ? 'single-shot'
             : 'streamed';
     let meshStageFilePath: string | null = null;
-
-    if (meshTransferMode === 'streamed') {
-        // Tell Rust to reserve a realistic staging buffer before chunks arrive.
-        await invoke('stage_mesh_binary_start', { totalBytes: meshTransportBytesEstimate });
-    } else if (meshTransferMode === 'file-backed') {
-        meshStageFilePath = await invoke<string>('allocate_mesh_stage_path');
-    }
-
-    logDebug('Initialized mesh staging buffer', {
-        initialMeshStagingBytes,
-        initialMeshStagingMiB: Number((initialMeshStagingBytes / (1024 * 1024)).toFixed(2)),
-        meshChunkTargetBytes,
-        meshChunkTargetMiB: Number((meshChunkTargetBytes / (1024 * 1024)).toFixed(2)),
-        meshTransportBytesEstimate,
-        meshTransportEncoding,
-        meshTransferMode,
-    });
 
     let cumulativeBytesStage = 0;
     let stageMeshIpcMs = 0;
@@ -579,16 +373,13 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
     const handleMeshChunk = async (chunk: Uint8Array) => {
         throwIfAborted(options.abortSignal);
-        const transportChunk = meshTransportEncoding === 'quantized_u16'
-            ? quantizeMeshChunkToUint16(chunk, meshTransportQuantization)
-            : chunk;
 
-        cumulativeBytesStage += transportChunk.byteLength;
+        cumulativeBytesStage += chunk.byteLength;
         stageMeshChunkCount += 1;
         maybeEmitStageProgress();
 
         const chunkInvokeStart = performance.now();
-        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_chunk', transportChunk, {
+        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_chunk', chunk, {
             headers: { 'Content-Type': 'application/octet-stream' },
         });
 
@@ -601,25 +392,28 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         stageMeshIpcMs += performance.now() - chunkInvokeStart;
     };
 
+    /** Byte offset of the next chunk in the file-backed stage sequence. */
+    let meshStageFileOffset = 0;
+
     const handleMeshFileChunk = async (chunk: Uint8Array) => {
         throwIfAborted(options.abortSignal);
         if (!meshStageFilePath) {
             throw new Error('Mesh stage file path was not allocated before chunk append.');
         }
 
-        const transportChunk = meshTransportEncoding === 'quantized_u16'
-            ? quantizeMeshChunkToUint16(chunk, meshTransportQuantization)
-            : chunk;
-
-        cumulativeBytesStage += transportChunk.byteLength;
+        cumulativeBytesStage += chunk.byteLength;
         stageMeshChunkCount += 1;
         maybeEmitStageProgress();
 
+        const chunkOffset = meshStageFileOffset;
+        meshStageFileOffset += chunk.byteLength;
+
         const appendStart = performance.now();
-        const appendedLen = await invoke<number>('append_mesh_stage_chunk', transportChunk, {
+        const appendedLen = await invoke<number>('append_mesh_stage_chunk', chunk, {
             headers: {
                 'Content-Type': 'application/octet-stream',
-                'x-mesh-stage-path': meshStageFilePath,
+                'x-mesh-stage-path': encodeStagePathHeader(meshStageFilePath),
+                'x-mesh-stage-offset': String(chunkOffset),
             },
         });
         stageMeshIpcMs += performance.now() - appendStart;
@@ -629,7 +423,6 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         }
     };
 
-    const visibleModels = options.models.filter((model) => model.visible);
     const modifierBakeStartMs = performance.now();
     options.onProgress?.(0, 1, 'Baking Modifiers');
     const preparedModelsForOutput = await prepareLoadedModelsForOutput(visibleModels);
@@ -659,14 +452,46 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
         modifierBakeMs,
     });
+    // Support tips shrink while the mesh is prepared, before the job is
+    // assembled, so the anti-aliasing is resolved here first; assembleSliceJob
+    // resolves the same request again below.
+    const { supportTipShrinkPercent } = resolveSliceJobAntiAliasing({
+        printerProfile: options.printerProfile,
+        materialProfile: options.materialProfile,
+        layerHeightMm: resolveSliceRasterSettings({
+            printerProfile: options.printerProfile,
+            materialProfile: options.materialProfile,
+        }).layerHeightMm,
+        request: options.antiAliasing,
+    });
     const meshPrepStartMs = performance.now();
     let solidMesh: Awaited<ReturnType<typeof buildSolidSliceMeshForWasm>>;
     try {
+        if (meshTransferMode === 'streamed') {
+            // Modifier baking leaves raw f32 output in the shared native stage.
+            // Reset it before appending the prepared scene, never before baking.
+            await invoke('stage_mesh_binary_start', { totalBytes: meshTransportBytesEstimate });
+        } else if (meshTransferMode === 'file-backed') {
+            meshStageFilePath = await invoke<string>('allocate_mesh_stage_path');
+        }
+
+        logDebug('Initialized mesh staging buffer', {
+            initialMeshStagingBytes,
+            initialMeshStagingMiB: Number((initialMeshStagingBytes / (1024 * 1024)).toFixed(2)),
+            meshChunkTargetBytes,
+            meshChunkTargetMiB: Number((meshChunkTargetBytes / (1024 * 1024)).toFixed(2)),
+            meshTransportBytesEstimate,
+            meshTransportEncoding,
+            meshTransferMode,
+        });
+
         solidMesh = await buildSolidSliceMeshForWasm({
             models: preparedModelsForOutput.models,
             printerProfile: options.printerProfile,
             materialProfile: options.materialProfile,
             filenameBase: options.filenameBase,
+            plateOffsetMm: options.plateOffsetMm,
+            supportTipShrinkPercent,
             flushBinaryMeshChunk: meshTransferMode === 'streamed'
                 ? handleMeshChunk
                 : meshTransferMode === 'file-backed'
@@ -685,19 +510,16 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             solidMesh.trianglesXYZ.byteOffset,
             solidMesh.trianglesXYZ.byteLength,
         );
-        const transportBytes = meshTransportEncoding === 'quantized_u16'
-            ? quantizeMeshChunkToUint16(meshBytes, meshTransportQuantization)
-            : meshBytes;
-        const mb = Math.round(transportBytes.byteLength / (1024 * 1024));
+        const mb = Math.round(meshBytes.byteLength / (1024 * 1024));
         options.onProgress?.(0, 1, `Transferring Mesh (${mb} MB)`);
 
         const chunkInvokeStart = performance.now();
-        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_set', transportBytes, {
+        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_set', meshBytes, {
             headers: { 'Content-Type': 'application/octet-stream' },
         });
 
         stageMeshIpcMs += performance.now() - chunkInvokeStart;
-        cumulativeBytesStage = chunkAck.totalBytes > 0 ? chunkAck.totalBytes : transportBytes.byteLength;
+        cumulativeBytesStage = chunkAck.totalBytes > 0 ? chunkAck.totalBytes : meshBytes.byteLength;
         stageMeshChunkCount = chunkAck.chunksReceived > 0 ? chunkAck.chunksReceived : 1;
         stageMeshAckAppendNsTotal = Math.max(stageMeshAckAppendNsTotal, chunkAck.appendNsTotal ?? 0);
         stageMeshCapacityMaxBytes = Math.max(stageMeshCapacityMaxBytes, chunkAck.capacityBytes ?? 0);
@@ -744,85 +566,27 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
     const perfSettings = getSavedSlicingPerformanceSettings();
 
-    const resolvedPngStrategy = resolvePngCompressionStrategy(
-        solidMesh.pngCompressionStrategy,
-        options.antiAliasingLevel ?? 'Off',
-        format.layerDataKind === 'png',
-    );
+    const assembled = assembleSliceJob({
+        printerProfile: options.printerProfile,
+        materialProfile: options.materialProfile,
+        scene: {
+            totalLayers: solidMesh.totalLayers,
+            tallestObjectHeightMm: solidMesh.tallestObjectHeightMm,
+            models: solidMesh.models,
+        },
+        dither: options,
+        antiAliasing: options.antiAliasing,
+    });
 
-    const effectiveDitherPolicy = resolveEffectiveDitherPolicy(options);
-
-    const mergedMetadataJson = mergeMetadataOverridesIntoMetadata(
-        solidMesh.metadataJson, format.outputFormat, options.materialProfile, settingsMode,
-        options.printerProfile.display.outputFormat,
-    );
-    const mergedMetadata = ctbTimingConfig ? JSON.parse(mergedMetadataJson) as Record<string, unknown> : {};
-    const ctbLayerPlan = ctbTimingConfig ? buildCtbLayerPlan({
-        metadata: mergedMetadata, config: ctbTimingConfig, modelLayerCount: solidMesh.totalLayers,
-        layerHeightMm: solidMesh.layerHeightMm, settingsMode: settingsMode ?? '', formatVersion: formatVersion ?? '',
-    }) : undefined;
-    if (ctbLayerPlan) {
-        mergedMetadata.ctb = { ...(mergedMetadata.ctb as Record<string, unknown> ?? {}), layerPlanV1: ctbLayerPlan };
-    }
-    const fileLayerCount = ctbLayerPlan?.layers.length ?? solidMesh.totalLayers;
+    const ctbLayerPlan = assembled.ctbLayerPlan;
+    const fileLayerCount = assembled.fileLayerCount;
 
     const nativeJob = {
-        outputFormat: format.outputFormat,
-        formatVersion: resolveOutputFormatVersion(
-            format.outputFormat,
-            options.printerProfile.display.formatVersion,
-        ),
-        settingsMode: resolveOutputSettingsMode(
-            format.outputFormat,
-            options.printerProfile.display.settingsMode,
-        ),
-        sourceWidthPx: solidMesh.sourceWidthPx,
-        sourceHeightPx: solidMesh.sourceHeightPx,
-        widthPx: solidMesh.widthPx,
-        heightPx: solidMesh.heightPx,
-        xPackingMode: solidMesh.xPackingMode,
-        computeBackend: solidMesh.computeBackend,
-        pngCompressionStrategy: resolvedPngStrategy,
-        bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
-        antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
-        antiAliasingMode: options.antiAliasingMode ?? 'Blur',
-        blurBrushRadiusPx: Math.max(1, Math.round(options.blurBrushRadiusPx ?? 1)),
-        blurBrushKernel: options.blurBrushKernel ?? 'gaussian',
-        blurBrushSigmaX: Math.max(0.05, Math.min(16, Number(options.blurBrushSigmaX ?? options.blurBrushSigma ?? 0.5))),
-        blurBrushSigmaY: Math.max(0.05, Math.min(16, Number(options.blurBrushSigmaY ?? options.blurBrushSigma ?? 0.5))),
-        zBlurRadiusLayers: Math.max(0, Math.min(8, Math.round(options.zBlurRadiusLayers ?? 0))),
-        zBlurKernel: options.zBlurKernel ?? 'box',
-        zBlurSigma: Math.max(0.05, Math.min(16, Number(options.zBlurSigma ?? 0.5))),
-        zBlendLookBack: Math.max(1, Math.round(options.zBlendLookBack ?? 2)),
-        zBlendFadePx: Math.max(1, Math.round(options.zBlendFadePx ?? 20)),
-        zBlendAutoFade: options.zBlendAutoFade !== false,
-        zBlendMinimumAlphaPercent: Math.max(0, Math.min(100, options.zBlendMinimumAlphaPercent ?? 0)),
-        zBlendMaxAlphaPercent: Math.max(0, Math.min(100, options.zBlendMaxAlphaPercent ?? 90)),
-        zBlendCustomLut: options.zBlendCustomLut,
-        zaaKernel: options.zaaKernel,
-        zaaPattern: options.zaaPattern,
-        zaaDuplicateZ: options.zaaDuplicateZ,
-        aaOnSupports: options.aaOnSupports ?? (perfSettings.aaOnSupportsExperimental === true),
-        minimumAaAlphaPercent: Math.max(
-            0,
-            Math.min(
-                100,
-                options.minimumAaAlphaPercentOverride
-                ?? options.materialProfile.minimumAaAlphaPercent
-                ?? 50,
-            ),
-        ),
-        mirrorX: solidMesh.mirrorX,
-        mirrorY: solidMesh.mirrorY,
-        ditherEnabled: effectiveDitherPolicy.ditherEnabled,
-        ditherBitDepth: effectiveDitherPolicy.ditherBitDepth,
-        ditherDeviceGamma: effectiveDitherPolicy.ditherDeviceGamma,
-        modelTriangleCount: solidMesh.modelTriangleCount,
-        containerCompressionLevel: resolveContainerCompressionLevel(resolvedPngStrategy),
-        buildWidthMm: solidMesh.buildWidthMm,
-        buildDepthMm: solidMesh.buildDepthMm,
-        layerHeightMm: solidMesh.layerHeightMm,
-        totalLayers: solidMesh.totalLayers,
+        ...buildNativeSliceJob(assembled, {
+            pngCompressionMode: solidMesh.pngCompressionStrategy,
+            aaOnSupportsFallback: perfSettings.aaOnSupportsExperimental === true,
+            modelTriangleCount: solidMesh.modelTriangleCount,
+        }),
         exportThumbnailPngBase64: options.exportThumbnailPng && options.exportThumbnailPng.length > 0
             ? encodeBytesToBase64(options.exportThumbnailPng)
             : null,
@@ -830,7 +594,11 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         meshEncoding: meshTransportEncoding,
         meshQuantization: meshTransportQuantization,
         outputPath: options.outputPath?.trim() || null,
-        metadataJson: ctbLayerPlan ? JSON.stringify(mergedMetadata) : mergedMetadataJson,
+        metadataJson: await attachJobMetadataPayloads(
+            assembled.metadataJson,
+            { models: visibleModels },
+            getJobMetadataPayloadDeclarations(),
+        ),
     };
 
     const coreStartMs = performance.now();
@@ -871,8 +639,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     throwIfAborted(options.abortSignal);
     options.onProgress?.(Math.max(progressDone, progressTotal), progressTotal, 'Finalizing');
 
-    const printerExt = resolveSliceOutputExtension(options.printerProfile.display.outputFormat, format.outputFormat);
-    const outputName = appendSliceExtension(options.filenameBase, printerExt);
+    const printerExt = resolveOutputFileExtension(
+        options.printerProfile.display.outputFormat,
+        options.printerProfile.display.formatVersion,
+    ) || format.outputFormat.replace(/^\./, '') || 'slice';
+    const outputName = nativeJob.outputPath?.split(/[\\/]/).pop()
+        || appendSliceExtension(options.filenameBase, printerExt);
 
     const totalElapsedMs = performance.now() - orchestratorStartMs;
     options.onProgress?.(progressTotal, progressTotal, 'Handoff');
@@ -922,10 +694,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 widthPx: nativeJob.widthPx,
                 heightPx: nativeJob.heightPx,
                 xPackingMode: nativeJob.xPackingMode,
-                computeBackend: nativeJob.computeBackend,
                 pngCompressionStrategy: nativeJob.pngCompressionStrategy,
                 containerCompressionLevel: nativeJob.containerCompressionLevel,
-                bvhAccelerationEnabled: nativeJob.bvhAccelerationEnabled,
                 antiAliasingLevel: nativeJob.antiAliasingLevel,
                 antiAliasingMode: nativeJob.antiAliasingMode,
                 blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,

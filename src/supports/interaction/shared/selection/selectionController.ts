@@ -8,6 +8,7 @@ import {
 import type { SupportSelectionClickInput } from './selectionTypes';
 import { isActionActiveSync } from '@/hotkeys/hotkeyStore';
 import { jointCreationStore } from '@/supports/SupportPrimitives/Joint/jointCreationState';
+import { SUPPORT_SELECTION_CATEGORIES, type SupportSelectionCategory } from '@/supports/supportTypeRegistry';
 
 function isPlacementActive() {
     const isPlacementModeActive =
@@ -19,20 +20,9 @@ function isPlacementActive() {
     return isPlacementModeActive || isJointCreationActive;
 }
 
-const SUPPORT_SELECTION_CATEGORIES = new Set([
-    'trunk',
-    'branch',
-    'leaf',
-    'twig',
-    'stick',
-    'brace',
-    'anchor',
-    'root',
-]);
-
 function isSupportCategory(category: string | null | undefined) {
     if (!category) return false;
-    return SUPPORT_SELECTION_CATEGORIES.has(category);
+    return SUPPORT_SELECTION_CATEGORIES.has(category as SupportSelectionCategory);
 }
 
 export function selectPrimitiveById(id: string) {
@@ -76,11 +66,6 @@ export function selectSupportById(id: string, toggle: boolean) {
 
     if (wasSelected) {
         setSelectedId(next.length > 0 ? next[next.length - 1] : null);
-        return;
-    }
-
-    if (next.length > 1) {
-        setSelectedId(null);
         return;
     }
 

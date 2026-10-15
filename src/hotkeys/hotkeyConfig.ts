@@ -1,23 +1,5 @@
 // Centralized configuration for application hotkeys
 
-// Universal hotkeys are hardcoded system standards and are not intended to be customizable.
-export const UNIVERSAL_HOTKEYS = {
-    DELETE: {
-        keys: ['Delete', 'Backspace'],
-        description: 'Delete selected item'
-    },
-    UNDO: {
-        key: 'z',
-        modifier: 'ctrl', // or meta
-        description: 'Undo last action'
-    },
-    REDO: {
-        key: 'z',
-        modifier: 'ctrl+shift',
-        description: 'Redo last action'
-    }
-} as const;
-
 // Default keybindings for application features.
 // These are intended to be customizable by the user in the future.
 export interface HotkeyBinding {
@@ -67,6 +49,10 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 'q',
             description: 'Hold to force placing support'
         },
+        AUTO_BRACING: {
+            key: 'g',
+            description: 'Generate auto bracing while the Bracing settings page is open'
+        },
         SPROUTED_PARENTING_LOCK: {
             key: 'w',
             description: 'Hold to enter Sprouted Leaf Fanning Mode'
@@ -93,19 +79,24 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
     CANVAS: {
         TOOL_SELECT: {
             key: 'q',
-            description: 'Switch canvas tool to Select'
+            description: 'Switch canvas tool to Drag'
         },
         TOOL_MODIFY: {
             key: 'm',
-            description: 'Switch canvas tool to Modify'
+            description: 'Switch canvas tool to Transform'
+        },
+        TOOL_MODIFY_LOCAL: {
+            key: 'm',
+            modifier: 'shift',
+            description: 'Switch canvas tool to Transform with the gizmo in the model\'s own axes'
         },
         TOOL_SMOOTH: {
             key: 's',
-            description: 'Switch canvas tool to Smooth'
+            description: 'Switch canvas tool to Brush'
         },
         TOOL_ARRANGE: {
             key: 'a',
-            description: 'Switch canvas tool to Arrange'
+            description: 'Switch canvas tool to Arrange, or arrange all when it is already active'
         },
         TOOL_DUPLICATE: {
             key: 'd',
@@ -153,19 +144,23 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             description: 'Pinned Slot 6'
         }
     },
-    ROTATION: {
-        SNAP_COARSE: {
-            key: 'drag',
-            modifier: 'meta',
-            description: 'Snap rotation to 45° increments (Cmd/Ctrl + drag)'
-        },
-        SNAP_FINE: {
-            key: 'drag',
-            modifier: 'meta+shift',
-            description: 'Snap rotation to 15° increments (Cmd/Ctrl + Shift + drag)'
-        }
-    },
     GLOBAL: {
+        DELETE: {
+            // `Delete` is always available as a fixed secondary delete key (see
+            // useDeleteHotkey); this configurable binding defaults to `Backspace`.
+            key: 'Backspace',
+            description: 'Delete selected item'
+        },
+        UNDO: {
+            key: 'z',
+            modifier: 'ctrl',
+            description: 'Undo last action'
+        },
+        REDO: {
+            key: 'z',
+            modifier: 'ctrl+shift',
+            description: 'Redo last action'
+        },
         SAVE: {
             key: 's',
             modifier: 'ctrl',
@@ -217,13 +212,11 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 'k',
             modifier: 'ctrl+shift',
             description: 'Toggle cross section caps debug panel'
-        }
-    },
-    MESH: {
-        INVERT_NORMALS: {
-            key: 'n',
-            modifier: 'alt',
-            description: 'Invert selected model normals'
+        },
+        RE_RUN_ONBOARDING: {
+            key: 'o',
+            modifier: 'ctrl+shift',
+            description: 'Re-run the first-run onboarding wizard'
         }
     },
     NAVIGATION: {
@@ -241,6 +234,12 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 'a',
             modifier: 'ctrl',
             description: 'Select all hole punches / items'
+        }
+    },
+    CUT: {
+        TOGGLE_PREVIEW: {
+            key: 'b',
+            description: 'Show or hide the cut preview while the Cut tool is open'
         }
     }
 } as const;

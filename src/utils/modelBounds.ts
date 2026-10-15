@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { quantizeToScale } from '@/utils/math';
 
-type TransformLike = {
+export type TransformLike = {
   position: THREE.Vector3;
   rotation: THREE.Euler;
   scale: THREE.Vector3;
@@ -25,16 +26,22 @@ const matrixScratch = new THREE.Matrix4();
 const quaternionScratch = new THREE.Quaternion();
 const centeredBoxScratch = new THREE.Box3();
 const centerOffsetScratch = new THREE.Vector3();
+const originScratch = new THREE.Vector3();
 
-function quantize(n: number): number {
-  return Math.round(n * QUANTIZE) / QUANTIZE;
-}
-
-function makeTransformKey(t: TransformLike): string {
+/**
+ * The part of a transform the precise walk depends on: how the vertices are
+ * oriented and sized, not where they sit.
+ *
+ * The position is deliberately absent. A translation moves every vertex by the
+ * same vector, so it moves the resulting box by that vector and changes nothing
+ * else - the walk is over the same points either way. Keeping it in the key gave
+ * a drag a fresh key on every frame, and a full walk over every vertex with it:
+ * the cost a complex model paid per frame and a small one did not.
+ */
+function makeOrientationKey(t: TransformLike): string {
   return [
-    quantize(t.position.x), quantize(t.position.y), quantize(t.position.z),
-    quantize(t.rotation.x), quantize(t.rotation.y), quantize(t.rotation.z),
-    quantize(t.scale.x), quantize(t.scale.y), quantize(t.scale.z),
+    quantizeToScale(t.rotation.x, QUANTIZE), quantizeToScale(t.rotation.y, QUANTIZE), quantizeToScale(t.rotation.z, QUANTIZE),
+    quantizeToScale(t.scale.x, QUANTIZE), quantizeToScale(t.scale.y, QUANTIZE), quantizeToScale(t.scale.z, QUANTIZE),
   ].join('|');
 }
 
@@ -86,6 +93,14 @@ function ensureCenteredPositionBuffer(geometryData: GeometryLike): GeometryCache
   return next;
 }
 
+/**
+ * Mesh vertices with the geometry's own centre offset already removed, so the
+ * model transform alone places them in world space. Cached per geometry.
+ */
+export function getCenteredPositions(geometryData: GeometryLike): Float32Array | null {
+  return ensureCenteredPositionBuffer(geometryData)?.centeredPositions ?? null;
+}
+
 export function shouldUsePreciseBoundsForTransform(transform: TransformLike, angleEpsilon = 1e-4): boolean {
   const snapStep = Math.PI * 0.5;
   const isNearRightAngle = (angle: number) => {
@@ -130,14 +145,17 @@ export function computePreciseModelWorldBounds(
     return computeApproxModelWorldBounds(geometryData, transform, target);
   }
 
-  const key = makeTransformKey(transform);
+  const key = makeOrientationKey(transform);
   const cachedBounds = cacheEntry.boundsCache.get(key);
   if (cachedBounds) {
-    target.copy(cachedBounds);
+    target.copy(cachedBounds).translate(transform.position);
     return target;
   }
 
-  matrixScratch.compose(transform.position, quaternionScratch.copy(quaternionFromGlobalEuler(transform.rotation)), transform.scale);
+  // Walked with the position held at the origin: the rotation and scale are what
+  // the walk is for, and the position is added to the box afterwards. Translating
+  // a box is exact, so this is the same answer for a fraction of the work.
+  matrixScratch.compose(originScratch, quaternionScratch.copy(quaternionFromGlobalEuler(transform.rotation)), transform.scale);
   const e = matrixScratch.elements;
   const points = cacheEntry.centeredPositions;
 
@@ -175,7 +193,7 @@ export function computePreciseModelWorldBounds(
     if (!first.done) cacheEntry.boundsCache.delete(first.value);
   }
 
-  return target;
+  return target.translate(transform.position);
 }
 
 export function isBoundsOutsideVolume(bounds: THREE.Box3, volume: THREE.Box3, epsilonMm: number): boolean {
@@ -186,5 +204,25 @@ export function isBoundsOutsideVolume(bounds: THREE.Box3, volume: THREE.Box3, ep
     || bounds.max.y > (volume.max.y + epsilonMm)
     || bounds.min.z < (volume.min.z - epsilonMm)
     || bounds.max.z > (volume.max.z + epsilonMm)
+  );
+}
+
+/**
+ * True when `bounds` and `volume` share no space on any axis, so nothing inside
+ * the bounds can print.
+ *
+ * Distinct from `isBoundsOutsideVolume`, which asks whether the bounds leave the
+ * volume at all: a model that merely straddles a plate edge fails that test but
+ * is not disjoint. Slicing retains its closed surface and limits raster output
+ * to the printable footprint.
+ */
+export function isBoundsDisjointFromVolume(bounds: THREE.Box3, volume: THREE.Box3, epsilonMm: number): boolean {
+  return (
+    bounds.max.x < (volume.min.x - epsilonMm)
+    || bounds.min.x > (volume.max.x + epsilonMm)
+    || bounds.max.y < (volume.min.y - epsilonMm)
+    || bounds.min.y > (volume.max.y + epsilonMm)
+    || bounds.max.z < (volume.min.z - epsilonMm)
+    || bounds.min.z > (volume.max.z + epsilonMm)
   );
 }

@@ -1,15 +1,26 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
 import { X } from 'lucide-react';
+import { IconButton } from '@/components/atoms';
 import type { HistoryDebugEvent } from '@/history/types';
 import { formatHistoryLabel } from '@/history/formatHistoryLabel';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 
 type HistoryDebugModalProps = {
   isOpen: boolean;
   onClose: () => void;
   historyDebugEvents: HistoryDebugEvent[];
   historyStackCounts: { undo: number; redo: number };
+  /**
+   * Payload bytes held by the undo + redo stacks. Payloads only: a scene snapshot
+   * stores a key into a side registry, and that registry's own (geometry-deduped)
+   * total is reported beside it.
+   */
+  historyStackBytes: { undo: number; redo: number; total: number };
+  /** Geometry bytes the scene-snapshot registry holds, each mesh counted once. */
+  sceneSnapshotBytes: number;
   selectedPreviewEventId: number | null;
   isPreviewActive: boolean;
   onJumpToEvent: (event: HistoryDebugEvent) => void;
@@ -24,6 +35,8 @@ export function HistoryDebugModal({
   onClose,
   historyDebugEvents,
   historyStackCounts,
+  historyStackBytes,
+  sceneSnapshotBytes,
   selectedPreviewEventId,
   isPreviewActive,
   onJumpToEvent,
@@ -32,10 +45,20 @@ export function HistoryDebugModal({
   onClearUndoRedoStacks,
   onClearAll,
 }: HistoryDebugModalProps) {
+  const { _ } = useLingui();
+  useEscapeToClose(isOpen, onClose);
+
   const historyDebugEventsNewestFirst = React.useMemo(
     () => [...historyDebugEvents].reverse(),
     [historyDebugEvents],
   );
+
+  /** Bytes as B / KB / MB — a debug readout, so one decimal is plenty. */
+  const formatBytes = React.useCallback((bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }, []);
 
   const formatHistoryDebugTimestamp = React.useCallback((ts: number) => {
     try {
@@ -86,6 +109,8 @@ export function HistoryDebugModal({
         };
       case 'undo-handler-missing':
       case 'redo-handler-missing':
+      case 'undo-declined':
+      case 'redo-declined':
         return {
           dot: '#fb7185',
           badgeBg: 'color-mix(in srgb, #fb7185, var(--surface-0) 90%)',
@@ -136,19 +161,14 @@ export function HistoryDebugModal({
             </div>
           </div>
 
-          <button
-            type="button"
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
+          <IconButton
+            variant="surface"
+            size="sm"
             aria-label="Close history debug"
             onClick={onClose}
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -160,6 +180,20 @@ export function HistoryDebugModal({
           </span>
           <span className="rounded-full border px-2 py-1 text-[11px] font-semibold" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
             Events: {historyDebugEvents.length}
+          </span>
+          <span
+            className="rounded-full border px-2 py-1 text-[11px] font-semibold"
+            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+            title="Payload bytes on the undo + redo stacks. Mesh snapshots are not in the payloads — they live in the scene registry, counted separately."
+          >
+            Payloads: {formatBytes(historyStackBytes.total)}
+          </span>
+          <span
+            className="rounded-full border px-2 py-1 text-[11px] font-semibold"
+            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+            title="Geometry held by the scene-snapshot registry, each mesh counted ONCE — snapshots share meshes, so a move costs nothing here."
+          >
+            Snapshots: {formatBytes(sceneSnapshotBytes)}
           </span>
 
           <div className="ml-auto flex flex-wrap gap-2">
@@ -292,7 +326,7 @@ export function HistoryDebugModal({
 
                       {(event.actionType || event.actionDescription) ? (
                         <div className="mt-1 text-xs leading-tight" style={{ color: 'var(--text-strong)' }}>
-                          <span className="font-semibold">{formatHistoryLabel(event.actionDescription || event.actionType || '')}</span>
+                          <span className="font-semibold">{event.actionDescription ? _(event.actionDescription) : formatHistoryLabel(event.actionType ?? '')}</span>
                           {event.actionDescription && event.actionType ? (
                             <span style={{ color: 'var(--text-muted)' }}> · {formatHistoryLabel(event.actionType)}</span>
                           ) : null}
@@ -305,6 +339,9 @@ export function HistoryDebugModal({
 
                       <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                         <span className="rounded border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                          {event.payloadBytes !== undefined && (
+                            <>Size: {formatBytes(event.payloadBytes)} · </>
+                          )}
                           Undo: {event.undoCount}
                         </span>
                         <span className="rounded border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>

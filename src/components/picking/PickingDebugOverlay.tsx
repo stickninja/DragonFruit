@@ -62,7 +62,7 @@ export function PickingDebugOverlay({
         color: '#fff',
         padding: '8px 12px',
         borderRadius: 4,
-        fontFamily: 'monospace',
+        fontFamily: 'var(--font-geist-mono)',
         fontSize: 11,
         zIndex: 1000,
         pointerEvents: 'none',
@@ -111,7 +111,8 @@ export function PickingDebugOverlay({
         <span>{config.patchSize}×{config.patchSize}</span>
         
         <span style={{ color: '#888' }}>Rate:</span>
-        <span>{config.hoverUpdateRate} Hz</span>
+        {/* The configured rate is a floor: the real one follows the frame rate. */}
+        <span>≥ {config.hoverUpdateRate} Hz</span>
       </div>
       
       <div 

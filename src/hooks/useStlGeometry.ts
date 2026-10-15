@@ -1,3 +1,6 @@
+import { isTauriRuntime } from '@/utils/tauriRuntime';
+import { bakeAndAttachOcclusionForGeometry } from '@/features/scene/bakedOcclusion';
+import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 import { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
@@ -5,18 +8,20 @@ import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
 import { Fast3MFLoader, fast3mfBuilder } from 'fast-3mf-loader';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { loadMeshBytes, loadMeshFileFromNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { repairGeometryWithManifold } from '@/utils/manifoldRepair';
+import { REFINE_MAX_TRIANGLES, refineCoarseFaces } from '@/utils/tauriMeshBridge';
 import {
   analyzeFromGeometry,
   applyRepairedPositions,
   classifyFromGeometry,
   isHeavyRepair,
-  isTauriRuntime,
   repairFromGeometry,
+  repairFromPath,
   type MeshAnalysisJson,
   type MeshHealthReport,
+  type MeshRepairProgressSink,
 } from '@/utils/meshRepair';
 
 export type MeshDefects = {
@@ -26,15 +31,15 @@ export type MeshDefects = {
   repairedFloats: number;
   /** Total vertex count in the position buffer */
   totalVertices: number;
-  /** Whether Manifold WASM successfully rebuilt the mesh topology */
-  repairedByManifold?: boolean;
-  /** Number of degenerate triangles collapsed by Manifold */
-  degeneratesRemoved?: number;
   /** Full health report from the native Rust repair engine (Tauri only) */
   nativeRepairReport?: MeshHealthReport;
   /** When the repaired mesh has a model/support split (model_triangle_count in the report),
    *  this geometry holds only the support-section triangles for separate orange rendering. */
   supportSectionGeometry?: THREE.BufferGeometry;
+  /** When the repaired mesh has a model/support split, this geometry holds only the
+   *  model-section (part) triangles, so overlays such as the non-manifold red flag can
+   *  be scoped to the part alone and never stripe the supports. */
+  modelSectionGeometry?: THREE.BufferGeometry;
 };
 
 export type GeometryWithBounds = {
@@ -46,9 +51,13 @@ export type GeometryWithBounds = {
   /** Present when defective vertex data was detected and auto-repaired */
   meshDefects?: MeshDefects;
   /**
-   * Pre-computed hard-edge geometry for the Higher Contrast Model Edges overlay.
-   * Uses a 30° threshold angle — only crease edges are included, not every triangle edge.
-   * Computed once during import to avoid synchronous lag when toggling the setting on.
+   * Hard-edge geometry (30°) for the Higher Contrast Model Edges overlay.
+   *
+   * Only built when the user has the overlay enabled — see
+   * {@link buildModelEdgeGeometry} for why it is never built otherwise. It
+   * caches on the geometry so every consumer and every remount reuses one
+   * build, and so a geometry swap (hollow, punch, mirror, split) rebuilds
+   * exactly once.
    */
   edgeGeometry?: THREE.EdgesGeometry;
   /** Present when an oversized native source was reduced for interactive use. */
@@ -122,9 +131,48 @@ export interface ProcessGeometryOptions {
    * attribute (e.g. from the Rust-side STL parser).
    * @internal
    */
-  _skipComputeNormals?: boolean;
+  assumeSupportGeometry?: boolean;
+  /**
+   * Hears each repair stage as it starts, and receives the run's token so the
+   * caller can cancel it. Ignored when the geometry does not go through the
+   * native repair.
+   */
+  repairProgressSink?: MeshRepairProgressSink;
+  /**
+   * The file this geometry came from, when it came from one.
+   *
+   * With a path the repair reads the file through the native loader, which is the same
+   * path the import took: it classifies the mesh at load, refines what needs it, and
+   * keeps the file's own indexing. Without one the geometry is expanded to a triangle
+   * soup and staged, which costs an upload and re-derives every vertex.
+   */
+  sourcePath?: string;
   /** Skip nonessential analysis for a native reduced-detail preview. @internal */
   _isNativePreview?: boolean;
+  /** Model section boundary offset extracted directly from the DFMX binary IPC header. @internal */
+  _nativeModelTriangleCount?: number;
+  /** Skip classification/repair in Tauri when loading a pre-repaired mesh */
+  skipClassification?: boolean;
+  /**
+   * Classification the source container already carries for this exact
+   * geometry (VOXL V3.3 model entries). When present the native classify pass
+   * is skipped — the report describes the triangles as they are, so re-running
+   * the classifier over the same bytes could only reproduce it. The report is
+   * consumed exactly where a native classify-only result would be, including
+   * the model/support section split.
+   */
+  bakedClassification?: MeshHealthReport;
+  /**
+   * Build the Higher Contrast Model Edges overlay geometry. Defaults to the
+   * user's `higherContrastModelEdges` setting; pass `false` from a context that
+   * knows the overlay is unwanted (e.g. a slicing-only geometry).
+   */
+  computeEdgeGeometry?: boolean;
+  /** Skip `computeVertexNormals()` - the geometry already has a `normal` attribute */
+  _skipComputeNormals?: boolean;
+  _isTauriRuntime?: () => boolean;
+  _classifyFromGeometry?: typeof classifyFromGeometry;
+  _repairFromGeometry?: typeof repairFromGeometry;
 }
 
 // Cloning extremely large position buffers can require hundreds of MB and can
@@ -136,11 +184,10 @@ const IN_PLACE_PROCESSING_VERTEX_THRESHOLD = 12_000_000;
 // practical benefit in auto-import flows. In auto mode, skip native processing
 // beyond this size and let users opt-in via manual Repair.
 const AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD = 3_000_000;
-// EdgesGeometry builds an internal hash map keyed by unique edge hashes using
-// a plain object, then iterates it with `for...in`. V8 throws "Too many
-// properties to enumerate" when the hash map exceeds ~2M entries. Skip
-// precomputation for meshes above this threshold to avoid the wasted work.
-// The Higher Contrast Model Edges overlay simply won't be available for that model.
+// EdgesGeometry builds an internal hash map keyed by unique vertex positions
+// using a plain object, then iterates it with `for...in`. V8 throws "Too many
+// properties to enumerate" when the hash map exceeds ~2M entries, so meshes
+// above this threshold get no Higher Contrast Model Edges overlay at all.
 const EDGE_GEOMETRY_MAX_TRIANGLES = 800_000;
 // Loading an STL file larger than this will be rejected with a user-facing
 // error. A 300 MB binary STL contains ~6M triangles, which after Three.js
@@ -223,6 +270,60 @@ function stripEmbeddedColorAttributes(geometry: THREE.BufferGeometry): void {
   }
 }
 
+/**
+ * Splits the geometry's position soup at `modelTriangleCount` into the two
+ * section geometries the scene renders: the support section (orange overlay)
+ * and the model section (scopes the non-manifold red flag to the part, so it
+ * never stripes the supports). Both classifiers and baked classifications
+ * produce the same model-first ordering, so this is their single consumer.
+ *
+ * Returns null when the boundary does not address this geometry — out of
+ * range, or the whole mesh is one section.
+ */
+function buildSectionGeometries(
+  geometry: THREE.BufferGeometry,
+  modelTriangleCount: number,
+): Pick<MeshDefects, 'supportSectionGeometry' | 'modelSectionGeometry'> | null {
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
+  if (!posAttr) return null;
+  const allPos = posAttr.array as Float32Array;
+  const modelFloatEnd = modelTriangleCount * 9; // 3 vertices × 3 floats per tri
+  if (modelFloatEnd >= allPos.length) return null;
+
+  const supportPositions = allPos.slice(modelFloatEnd);
+  const supportGeo = new THREE.BufferGeometry();
+  supportGeo.setAttribute('position', new THREE.BufferAttribute(supportPositions, 3));
+  supportGeo.computeVertexNormals();
+
+  const modelPositions = allPos.slice(0, modelFloatEnd);
+  const modelGeo = new THREE.BufferGeometry();
+  modelGeo.setAttribute('position', new THREE.BufferAttribute(modelPositions, 3));
+
+  return { supportSectionGeometry: supportGeo, modelSectionGeometry: modelGeo };
+}
+
+/**
+ * Builds the Higher Contrast Model Edges overlay geometry, or returns undefined
+ * when the mesh is too large for it (see `EDGE_GEOMETRY_MAX_TRIANGLES`).
+ *
+ * This is the single most expensive thing an import does — measured ~1.9 s per
+ * 500k-triangle non-indexed model, ~93% of all post-processing — and the overlay
+ * is off by default, so every caller must gate it on
+ * `higherContrastModelEdges`. Building it speculatively (which is what import
+ * did) is what made a six-model scene take 18 s of long tasks.
+ */
+export function buildModelEdgeGeometry(geometry: THREE.BufferGeometry): THREE.EdgesGeometry | undefined {
+  const triangleCount = (geometry.getIndex()?.count ?? geometry.getAttribute('position')?.count ?? 0) / 3;
+  if (triangleCount >= EDGE_GEOMETRY_MAX_TRIANGLES) return undefined;
+
+  try {
+    return new THREE.EdgesGeometry(geometry, 30);
+  } catch (edgeError) {
+    console.warn('[useStlGeometry] Edge geometry build failed; the model edge overlay stays off.', edgeError);
+    return undefined;
+  }
+}
+
 export async function processGeometry(bufferGeometry: THREE.BufferGeometry, options: ProcessGeometryOptions = { center: true }): Promise<GeometryWithBounds> {
   console.log(`[${new Date().toISOString()}] [processGeometry] Starting Geometry Prep`);
   const startPrep = performance.now();
@@ -273,14 +374,16 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // In the browser we fall back to the legacy Manifold WASM path (which only
   // activates when NaN defects were detected).
   let nativeModifiedGeometry = false;
-  if (isTauriRuntime()) {
+  // A baked classification is the answer the native classify pass would
+  // produce for this geometry, so there is nothing left to compute.
+  const bakedClassification = options.bakedClassification ?? null;
+  const skipAll = options.skipClassification === true || bakedClassification != null;
+  const checkTauri = options._isTauriRuntime ?? isTauriRuntime;
+  
+  if (checkTauri() && !skipAll) {
     const nativeMode = options.nativeProcessingMode ?? 'auto';
     const skipAutoNativeProcessingForSize = nativeMode === 'auto'
       && sourceTriangleEstimate >= AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD;
-
-    if (nativeMode === 'none') {
-      console.log('[processGeometry] Native repair skipped (mode=none) — running classification for support geometry detection');
-    }
 
     if (skipAutoNativeProcessingForSize) {
       console.warn(
@@ -321,9 +424,17 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       options.onNativeProcessingStage?.(classifyOnly ? 'classifying' : 'repairing');
       console.log(`[${new Date().toISOString()}] [processGeometry] Running native ${classifyOnly ? 'classification' : 'repair/classification'}`);
       const nativeStart = performance.now();
+      const repairOpts = options.assumeSupportGeometry != null
+        ? { assumeSupportGeometry: options.assumeSupportGeometry }
+        : {};
+      const runClassify = options._classifyFromGeometry ?? classifyFromGeometry;
+      const runRepair = options._repairFromGeometry ?? repairFromGeometry;
+      const useLoaderPath = !options._repairFromGeometry && Boolean(options.sourcePath);
       const result = classifyOnly
-        ? await classifyFromGeometry(geometry)
-        : await repairFromGeometry(geometry);
+        ? await runClassify(geometry, repairOpts)
+        : useLoaderPath
+          ? await repairFromPath(options.sourcePath!, repairOpts, options.repairProgressSink)
+          : await runRepair(geometry, repairOpts, options.repairProgressSink);
       if (result) {
         let effectiveResult = result;
         let usedFallbackClassification = false;
@@ -335,7 +446,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
             console.warn(`[processGeometry] Rejecting native auto-repair result: ${qualityGate.reason}. Falling back to classify-only pass.`);
             try {
               options.onNativeProcessingStage?.('classifying');
-              const fallbackClassification = await classifyFromGeometry(geometry);
+              const fallbackClassification = await runClassify(geometry, repairOpts);
               if (fallbackClassification) {
                 effectiveResult = fallbackClassification;
                 usedFallbackClassification = true;
@@ -379,7 +490,8 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
 
         const { report } = effectiveResult;
         console.log(
-          `[processGeometry] Native ${classifyOnly ? 'classification' : usedFallbackClassification ? 'repair/classification (fallback classify applied)' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(2)}ms. ` +
+          `[processGeometry] Native ${classifyOnly ? 'classification' : usedFallbackClassification ? 'repair/classification (fallback classify applied)' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(2)}ms ` +
+          `(rust ${report.total_ms.toFixed(1)}ms; the rest is soup expand + staging IPC + apply). ` +
           `pre=${report.pre.triangle_count}t/${report.pre.non_manifold_edges}nme/${report.pre.boundary_edges}be, ` +
           `post=${report.post.triangle_count}t/${report.post.non_manifold_edges}nme/${report.post.boundary_edges}be, ` +
           `watertight=${report.post.is_watertight}`,
@@ -395,17 +507,15 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         // If the repaired mesh has a model/support split, extract the support
         // section as a separate geometry for orange overlay rendering.
         const positionsWereApplied = shouldApplyPositions;
+        const effectiveModelTriCount = report.model_triangle_count ?? options._nativeModelTriangleCount;
 
-        if (positionsWereApplied && report.model_triangle_count != null && report.model_triangle_count > 0) {
-          const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-          const allPos = posAttr.array as Float32Array;
-          const modelFloatEnd = report.model_triangle_count * 9; // 3 vertices × 3 floats per tri
-          if (modelFloatEnd < allPos.length) {
-            const supportPositions = allPos.slice(modelFloatEnd);
-            const supportGeo = new THREE.BufferGeometry();
-            supportGeo.setAttribute('position', new THREE.BufferAttribute(supportPositions, 3));
-            supportGeo.computeVertexNormals();
-            meshDefects = { ...meshDefects, supportSectionGeometry: supportGeo };
+        if ((positionsWereApplied || options._skipComputeNormals) && effectiveModelTriCount != null && effectiveModelTriCount > 0) {
+          if (!report.model_triangle_count) {
+            report.model_triangle_count = effectiveModelTriCount;
+          }
+          const sections = buildSectionGeometries(geometry, effectiveModelTriCount);
+          if (sections) {
+            meshDefects = { ...meshDefects, ...sections };
           }
         }
       }
@@ -418,32 +528,39 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     } finally {
       options.onNativeProcessingStage?.('postprocess');
     }
-  } else if (meshDefects.hasDefects) {
-    // Attempt full topology repair via Manifold (welds open edges, collapses
-    // degenerate triangles, rebuilds a valid watertight solid).
-    console.log(`[${new Date().toISOString()}] [processGeometry] Attempting Manifold repair`);
-    const startManifold = performance.now();
-    const repairStats = await repairGeometryWithManifold(geometry);
-    if (repairStats) {
-      console.log(
-        `[processGeometry] Manifold repair succeeded in ${(performance.now() - startManifold).toFixed(2)}ms.` +
-        ` Merged edges: ${repairStats.manifoldMergedEdges}, degenerates removed: ${repairStats.degeneratesRemoved}`,
-      );
-      meshDefects = {
-        ...meshDefects,
-        repairedByManifold: true,
-        degeneratesRemoved: repairStats.degeneratesRemoved,
-      };
-    } else {
-      console.warn(`[processGeometry] Manifold repair unavailable or failed — using NaN-sanitized geometry.`);
-    }
+  }
+
+  // Baked classification: restore what a native classify-only pass would have
+  // produced, minus the round trip. Everything downstream reads the report
+  // (Split Supports, orange support tint, shells, non-manifold red flag, slicing).
+  if (bakedClassification) {
+    const sections = bakedClassification.model_triangle_count != null
+      && bakedClassification.model_triangle_count > 0
+      ? buildSectionGeometries(geometry, bakedClassification.model_triangle_count)
+      : null;
+    meshDefects = {
+      ...meshDefects,
+      nativeRepairReport: bakedClassification,
+      ...(sections ?? {}),
+    };
+    console.log(
+      `[${new Date().toISOString()}] [processGeometry] Restored baked mesh classification ` +
+      `(model section: ${bakedClassification.model_triangle_count ?? 'none'}t).`,
+    );
   }
 
   // Yield to let the loading indicator repaint before each heavy synchronous op
   await new Promise<void>(r => setTimeout(r, 0));
 
-  if (!options._skipComputeNormals || nativeModifiedGeometry) {
-    console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals${nativeModifiedGeometry ? ' (geometry modified by native processing)' : ''}`);
+  // A geometry with no `normal` attribute at all must be given one, whatever the
+  // caller asked for: `_skipComputeNormals` means "the loader already computed
+  // them", and a native repair invalidates that promise by rewriting the
+  // positions and index and dropping the stale normals for the caller to
+  // recompute. Without this the repaired geometry kept no normals, so it shaded
+  // from a zeroed attribute — which reads as garbage on exactly the imports that
+  // needed repair, and is easy to mistake for the baked occlusion being wrong.
+  if (!options._skipComputeNormals || nativeModifiedGeometry || !geometry.getAttribute('normal')) {
+    console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals${nativeModifiedGeometry ? ' (geometry modified by native processing)' : geometry.getAttribute('normal') ? '' : ' (geometry has none)'}`);
     geometry.computeVertexNormals();
   } else {
     console.log(`[${new Date().toISOString()}] [processGeometry] Normals already present — skipping computeVertexNormals`);
@@ -495,30 +612,38 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes finished. Took ${(performance.now() - startPlanes).toFixed(2)}ms`);
   }
 
-  // Yield before edge geometry computation (can be expensive for large meshes)
+  // Yield before the optional edge overlay build
   await new Promise<void>(r => setTimeout(r, 0));
 
+  // Built only when the user actually has the overlay on: it costs ~1.9 s for a
+  // 500k-triangle model and is off by default, so a scene that never enables it
+  // must never pay for it. A later toggle is handled by the scene
+  // (useSceneCollectionManager's ensure pass), which builds for already-loaded
+  // models one at a time.
+  const computeEdgeGeometry = options.computeEdgeGeometry
+    ?? getSavedWorkspaceCameraSettings().higherContrastModelEdges;
   let edgeGeometry: THREE.EdgesGeometry | undefined;
-  if (sourceTriangleEstimate >= EDGE_GEOMETRY_MAX_TRIANGLES) {
-    console.warn(
-      `[processGeometry] Skipping edge geometry for large mesh (` +
-      `${sourceTriangleEstimate.toLocaleString()} triangles, threshold=${EDGE_GEOMETRY_MAX_TRIANGLES.toLocaleString()}).`,
-    );
-  } else {
+  if (computeEdgeGeometry) {
     console.log(`[${new Date().toISOString()}] [processGeometry] Computing Edge Geometry`);
     const startEdges = performance.now();
-    try {
-      edgeGeometry = new THREE.EdgesGeometry(geometry, 30);
-      console.log(`[${new Date().toISOString()}] [processGeometry] Edge Geometry finished. Took ${(performance.now() - startEdges).toFixed(2)}ms`);
-    } catch (edgeError) {
-      console.warn(
-        `[processGeometry] Edge geometry computation failed for large mesh (${sourceTriangleEstimate.toLocaleString()} triangles).`,
-        edgeError,
-      );
-    }
+    edgeGeometry = buildModelEdgeGeometry(geometry);
+    console.log(`[${new Date().toISOString()}] [processGeometry] Edge Geometry finished. Took ${(performance.now() - startEdges).toFixed(2)}ms`);
   }
 
   const shouldSurfaceDefects = meshDefects.hasDefects || meshDefects.nativeRepairReport != null;
+  // The model is not added to the scene until this resolves, so its first frame
+  // already carries the occlusion, and the import's progress modal is still up
+  // while it runs. Deferring it to idle was tried and reverted: the work is the
+  // same either way, and paying it while the user is already waiting beats
+  // stuttering while they are interacting with the scene.
+  const baked = await bakeAndAttachOcclusionForGeometry(geometry).catch((error) => {
+    console.warn('[ao] bake during prep failed', error);
+    return false;
+  });
+  if (baked) {
+    console.log(`[${new Date().toISOString()}] [processGeometry] Baked occlusion attached during prep`);
+  }
+
   return { geometry, bbox, center, size, flatteningPlanes, edgeGeometry, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
 }
 
@@ -707,65 +832,230 @@ type NativeStlLoadResult = {
   geometry: THREE.BufferGeometry;
   originalTriangleCount: number;
   previewTriangleCount: number;
+  modelTriangleCount?: number;
   isPreview: boolean;
+  /** The classification the native loader already ran, for a single-body load. */
+  bakedClassification?: MeshHealthReport;
 };
 
-async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | null> {
+async function loadStlViaTauri(filePath: string, classify: boolean): Promise<NativeStlLoadResult | null> {
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const bytes = await invoke<ArrayBuffer>('load_stl_file', { filePath });
+    const bytes = await loadMeshFileFromNativePath(filePath, classify);
     if (!bytes || bytes.byteLength === 0) return null;
-
-    if (bytes.byteLength < 16) return null;
-    const header = new DataView(bytes, 0, 16);
-    const hasMagic = header.getUint8(0) === 0x44
-      && header.getUint8(1) === 0x46
-      && header.getUint8(2) === 0x53
-      && header.getUint8(3) === 0x54;
-    if (!hasMagic) throw new Error('Native STL loader returned an unsupported response.');
-
-    const flags = header.getUint32(4, true);
-    const originalTriangleCount = header.getUint32(8, true);
-    const previewTriangleCount = header.getUint32(12, true);
-    const expectedBytes = 16 + previewTriangleCount * 18 * Float32Array.BYTES_PER_ELEMENT;
-    if (previewTriangleCount === 0 || bytes.byteLength !== expectedBytes) {
-      throw new Error('Native STL loader returned a truncated response.');
-    }
-
-    const positions = new Float32Array(bytes, 16, previewTriangleCount * 9);
-    const normals = new Float32Array(
-      bytes,
-      16 + previewTriangleCount * 9 * Float32Array.BYTES_PER_ELEMENT,
-      previewTriangleCount * 9,
-    );
-
-    const geometry = new THREE.BufferGeometry();
-    // Both attributes retain the IPC ArrayBuffer. Avoiding slice() here removes
-    // two full-size allocation spikes immediately after the native transfer.
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    const decoded = decodeDfmx(bytes);
+    const geometry = mergeBodyGeometries(decoded.bodies);
 
     console.log(
-      `[loadStlGeometry] Tauri Rust parser loaded ${previewTriangleCount.toLocaleString()} triangles ` +
+      `[loadStlGeometry] Native loader loaded ${decoded.previewTriangleCount.toLocaleString()} triangles ` +
       `(${(bytes.byteLength / 1_000_000).toFixed(0)} MB IPC transfer).`,
     );
-    if ((flags & 1) !== 0) {
+    if (decoded.isPreview) {
       console.warn(
         `[loadStlGeometry] Using a reduced native preview: ` +
-        `${originalTriangleCount.toLocaleString()} -> ${previewTriangleCount.toLocaleString()} triangles.`,
+        `${decoded.originalTriangleCount.toLocaleString()} -> ` +
+        `${decoded.previewTriangleCount.toLocaleString()} triangles.`,
       );
     }
     return {
       geometry,
-      originalTriangleCount,
-      previewTriangleCount,
-      isPreview: (flags & 1) !== 0,
+      originalTriangleCount: decoded.originalTriangleCount,
+      previewTriangleCount: decoded.previewTriangleCount,
+      modelTriangleCount: decoded.modelTriangleCount,
+      isPreview: decoded.isPreview,
+      bakedClassification: decoded.report,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error('[loadStlGeometry] Tauri Rust parser failed.', error);
+    console.error('[loadStlGeometry] Native STL loading failed.', error);
     throw new Error(message || 'Native STL loading failed.');
   }
+}
+
+// ---------------------------------------------------------------------------
+// DFMX — the multi-body native payload. The layout is specified in
+// docs/dev/mesh-wire-formats.md; keep these offsets in step with it.
+// ---------------------------------------------------------------------------
+const MESH_RESPONSE_HEADER_BYTES = 32;
+const MESH_RESPONSE_BODY_ENTRY_BYTES = 8;
+const SOUP_BYTES_PER_TRIANGLE = 9 * Float32Array.BYTES_PER_ELEMENT * 2;
+
+/** One decoded native payload: its bodies plus the header facts the STL preview
+ *  path needs. */
+export type DecodedMesh = {
+  bodies: THREE.BufferGeometry[];
+  /** The payload's preview bit: the body (or bodies) are a decimation. */
+  isPreview: boolean;
+  /** Triangles in the file the payload was made from. */
+  originalTriangleCount: number;
+  /** Triangles actually in this payload. */
+  previewTriangleCount: number;
+  /** Model-section triangles for a preview, when the loader classified them. */
+  modelTriangleCount?: number;
+  /** The classification report the loader produced for a single-body load, when
+   *  it did. Passing this to `processGeometry` skips the native classify pass. */
+  report?: MeshHealthReport;
+};
+
+/**
+ * Decode a DFMX payload into one geometry per body.
+ *
+ * Each body gets its own ArrayBuffer. `processGeometry` translates a geometry in
+ * place to centre it, so bodies sharing one buffer would drag each other around;
+ * the copy is what the renderer loaders already pay per mesh.
+ */
+export function decodeDfmx(payload: Uint8Array | ArrayBuffer): DecodedMesh {
+  const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+  if (bytes.byteLength < MESH_RESPONSE_HEADER_BYTES) {
+    throw new Error('Native mesh loader returned a truncated DFMX header.');
+  }
+  const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const magic = String.fromCharCode(
+    header.getUint8(0), header.getUint8(1), header.getUint8(2), header.getUint8(3),
+  );
+  if (magic !== 'DFMX') {
+    throw new Error(`Native mesh loader returned an unsupported payload (${magic}).`);
+  }
+  if (header.getUint32(4, true) !== 1) {
+    throw new Error('Native mesh loader returned an unsupported DFMX version.');
+  }
+
+  const bodyCount = header.getUint32(12, true);
+  let offset = MESH_RESPONSE_HEADER_BYTES + bodyCount * MESH_RESPONSE_BODY_ENTRY_BYTES;
+  const bodies: THREE.BufferGeometry[] = [];
+  let previewTriangleCount = 0;
+  for (let index = 0; index < bodyCount; index += 1) {
+    const triangleCount = header.getUint32(
+      MESH_RESPONSE_HEADER_BYTES + index * MESH_RESPONSE_BODY_ENTRY_BYTES, true,
+    );
+    const soupBytes = triangleCount * SOUP_BYTES_PER_TRIANGLE;
+    if (offset + soupBytes > bytes.byteLength) {
+      throw new Error('Native mesh loader returned a truncated DFMX body.');
+    }
+    const soup = bytes.slice(offset, offset + soupBytes);
+    const corners = triangleCount * 9;
+    const geometry = new THREE.BufferGeometry();
+    // `soup` is its own copy, so these views are aligned and outlive the payload.
+    geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array(soup.buffer, soup.byteOffset, corners), 3),
+    );
+    geometry.setAttribute(
+      'normal',
+      new THREE.BufferAttribute(
+        new Float32Array(
+          soup.buffer, soup.byteOffset + corners * Float32Array.BYTES_PER_ELEMENT, corners,
+        ),
+        3,
+      ),
+    );
+    bodies.push(geometry);
+    previewTriangleCount += triangleCount;
+    offset += soupBytes;
+  }
+
+  const modelTriangleCount = header.getUint32(20, true);
+  const metadataLength = header.getUint32(24, true);
+  let report: MeshHealthReport | undefined;
+  if (metadataLength > 0 && metadataLength <= bytes.byteLength) {
+    const json = new TextDecoder().decode(bytes.subarray(bytes.byteLength - metadataLength));
+    try {
+      report = JSON.parse(json) as MeshHealthReport;
+    } catch (error) {
+      // A report we cannot read is not worth failing the mesh over: dropping it
+      // sends the caller back to the staging classify pass, which is correct.
+      console.warn('[loadMeshFile] could not parse the native classification report.', error);
+    }
+  }
+
+  return {
+    bodies,
+    isPreview: (header.getUint32(8, true) & 1) !== 0,
+    originalTriangleCount: header.getUint32(16, true),
+    previewTriangleCount,
+    modelTriangleCount: modelTriangleCount > 0 ? modelTriangleCount : undefined,
+    report,
+  };
+}
+
+/**
+ * Log through the platform log plugin, the one channel that reaches the log
+ * file: `attachConsole` mirrors Rust records into DevTools only, so a plain
+ * `console.*` from here never appears next to the Rust lines.
+ *
+ * The import is dynamic because `@tauri-apps/plugin-log` has no meaning in the
+ * web build — the same reason `AppLogger` resolves it at call time. Best-effort:
+ * outside Tauri there is nothing to log to and the console line stands alone.
+ */
+async function logNativeWarning(message: string): Promise<void> {
+  try {
+    const log = await import('@tauri-apps/plugin-log');
+    await log.warn(message);
+  } catch {
+    // Not a Tauri runtime; the console line beside this already says the same.
+  }
+}
+
+/**
+ * Load every body of a mesh file natively. Tauri with an on-disk path only;
+ * returns null everywhere else (and on any failure) so the caller falls back to
+ * the renderer's own loaders.
+ */
+async function loadNativeMeshBodies(filePath: string | undefined): Promise<THREE.BufferGeometry[] | null> {
+  if (!isTauriRuntime()) return null;
+  if (!filePath) {
+    // The native loader reads from disk, so a File with no path — a zip entry or
+    // a synthesized file — can only go through the renderer's own loaders.
+    console.warn('[loadMeshFile] no on-disk path for this file; using the renderer loaders.');
+    void logNativeWarning('[loadMeshFile] no on-disk path for this file; using the renderer loaders.');
+    return null;
+  }
+  try {
+    // This path does not consume the report yet, so do not pay for the classify.
+    const decoded = decodeDfmx(await loadMeshFileFromNativePath(filePath, false));
+    if (decoded.bodies.length === 0) return null;
+    console.log(
+      `[${new Date().toISOString()}] [loadMeshFile] native loader returned ${decoded.bodies.length} bodies`,
+    );
+    return decoded.bodies;
+  } catch (error) {
+    console.warn('[loadMeshFile] native mesh load failed; falling back to the renderer loaders.', error);
+    void logNativeWarning(`[loadMeshFile] native mesh load failed; using the renderer loaders: ${String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Whether this import wants the loader's classification.
+ *
+ * A classify-only import does: it has nothing else to run. One that may
+ * auto-repair does not, because that pass classifies too. Nor does a mesh already
+ * known to be support-only, which skips classification entirely.
+ */
+function wantsLoaderClassification(options: ProcessGeometryOptions): boolean {
+  if (options.skipClassification) return false;
+  const mode = options.nativeProcessingMode ?? 'auto';
+  return mode === 'none' || mode === 'classify-only';
+}
+
+/** The byte-source twin of {@link loadNativeMeshBodies}: null means fall back. */
+async function loadNativeMeshBytes(buffer: Uint8Array, classify: boolean): Promise<DecodedMesh | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    const decoded = decodeDfmx(await loadMeshBytes(buffer, classify));
+    return decoded.bodies.length > 0 ? decoded : null;
+  } catch (error) {
+    console.warn('[loadMeshFile] native byte load failed; falling back to the renderer loaders.', error);
+    void logNativeWarning(`[loadMeshFile] native byte load failed; using the renderer loaders: ${String(error)}`);
+    return null;
+  }
+}
+
+/** Merge native bodies into one geometry, preserving their relative positions. */
+function mergeBodyGeometries(bodies: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  if (bodies.length === 1) return bodies[0];
+  const merged = mergeGeometries(bodies, false);
+  if (!merged) throw new Error('Failed to merge mesh bodies.');
+  return merged;
 }
 
 export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
@@ -773,13 +1063,18 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
   // It reads the file directly from disk, computes normals, and avoids
   // holding the raw STL bytes in webview memory — critical for huge files.
   if (isTauriRuntime() && options.filePath) {
-    const nativeResult = await loadStlViaTauri(options.filePath);
+    // A classify-only import has nothing left to run: ask the loader to classify
+    // so it ships the report and the geometry already section-ordered, rather
+    // than staging the mesh back for the same answer.
+    const nativeResult = await loadStlViaTauri(options.filePath, wantsLoaderClassification(options));
     if (nativeResult) {
       // Normals are already computed — skip computeVertexNormals in processGeometry
       const processed = await processGeometry(nativeResult.geometry, {
         ...options,
         _skipComputeNormals: true,
         _isNativePreview: nativeResult.isPreview,
+        _nativeModelTriangleCount: nativeResult.modelTriangleCount,
+        ...(nativeResult.bakedClassification ? { bakedClassification: nativeResult.bakedClassification } : {}),
         ...(nativeResult.isPreview ? { nativeProcessingMode: 'none' as const } : {}),
       });
       if (nativeResult.isPreview) {
@@ -817,6 +1112,54 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
       }
     );
   });
+}
+
+/**
+ * Parse a complete binary STL already in memory and prepare it for the scene.
+ *
+ * This is where a VOXL scene's embedded mesh arrives: the MESH chunk is the
+ * original STL bytes, and `loadMeshGeometry` routes them here rather than to the
+ * native file loaders. Those refine coarse faces and return welded, crease-split
+ * normals as they read; a buffer parsed by three does neither, so the same
+ * command the plugin import asks is asked here, and only when the mesh is small
+ * enough for the round trip to be free (see `REFINE_MAX_TRIANGLES`). The command
+ * returns the normals it welded, which is why the caller then has to skip
+ * `computeVertexNormals`.
+ */
+export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
+  // Native first when there is one: a single round trip parses, refines and
+  // classifies the bytes, where the renderer path parses in JS and then stages the
+  // mesh back for the classifier. A VOXL model or a file out of a zip arrives as
+  // bytes, so it never has a path for `load_mesh_file` to use.
+  const decoded = await loadNativeMeshBytes(buffer, wantsLoaderClassification(options));
+  if (decoded) {
+    return processGeometry(mergeBodyGeometries(decoded.bodies), {
+      ...options,
+      _skipComputeNormals: true,
+      ...(decoded.report ? { bakedClassification: decoded.report } : {}),
+    });
+  }
+
+  const loader = new STLLoader();
+  const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+  const source = loader.parse(arrayBuffer);
+
+  let geometry = source;
+  let refined = false;
+  const triangles = (source.getAttribute('position')?.count ?? 0) / 3;
+  if (triangles > 0 && triangles <= REFINE_MAX_TRIANGLES) {
+    try {
+      const result = await refineCoarseFaces(source);
+      if (result) {
+        geometry = result;
+        refined = true;
+      }
+    } catch (error) {
+      console.warn('[loadStlGeometry] buffer geometry left unrefined', error);
+    }
+  }
+
+  return processGeometry(geometry, refined ? { ...options, _skipComputeNormals: true } : options);
 }
 
 function collectMergedGeometryFromObject3d(root: THREE.Object3D, sourceLabel: '3MF' | 'OBJ'): THREE.BufferGeometry {
@@ -873,6 +1216,9 @@ async function tryLoadFast3mf(fileUrl: string): Promise<THREE.Group | null> {
   try {
     const response = await fetch(fileUrl);
     const buffer = await response.arrayBuffer();
+    // Its unzip worker swallows any error and never answers, so a file it cannot
+    // open hangs the import instead of failing it. An empty one is the case seen.
+    if (buffer.byteLength === 0) throw new Error('3MF file is empty.');
 
     const loader = new Fast3MFLoader();
     const data3mf = await loader.parse(buffer);
@@ -889,6 +1235,11 @@ async function tryLoadFast3mf(fileUrl: string): Promise<THREE.Group | null> {
 }
 
 export async function load3mfGeometry(fileUrl: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
+  const nativeBodies = await loadNativeMeshBodies(options?.filePath);
+  if (nativeBodies) {
+    return processGeometry(mergeBodyGeometries(nativeBodies), options);
+  }
+
   // Try the fast SAX/worker-based loader first for large archives
   const fastGroup = await tryLoadFast3mf(fileUrl);
   if (fastGroup) {
@@ -1032,6 +1383,21 @@ export async function load3mfGeometryMergedWithSplitData(
   fileUrl: string,
   options?: ProcessGeometryOptions,
 ): Promise<{ merged: GeometryWithBounds; splitBodies: GeometryWithBounds[] }> {
+  const nativeBodies = await loadNativeMeshBodies(options?.filePath);
+  if (nativeBodies) {
+    const merged = await processGeometry(mergeBodyGeometries(nativeBodies), options);
+    // With one body the merged geometry *is* that body, and the split result is
+    // discarded by the caller. Re-processing it would run prep (and the AO bake)
+    // a second time on the same geometry.
+    const splitBodies: GeometryWithBounds[] = [];
+    if (nativeBodies.length > 1) {
+      for (const body of nativeBodies) {
+        splitBodies.push(await processGeometry(body, options));
+      }
+    }
+    return { merged, splitBodies };
+  }
+
   // Get raw individual geometries with their world transforms applied
   const getRawGeometries = async (group: THREE.Group): Promise<THREE.BufferGeometry[]> => {
     group.updateMatrixWorld(true);
@@ -1064,9 +1430,13 @@ export async function load3mfGeometryMergedWithSplitData(
       const merged = await processGeometry(mergedBuf, options);
 
       // Process each body independently (with centering) → split bodies
+      // One body means the merged geometry is that body, and the caller drops a
+      // one-entry split list, so processing it again only re-runs prep and the bake.
       const splitBodies: GeometryWithBounds[] = [];
-      for (const raw of rawGeoms) {
-        splitBodies.push(await processGeometry(raw, options));
+      if (rawGeoms.length > 1) {
+        for (const raw of rawGeoms) {
+          splitBodies.push(await processGeometry(raw, options));
+        }
       }
 
       return { merged, splitBodies };
@@ -1100,8 +1470,10 @@ export async function load3mfGeometryMergedWithSplitData(
           const merged = await processGeometry(mergedBuf, options);
 
           const splitBodies: GeometryWithBounds[] = [];
-          for (const raw of rawGeoms) {
-            splitBodies.push(await processGeometry(raw, options));
+          if (rawGeoms.length > 1) {
+            for (const raw of rawGeoms) {
+              splitBodies.push(await processGeometry(raw, options));
+            }
           }
 
           resolve({ merged, splitBodies });
@@ -1116,6 +1488,11 @@ export async function load3mfGeometryMergedWithSplitData(
 }
 
 export async function loadObjGeometry(fileUrl: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
+  const nativeBodies = await loadNativeMeshBodies(options?.filePath);
+  if (nativeBodies) {
+    return processGeometry(mergeBodyGeometries(nativeBodies), options);
+  }
+
   return new Promise((resolve, reject) => {
     const loader = new OBJLoader();
     console.log(`[${new Date().toISOString()}] [loadObjGeometry] OBJLoader load for ${fileUrl}`);
@@ -1143,15 +1520,22 @@ export async function loadObjGeometry(fileUrl: string, options?: ProcessGeometry
   });
 }
 
-export async function loadMeshGeometry(fileUrl: string, fileName?: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
+export async function loadMeshGeometry(fileUrlOrBuffer: string | Uint8Array, fileName?: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
+  const opts = options?.skipClassification ? { ...options, nativeProcessingMode: 'none' as const } : options;
+  
+  if (fileUrlOrBuffer instanceof Uint8Array) {
+    return loadStlGeometryFromBuffer(fileUrlOrBuffer, opts);
+  }
+
+  const fileUrl = fileUrlOrBuffer;
   const ext = (fileName ?? '').trim().toLowerCase();
   if (ext.endsWith('.3mf')) {
-    return load3mfGeometry(fileUrl, options);
+    return load3mfGeometry(fileUrl, opts);
   }
   if (ext.endsWith('.obj')) {
-    return loadObjGeometry(fileUrl, options);
+    return loadObjGeometry(fileUrl, opts);
   }
-  return loadStlGeometry(fileUrl, options);
+  return loadStlGeometry(fileUrl, opts);
 }
 
 export function useStlGeometry(fileUrl: string | null, directGeometry?: THREE.BufferGeometry | null): GeometryWithBounds | null {

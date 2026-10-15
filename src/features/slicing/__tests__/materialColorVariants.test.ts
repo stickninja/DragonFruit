@@ -32,7 +32,7 @@ test('material colors survive legacy load, persistence, duplication, and printer
       materialProfiles: [{ ...legacyMaterial, colorName: undefined, colorHex: undefined }],
     },
   }));
-  (globalThis as { window?: unknown }).window = { localStorage: storageApi, sessionStorage: storageApi };
+  (globalThis as { window?: unknown }).window = { document: {}, localStorage: storageApi, sessionStorage: storageApi };
 
   try {
     hydrateProfilesFromStorage();

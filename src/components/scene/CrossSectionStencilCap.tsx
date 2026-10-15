@@ -1,9 +1,15 @@
 "use client";
 
 import React from 'react';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+
+/** Per-model transforms mutated imperatively while a gizmo drag is active.
+ *  The stencil passes follow these per-frame (like the meshes themselves do)
+ *  so the cap doesn't lag behind until the drag commits through React. */
+export type CrossSectionLiveTransforms = ReadonlyMap<string, ModelTransform>;
 
 export type CrossSectionStencilCapEntry = {
   id: string;
@@ -16,8 +22,20 @@ export type CrossSectionStencilCapEntry = {
 
 type CrossSectionStencilCapProps = {
   entries: CrossSectionStencilCapEntry[];
+  /** Live per-model transforms during gizmo drags; stencil passes follow them
+   *  per-frame so the cap moves with the mesh instead of snapping on release. */
+  liveTransformsRef?: React.RefObject<CrossSectionLiveTransforms | null>;
   sourceObject?: THREE.Object3D | null;
   sourceObjectVersion?: unknown;
+  /**
+   * Extra roots to collect stencil geometry from, for geometry that does not live
+   * under `sourceObject`: in select mode the active model's supports are parented
+   * to its own group, while the world's stay in the support drag group, and a cap
+   * that only saw one of them closed neither.
+   */
+  extraSources?: ReadonlyArray<THREE.Object3D | null | undefined>;
+  /** A stable token for `extraSources`, which is rebuilt on every render. */
+  extraSourcesKey?: unknown;
   skipSourceZBounds?: boolean;
   y: number;
   /** The y position of the OTHER clip boundary (if dual-cut is active).
@@ -28,6 +46,14 @@ type CrossSectionStencilCapProps = {
   color?: string;
   planeWidthMm: number;
   planeHeightMm: number;
+  /**
+   * Where the bed's volume sits, in world millimetres.
+   *
+   * The cap plane spans a build volume, so it has to be laid over the bed being worked
+   * on: left at the origin it covers the first bed and nothing else, which is why the pink
+   * scrubbing stencil showed up on plate 1 while another bed was sliced.
+   */
+  planeOffsetMm?: { dxMm: number; dyMm: number };
   visible?: boolean;
   capOpacity?: number;
   capDepthTest?: boolean;
@@ -171,20 +197,43 @@ StaticInstancedStencilPassMemo.displayName = 'StaticInstancedStencilPassMemo';
 
 function ModelStencilPass({
   entry,
+  liveTransformsRef,
   backMaterial,
   frontMaterial,
   backRenderOrder,
   frontRenderOrder,
 }: {
   entry: ModelStencilPassEntry;
+  liveTransformsRef?: React.RefObject<CrossSectionLiveTransforms | null>;
   backMaterial: THREE.Material;
   frontMaterial: THREE.Material;
   backRenderOrder: number;
   frontRenderOrder: number;
 }) {
+  const groupRef = React.useRef<THREE.Group>(null);
+  const followingLiveRef = React.useRef(false);
+
+  // Gizmo drags move meshes imperatively without React renders, so the
+  // committed entry.matrix goes stale mid-drag. Follow the live transform
+  // per-frame, and restore the committed matrix once the drag ends.
+  useFrame(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    const live = liveTransformsRef?.current?.get(entry.id) ?? null;
+    if (live) {
+      group.matrix.compose(live.position, quaternionFromGlobalEuler(live.rotation), live.scale);
+      group.matrixWorldNeedsUpdate = true;
+      followingLiveRef.current = true;
+    } else if (followingLiveRef.current) {
+      group.matrix.copy(entry.matrix);
+      group.matrixWorldNeedsUpdate = true;
+      followingLiveRef.current = false;
+    }
+  });
+
   return (
     <group key={`stencil-cap-${entry.id}`}>
-      <group matrix={entry.matrix} matrixAutoUpdate={false}>
+      <group ref={groupRef} matrix={entry.matrix} matrixAutoUpdate={false}>
         <mesh
           geometry={entry.geometry}
           position={entry.offset}
@@ -210,6 +259,7 @@ const ModelStencilPassMemo = React.memo(
   ModelStencilPass,
   (prev, next) => (
     prev.entry === next.entry
+    && prev.liveTransformsRef === next.liveTransformsRef
     && prev.backMaterial === next.backMaterial
     && prev.frontMaterial === next.frontMaterial
     && prev.backRenderOrder === next.backRenderOrder
@@ -330,14 +380,18 @@ const STENCIL_CAP_ORDER = STENCIL_RENDER_ORDER_BASE + 0.45;
 
 function CrossSectionStencilCapInner({
   entries,
+  liveTransformsRef,
   sourceObject,
   sourceObjectVersion,
+  extraSources,
+  extraSourcesKey,
   skipSourceZBounds = false,
   y,
   otherClipY,
   color = '#ffffff',
   planeWidthMm,
   planeHeightMm,
+  planeOffsetMm,
   visible = true,
   capOpacity = 1,
   capDepthTest = true,
@@ -525,12 +579,32 @@ function CrossSectionStencilCapInner({
   const [postCommitTraversalKey, setPostCommitTraversalKey] = React.useState(0);
   React.useLayoutEffect(() => {
     setPostCommitTraversalKey((k) => k + 1);
-  }, [sourceObjectVersion]);
+  }, [sourceObjectVersion, extraSourcesKey]);
 
   const staticSourceEntries = React.useMemo<StaticStencilEntry[]>(() => {
-    if (!sourceObject) return [];
-
     const results: StaticStencilEntry[] = [];
+    const roots = [sourceObject, ...(extraSources ?? [])].filter((root): root is THREE.Object3D => Boolean(root));
+    for (const root of roots) {
+      collectStaticStencilEntries(root, skipSourceZBounds, results);
+    }
+    return results;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the extras are read here but keyed through `extraSourcesKey` and the post-commit counter, so the traversal runs on the render after the scene graph moved rather than during it.
+  }, [skipSourceZBounds, sourceObject, postCommitTraversalKey]);
+
+/**
+ * Collect the stencil geometry under one root.
+ *
+ * The supports a cap has to close are not always under a single object: in select
+ * mode the active model's supports are parented to its own group, and the world's
+ * are in the support drag group, so the cap takes both roots. Counting a mesh
+ * twice is harmless - the cap draws where the stencil is non-zero, and +2 or -2
+ * is still non-zero.
+ */
+function collectStaticStencilEntries(
+    sourceObject: THREE.Object3D,
+    skipSourceZBounds: boolean,
+    results: StaticStencilEntry[],
+): void {
     const instanceMatrix = new THREE.Matrix4();
     const worldInstanceMatrix = new THREE.Matrix4();
 
@@ -688,9 +762,7 @@ function CrossSectionStencilCapInner({
         maxZ: bounds.max,
       });
     });
-
-    return results;
-  }, [skipSourceZBounds, sourceObject, postCommitTraversalKey]);
+}
 
   const modelStencilEntryCacheRef = React.useRef<Map<string, {
     signature: string;
@@ -820,13 +892,14 @@ function CrossSectionStencilCapInner({
       <ModelStencilPassMemo
         key={`stencil-cap-${entry.id}`}
         entry={entry}
+        liveTransformsRef={liveTransformsRef}
         backMaterial={stencilBack}
         frontMaterial={stencilFront}
         backRenderOrder={MODEL_BACK_ORDER}
         frontRenderOrder={MODEL_FRONT_ORDER}
       />
     ));
-  }, [stencilBack, stencilFront, visibleModelStencilEntries, MODEL_BACK_ORDER, MODEL_FRONT_ORDER]);
+  }, [liveTransformsRef, stencilBack, stencilFront, visibleModelStencilEntries, MODEL_BACK_ORDER, MODEL_FRONT_ORDER]);
 
   const staticSingleStencilPassNodes = React.useMemo(() => {
     return visibleStaticSingleEntries.map((entry) => (
@@ -871,7 +944,7 @@ function CrossSectionStencilCapInner({
           <mesh
             geometry={capPlaneGeometry}
             material={glowPlaneMaterial}
-            position={[0, 0, y + Math.max(1e-4, glowThicknessMm)]}
+            position={[planeOffsetMm?.dxMm ?? 0, planeOffsetMm?.dyMm ?? 0, y + Math.max(1e-4, glowThicknessMm)]}
             renderOrder={GLOW_BACK_ORDER}
             frustumCulled
             raycast={() => null}
@@ -879,7 +952,7 @@ function CrossSectionStencilCapInner({
           <mesh
             geometry={capPlaneGeometry}
             material={glowPlaneMaterial}
-            position={[0, 0, y - Math.max(1e-4, glowThicknessMm)]}
+            position={[planeOffsetMm?.dxMm ?? 0, planeOffsetMm?.dyMm ?? 0, y - Math.max(1e-4, glowThicknessMm)]}
             renderOrder={GLOW_FRONT_ORDER}
             frustumCulled
             raycast={() => null}
@@ -890,7 +963,7 @@ function CrossSectionStencilCapInner({
       <mesh
         geometry={capPlaneGeometry}
         material={capPlaneMaterial}
-        position={[0, 0, y + effectiveOffsetMm]}
+        position={[planeOffsetMm?.dxMm ?? 0, planeOffsetMm?.dyMm ?? 0, y + effectiveOffsetMm]}
         rotation={effectiveRotationXDeg !== 0 ? [THREE.MathUtils.degToRad(effectiveRotationXDeg), 0, 0] : undefined}
         renderOrder={CAP_ORDER}
         frustumCulled
@@ -909,14 +982,18 @@ const areCrossSectionStencilCapPropsEqual = (
 ) => {
   return (
     prev.entries === next.entries
+    && prev.liveTransformsRef === next.liveTransformsRef
     && prev.sourceObject === next.sourceObject
     && prev.sourceObjectVersion === next.sourceObjectVersion
+    && prev.extraSourcesKey === next.extraSourcesKey
     && prev.skipSourceZBounds === next.skipSourceZBounds
     && prev.y === next.y
     && prev.otherClipY === next.otherClipY
     && prev.color === next.color
     && prev.planeWidthMm === next.planeWidthMm
     && prev.planeHeightMm === next.planeHeightMm
+    && prev.planeOffsetMm?.dxMm === next.planeOffsetMm?.dxMm
+    && prev.planeOffsetMm?.dyMm === next.planeOffsetMm?.dyMm
     && prev.visible === next.visible
     && prev.capOpacity === next.capOpacity
     && prev.capDepthTest === next.capDepthTest

@@ -8,15 +8,14 @@ export function MeshShaderPreviewSlot({
   shaderType,
   matcapVariant,
   flatUseVertexColors,
-  toonSteps,
   meshColor,
   materialRoughness,
   previewModel,
   ambientIntensity,
   directionalIntensity,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   heatmapColors,
   hoverTintStrength,
   selectedTintStrength,
@@ -24,15 +23,14 @@ export function MeshShaderPreviewSlot({
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
-  toonSteps: number;
   meshColor: string;
   materialRoughness: number;
   previewModel: string;
   ambientIntensity: number;
   directionalIntensity: number;
   xrayOpacity: number;
-  heatmapBlend: number;
-  heatmapContrast: number;
+  heatmapMinAngle: number;
+  heatmapMaxAngle: number;
   heatmapColors?: string[];
   hoverTintStrength: number;
   selectedTintStrength: number;
@@ -43,15 +41,14 @@ export function MeshShaderPreviewSlot({
         shaderType={shaderType}
         matcapVariant={matcapVariant}
         flatUseVertexColors={flatUseVertexColors}
-        toonSteps={toonSteps}
         meshColor={meshColor}
         materialRoughness={materialRoughness}
         previewModel={previewModel}
         ambientIntensity={ambientIntensity}
         directionalIntensity={directionalIntensity}
         xrayOpacity={xrayOpacity}
-        heatmapBlend={heatmapBlend}
-        heatmapContrast={heatmapContrast}
+        heatmapMinAngle={heatmapMinAngle}
+        heatmapMaxAngle={heatmapMaxAngle}
         heatmapColors={heatmapColors}
         hoverTintStrength={hoverTintStrength}
         selectedTintStrength={selectedTintStrength}

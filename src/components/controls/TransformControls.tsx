@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React from 'react';
+import { Trans, useLingui } from '@lingui/react/macro';
 import * as THREE from 'three';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
-import { SNAP_STORAGE_KEY } from '@/components/gizmo/rotate/snapRotation';
+import { Button, Card, CardHeader } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
+import type { SelectionRotationMode } from '@/features/scene/selectionTransform';
 
 interface SectionHeaderProps {
   title: string;
@@ -22,6 +24,7 @@ interface TransformControlsProps {
   // Position
   position: THREE.Vector3;
   onPositionChange: (x: number, y: number, z: number) => void;
+  onPositionCommit?: () => void;
   onCenter: () => void;
   onPlatform: (bbox: THREE.Box3) => void;
   
@@ -30,6 +33,9 @@ interface TransformControlsProps {
   onRotationChange: (x: number, y: number, z: number) => void;
   onResetRotation: () => void;
   onRotationComplete?: () => void;
+  /** Set only while several models are selected: whether they turn as one block or each in place. */
+  selectionRotationMode?: SelectionRotationMode;
+  onSelectionRotationModeChange?: (mode: SelectionRotationMode) => void;
   
   // Scale
   scale: THREE.Vector3;
@@ -37,7 +43,11 @@ interface TransformControlsProps {
   onResetScale: () => void;
   uniformScaling: boolean;
   onUniformScalingChange: (value: boolean) => void;
-  
+
+  // Gizmo space — one flag for both move and rotate, since the gizmo is one frame
+  localSpace: boolean;
+  onLocalSpaceChange: (value: boolean) => void;
+
   // Shared
   modelBBox: THREE.Box3 | null;
   
@@ -54,17 +64,22 @@ interface TransformControlsProps {
 export function TransformControls({
   position,
   onPositionChange,
+  onPositionCommit,
   onCenter,
   onPlatform,
   rotation,
   onRotationChange,
   onResetRotation,
   onRotationComplete,
+  selectionRotationMode,
+  onSelectionRotationModeChange,
   scale,
   onScaleChange,
   onResetScale,
   uniformScaling,
   onUniformScalingChange,
+  localSpace,
+  onLocalSpaceChange,
   modelBBox,
   autoLift,
   onAutoLiftChange,
@@ -74,19 +89,9 @@ export function TransformControls({
   onDrop,
   onTransformCommit,
 }: TransformControlsProps) {
+  const { t } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
-  const [snapEnabled, setSnapEnabled] = useState(() => {
-    try { return localStorage.getItem(SNAP_STORAGE_KEY) === 'true'; } catch { return false; }
-  });
-
-  const handleSnapToggle = () => {
-    const next = !snapEnabled;
-    setSnapEnabled(next);
-    try { localStorage.setItem(SNAP_STORAGE_KEY, String(next)); } catch {}
-    window.dispatchEvent(new CustomEvent('dragonfruit:snap-toggle', { detail: { enabled: next } }));
-  };
-
-  const compactButtonClass = 'ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
+  const compactButtonClass = '!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
   const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-left tabular-nums no-spinners';
 
   const sectionCardStyle: React.CSSProperties = {
@@ -120,6 +125,34 @@ export function TransformControls({
     color: 'var(--text-strong)',
   };
 
+  const toggleButtonClass = 'h-7 min-w-[64px] rounded-md border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors';
+
+  const toggleButtonStyle = (active: boolean): React.CSSProperties => (active
+    ? {
+        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+        color: 'var(--accent-contrast)',
+      }
+    : {
+        borderColor: 'var(--border-subtle)',
+        background: 'var(--surface-1)',
+        color: 'var(--text-muted)',
+      });
+
+  // Move and rotate share the gizmo's frame, so they share one button: pressing
+  // either one turns both to the model's own axes.
+  const renderLocalSpaceToggle = () => (
+    <button
+      type="button"
+      onClick={() => onLocalSpaceChange(!localSpace)}
+      title={t`Move and rotate along the model's own axes instead of the build plate's`}
+      className={toggleButtonClass}
+      style={toggleButtonStyle(localSpace)}
+    >
+      <Trans context="Gizmo space toggle">Local</Trans>
+    </button>
+  );
+
   // Conversion helpers
   const toDegrees = (rad: number) => (rad * 180) / Math.PI;
   const toRadians = (deg: number) => (deg * Math.PI) / 180;
@@ -145,6 +178,14 @@ export function TransformControls({
     onPositionChange(newPos.x, newPos.y, newPos.z);
   };
 
+  const handlePositionBlur = () => {
+    if (onPositionCommit) {
+      onPositionCommit();
+      return;
+    }
+    onTransformCommit?.();
+  };
+
   // Rotation handlers
   const handleRotationChange = (axis: 'x' | 'y' | 'z', value: number) => {
     const radians = toRadians(wrapRotationDegrees(value));
@@ -160,31 +201,12 @@ export function TransformControls({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded(!expanded)}
-              title={expanded ? 'Collapse card' : 'Expand card'}
-              className="!p-0.5"
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded((prev) => !prev)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Transform
+              <Trans>Transform</Trans>
             </h3>
           </>
         )}
-        hideDivider={!expanded}
       />
 
       {expanded ? (
@@ -192,7 +214,13 @@ export function TransformControls({
 
           {/* MOVE SECTION */}
           <div className="rounded-md border p-2" style={moveCardStyle}>
-            <SectionHeader title="Move" />
+            <div className="flex items-center">
+              <div className="flex-1" />
+              <SectionHeader title={t({ message: 'Move', context: 'Transform panel section' })} />
+              <div className="flex-1 flex justify-end">
+                {renderLocalSpaceToggle()}
+              </div>
+            </div>
               <div className="pt-1.5 space-y-2">
                 <div className="grid grid-cols-3 gap-1 min-w-0">
                   <div className="min-w-0">
@@ -201,7 +229,7 @@ export function TransformControls({
                       <NumberInput
                         value={parseFloat(position.x.toFixed(2))}
                         onChange={(val) => handlePositionChange('x', val)}
-                        onBlur={() => onTransformCommit?.()}
+                        onBlur={handlePositionBlur}
                         className={valueInputClass}
                         showStepper={false}
                       />
@@ -214,7 +242,7 @@ export function TransformControls({
                       <NumberInput
                         value={parseFloat(position.y.toFixed(2))}
                         onChange={(val) => handlePositionChange('y', val)}
-                        onBlur={() => onTransformCommit?.()}
+                        onBlur={handlePositionBlur}
                         className={valueInputClass}
                         showStepper={false}
                       />
@@ -227,7 +255,7 @@ export function TransformControls({
                       <NumberInput
                         value={parseFloat(position.z.toFixed(2))}
                         onChange={(val) => handlePositionChange('z', val)}
-                        onBlur={() => onTransformCommit?.()}
+                        onBlur={handlePositionBlur}
                         className={valueInputClass}
                         showStepper={false}
                       />
@@ -236,6 +264,16 @@ export function TransformControls({
                   </div>
                 </div>
 
+                <Button
+                  type="button"
+                  onClick={onCenter}
+                  variant="secondary"
+                  size="auto"
+                  className={compactButtonClass + ' w-full'}
+                >
+                  <Trans>Center Selection</Trans>
+                </Button>
+
               </div>
           </div>
 
@@ -243,11 +281,12 @@ export function TransformControls({
           <div className="rounded-md border p-2" style={liftCardStyle}>
             <div className="flex items-center">
               <div className="flex-1" />
-              <SectionHeader title="Lift" />
+              <SectionHeader title={t({ message: 'Lift', context: 'Transform panel section' })} />
               <div className="flex-1 flex justify-end">
                 <button
                   type="button"
                   onClick={() => onAutoLiftChange(!autoLift)}
+                  title={t`On, models stay this far above the build plate after every move, rotation or scale. Off, they rest on the plate.`}
                   className="h-7 min-w-[64px] rounded-md border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors"
                   style={autoLift
                     ? {
@@ -261,7 +300,7 @@ export function TransformControls({
                         color: 'var(--text-muted)',
                       }}
                 >
-                  Auto
+                  <Trans context="Auto-lift toggle">Auto</Trans>
                 </button>
               </div>
             </div>
@@ -278,36 +317,40 @@ export function TransformControls({
               </div>
 
               <div className="grid grid-cols-2 gap-1">
-                <button
+                <Button
                   onClick={() => {
                     onLift();
                     onTransformCommit?.();
                   }}
                   disabled={!modelBBox}
-                  className="ui-button ui-button-secondary !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
                     borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 38%)',
                     color: 'color-mix(in srgb, var(--accent), var(--text-strong) 30%)',
                     background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
                   }}
                 >
-                  Lift
-                </button>
-                <button
+                  <Trans context="Lift button">Lift</Trans>
+                </Button>
+                <Button
                   onClick={() => {
                     onDrop();
                     onTransformCommit?.();
                   }}
                   disabled={!modelBBox}
-                  className="ui-button ui-button-secondary !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
                     borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
                     color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 30%)',
                     background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
                   }}
                 >
-                  Drop
-                </button>
+                  <Trans context="Drop button">Drop</Trans>
+                </Button>
               </div>
             </div>
           </div>
@@ -315,27 +358,22 @@ export function TransformControls({
           {/* ROTATE SECTION */}
           <div className="rounded-md border p-2" style={rotateCardStyle}>
             <div className="flex items-center">
-              <div className="flex-1" />
-              <SectionHeader title="Rotate" />
+              <div className="flex-1 flex justify-start">
+                {selectionRotationMode && (
+                  <button
+                    type="button"
+                    onClick={() => onSelectionRotationModeChange?.(selectionRotationMode === 'group' ? 'individual' : 'group')}
+                    title={t`Rotate the selection as one block around its centre; turn off to rotate each model in place`}
+                    className={toggleButtonClass}
+                    style={toggleButtonStyle(selectionRotationMode === 'group')}
+                  >
+                    <Trans context="Group rotation toggle">Group</Trans>
+                  </button>
+                )}
+              </div>
+              <SectionHeader title={t({ message: 'Rotate', context: 'Transform panel section' })} />
               <div className="flex-1 flex justify-end">
-                <button
-                  type="button"
-                  onClick={handleSnapToggle}
-                  className="h-7 min-w-[64px] rounded-md border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors"
-                  style={snapEnabled
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'var(--accent-contrast)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Snap
-                </button>
+                {renderLocalSpaceToggle()}
               </div>
             </div>
             <div className="pt-1.5 space-y-2">
@@ -390,15 +428,17 @@ export function TransformControls({
                   </div>
                 </div>
 
-                <button
+                <Button
                   onClick={() => {
                     onResetRotation();
                     onTransformCommit?.();
                   }}
-                  className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
+                  variant="secondary"
+                  size="auto"
+                  className="w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
                 >
-                  Reset Rotation
-                </button>
+                  <Trans>Reset Rotation</Trans>
+                </Button>
               </div>
           </div>
 
@@ -406,7 +446,7 @@ export function TransformControls({
           <div className="rounded-md border p-2" style={scaleCardStyle}>
             <div className="flex items-center justify-between">
               <div className="flex-1" />
-              <SectionHeader title="Scale" />
+              <SectionHeader title={t({ message: 'Scale', context: 'Transform panel section' })} />
               <div className="flex-1 flex justify-end">
                 <button
                 type="button"
@@ -424,7 +464,7 @@ export function TransformControls({
                       color: 'var(--text-muted)',
                     }}
               >
-                Uniform
+                <Trans context="Uniform scaling toggle">Uniform</Trans>
               </button>
             </div>
             </div>
@@ -458,9 +498,8 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, newScale, scale.z);
                         }}
-                        disabled={uniformScaling}
                         onBlur={() => onTransformCommit?.()}
-                        className={`${valueInputClass} disabled:opacity-50`}
+                        className={valueInputClass}
                         showStepper={false}
                       />
                       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>%</span>
@@ -476,9 +515,8 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, scale.y, newScale);
                         }}
-                        disabled={uniformScaling}
                         onBlur={() => onTransformCommit?.()}
-                        className={`${valueInputClass} disabled:opacity-50`}
+                        className={valueInputClass}
                         showStepper={false}
                       />
                       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>%</span>
@@ -514,9 +552,8 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, newScale, scale.z);
                         }}
-                        disabled={uniformScaling}
                         onBlur={() => onTransformCommit?.()}
-                        className={`${valueInputClass} disabled:opacity-50`}
+                        className={valueInputClass}
                         showStepper={false}
                       />
                       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>mm</span>
@@ -532,9 +569,8 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, scale.y, newScale);
                         }}
-                        disabled={uniformScaling}
                         onBlur={() => onTransformCommit?.()}
-                        className={`${valueInputClass} disabled:opacity-50`}
+                        className={valueInputClass}
                         showStepper={false}
                       />
                       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>mm</span>
@@ -542,15 +578,17 @@ export function TransformControls({
                   </div>
                 </div>
 
-                <button
+                <Button
                   onClick={() => {
                     onResetScale();
                     onTransformCommit?.();
                   }}
-                  className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
+                  variant="secondary"
+                  size="auto"
+                  className="w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
                 >
-                  Reset Scale
-                </button>
+                  <Trans>Reset Scale</Trans>
+                </Button>
               </div>
           </div>
         </div>

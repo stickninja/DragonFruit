@@ -1,19 +1,18 @@
+import { toVector3 } from '@/supports/Curves/BezierUtils';
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_ADD_KICKSTAND } from '@/supports/history/actionTypes';
-import { addKnot, addRoot, subscribe, getSnapshot } from '../../state';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
+import { addAction } from '@/supports/history/actionTypes';
+import { addSupportEntity, addKnot, addRoot, subscribe, getSnapshot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
-import { getGridSettings } from '../../Settings';
+import { getGridSettings } from '../../Settings/state';
 import { snapToGridIndex } from '../../PlacementLogic/Grid/gridMath';
-import { addKickstand, getKickstandSnapshot } from './kickstandStore';
 import { clampKickstandHostT } from './kickstandRules';
 import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
 import { getKickstandPlacementOffsetMm } from './kickstandSettings';
 import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
-import { leafPlacementStore } from '../Leaf/leafPlacementState';
 import type { Vec3 } from '../../types';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState, resolveSupportPlacementHotkeyBindings, resolveSupportPlacementHotkeyIntent } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
@@ -21,6 +20,7 @@ import { usePlacementSnappingSession } from '../../interaction/shared/placement/
 import { buildKickstandSnapTargetMetaIndex, type KickstandSnapTargetMeta } from '../../interaction/shared/placement/snapping/kickstandSnapTargets';
 import { getSnapPathPointAtT, projectPointToSnapPath } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 type DesiredBand = 'left' | 'right' | 'front';
 
@@ -30,9 +30,6 @@ interface ShaftClickDetail {
     intersection?: unknown;
 }
 
-function toVector3(v: Vec3): THREE.Vector3 {
-    return new THREE.Vector3(v.x, v.y, v.z);
-}
 
 function perpendicularDirection(
     path: NonNullable<SnapTarget['pathSegment']>,
@@ -94,7 +91,7 @@ function getPreferredPointFromPointerRay(
     pointer: THREE.Vector2,
     raycaster: THREE.Raycaster,
 ): Vec3 {
-    raycaster.setFromCamera(pointer, camera);
+    setPickRayFromCamera(raycaster, pointer, camera);
     const ray = raycaster.ray;
     const axisPointVec = toVector3(axisPoint);
     const toAxis = axisPointVec.clone().sub(ray.origin);
@@ -265,7 +262,7 @@ function isGridRootOccupied(rootPos: Vec3, modelId: string, hostRootId?: string 
         }
     }
 
-    const kickstandSnapshot = getKickstandSnapshot();
+    const kickstandSnapshot = getSnapshot();
     for (const root of Object.values(kickstandSnapshot.roots)) {
         if (root.modelId !== modelId) continue;
         if (hostRootId && root.id === hostRootId) continue;
@@ -655,12 +652,14 @@ export function KickstandPlacementController() {
 
             console.log('[DEBUG Kickstand placement handleClick] Placement succeeded! Adding kickstand:', finalBuild);
 
-            addKickstand(finalBuild);
+            // Three ordinary entities: the kickstand, the root it mounts to and
+            // the knot it hangs from. No bundled adder.
             addRoot(finalBuild.root);
             addKnot(finalBuild.hostKnot);
+            addSupportEntity('kickstand', finalBuild.kickstand);
 
-            pushHistory({
-                type: SUPPORT_ADD_KICKSTAND,
+            pushSupportHistory({
+                type: addAction('kickstand'),
                 payload: { build: finalBuild },
             });
 

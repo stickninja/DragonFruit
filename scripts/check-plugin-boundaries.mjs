@@ -14,6 +14,7 @@ const ALLOWED_CORE_IMPORT_SEAMS = new Set([
       path.normalize('src/features/plugins/builtinComplexPluginUploadHandlers.ts'),
       path.normalize('src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts'),
       path.normalize('src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts'),
+      path.normalize('src/features/plugins/generatedBuiltinComplexPluginFileTypeHandlers.ts'),
       path.normalize('src/features/plugins/pluginUploadBridge.ts'),
 ]);
 

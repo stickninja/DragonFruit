@@ -1,0 +1,331 @@
+# Release process
+
+How DragonFruit versions, branches, and ships builds. This is the
+source-of-truth for anyone cutting a release or touching
+[`.github/workflows/release.yml`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/.github/workflows/release.yml)
+or [`src-tauri/src/updater_channel.rs`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/src-tauri/src/updater_channel.rs).
+
+## The model
+
+We will be using semantic versioning, i.e. vMAJOR.MINOR.PATCH-prerelease.
+
+Two branches, two channels, classic odd/even MINOR convention:
+
+- **`dev`** — the development line. **Odd MINOR** (`0.1.x`, `0.3.x`, `0.5.x`, ...).
+  Features land here continuously. Every version bump on `dev` is a real,
+  shippable devel release — there's no RC ceremony for it. Bump the version,
+  push, done.
+- **`main`** — the stable line. **Even MINOR** (`0.2.x`, `0.4.x`, ...). Only
+  reachable by promoting a `dev` commit when the odd line is feature-complete.
+  Once on `main`, only bugfixes land — no new features.
+
+There is currently no dedicated `release-X.Y` maintenance branch: `main`
+*is* the stable maintenance branch. We will revisit this only if DragonFruit
+ever needs to support two stable lines concurrently; until then, a separate
+branch per stable release would be pure ceremony.
+
+## Versioning: real SemVer, prerelease identifiers included
+
+The channel is **not** a tag prefix anymore. It's encoded directly in the
+version string, following [SemVer 2.0](https://semver.org)'s
+`MAJOR.MINOR.PATCH-prerelease` grammar — because `tauri-plugin-updater`
+parses the updater feed's `version` field as a real `semver::Version` and
+compares it with plain `>`, which already implements full SemVer precedence
+(including "a prerelease has lower precedence than the same version without
+one"). Nothing needs to be taught to compare `1.3.0-rc.1 < 1.3.0` — the
+`semver` crate already does that. What has to be correct is what you put in
+the version field.
+
+Set the version in **`package.json`, `src-tauri/tauri.conf.json`, and
+`src-tauri/Cargo.toml`** together — all three must agree, since Tauri reads
+its own version from the bundle config and that's what ends up baked into the
+running binary as `current_version`.
+
+Rules:
+
+- Use dot-separated numeric identifiers for RC/beta counters:
+  `-rc.1`, `-rc.2`, `-rc.10`, not `-rc1`/`-rc2`/`-rc10`. SemVer compares
+  numeric fields numerically, but only if they're their own dot-separated
+  field — `"rc1"` is a single alphanumeric identifier and sorts as a string
+  (`rc1 < rc10 < rc2`), which silently breaks ordering once you pass RC 9.
+- `alpha < beta < rc` is not something SemVer understands semantically — it's
+  ASCII lexical order on whatever word you chose. It works here because
+  English happens to alphabetize that way. Don't rename these words casually.
+
+## What "prerelease" means on GitHub
+
+GitHub's `prerelease` flag has exactly one practical effect: a non-prerelease,
+non-draft release is eligible to be the repo's "Latest release" (and what
+`GET /releases/latest` returns). It has no concept of channels. So the flag
+is assigned by **"is this the stable/production channel"**, not by "is this a
+finished version number".  The release number is stored in one JSON per channel
+in the GitHub pages for the project, under the URLs
+https://open-resin-alliance.github.io/DragonFruit/latest{,-dev}.json, and these
+will be the rules that the release workflows are following:
+
+| Version example | Branch | `is_prerelease` | Updater feed |
+|---|---|---|---|
+| `0.1.10` | `dev` | `true` | `latest-dev.json` |
+| `0.1.11-rc.1` | `dev` | `true` | *none* |
+| `0.2.0-rc.1` | `main` | `true` | *none* — downloadable, not auto-installed |
+| `0.2.0-rc.2` | `main` | `true` | *none* |
+| `0.2.0` | `main` | `false` | `latest.json` |
+| `0.2.1` | `main` | `false` | `latest.json` |
+| `0.3.0` | `dev` | `true` | `latest-dev.json` |
+
+A dev-line build is *never* eligible to be "Latest release" and never touches
+the stable updater feed, no matter how "final" its own version number is.
+Only a final (no prerelease identifier) version pushed on `main` is stable.
+
+An RC on `main` still builds and publishes installers — testers can grab it
+from the Releases page — it's just never wired into `latest.json`, so nobody
+on the stable auto-update channel can land on it by accident.
+
+This logic lives entirely in the `detect-version-bump` job of `release.yml`;
+nothing else needs to change if you're just cutting releases.
+
+## Tags
+
+Always `v{version}` — `v0.1.10`, `v0.2.0-rc.1`, `v0.2.0`. No more `dev_`
+prefix; the branch/channel is already implied by the version's MINOR parity
+and prerelease identifier, so the tag doesn't need to encode it separately.
+
+## How to cut a release
+
+### Regular dev release
+
+```
+# on dev, MINOR version already odd (e.g. currently 0.1.9)
+# Thanks to scripts/sync-app-version.mjs, this bumps the version in:
+#  package-lock.json, package.json, src-tauri/Cargo.lock,
+#  src-tauri/Cargo.toml and src-tauri/tauri.conf.json
+VER=0.1.10
+git checkout dev
+git switch -c release/v$VER
+npm version $VER --no-git-tag-version
+# Generate the bitmap for the NSIS installer.
+./scripts/gen_nsis_images.py
+
+git commit -a -m "chore: release $VER"
+git push
+```
+
+That's it — `release.yml` tags `v0.1.10`, builds, publishes a GitHub
+prerelease, and points `latest-dev.json` at it. Repeat for `0.1.11`,
+`0.1.12`, etc. No RC step required for dev releases.
+
+### Contributors
+
+`npm version` also runs `scripts/sync-contributors.mjs` (via the `postversion`
+hook), so `src/components/settings/contributors.json` is refreshed in the same
+release commit as the version bump — no separate step, no workflow side effect.
+This is intentionally a release-procedure action, not a GH workflow step or a
+dev-start hook.
+
+The sync merges two sources: the GitHub contributors API (which only reflects
+the default branch, `main`) plus a walk of the `dev` branch's commits — so a
+dev-line contributor is added at the next version bump after their first commit
+lands on `dev`, not held until their work is promoted to `main`. The one thing
+the API doesn't let us avoid is its own staleness (contributor data can lag by
+a few hours); later bumps re-run the sync, so stragglers are picked up on the
+next release anyway.
+
+New contributors are appended with the GitHub profile display name as their
+default `name` (falling back to their username when the profile has no name
+set), `role: "Contributor"` and `tone: "secondary"`. If you want a different
+display name, role, or tone — a founder, a maintainer — edit the entry right
+after the bump: the sync only ever appends, so your edit survives future runs.
+
+### Promoting dev → main (odd → even transition)
+
+This is the one point where a branch cut is doing real work — `dev` needs to
+keep absorbing new (0.3.x) work the moment this happens, while `main`
+stabilizes what's already there.
+
+```
+git checkout main
+git merge --ff-only v0.1.11        # or whatever the last dev tag was
+# bump version → 0.2.0-rc.1
+npm version 0.2.0-rc.1 --no-git-tag-version
+git commit -a -m "chore: release 0.2.0-rc.1"
+git push origin main
+```
+
+Fix anything that comes up with normal commits on `main` (cherry-picked from
+`dev` or written directly against `main` — either is fine at this scale).
+When ready to cut another candidate, bump to `0.2.0-rc.2` and push again.
+When satisfied:
+
+```
+# bump version → 0.2.0 (drop the -rc suffix)
+npm version 0.2.0 --no-git-tag-version
+git commit -a -m "chore: release 0.2.0"
+git push origin main
+```
+
+`release.yml` will look for a prior GitHub release tagged `v0.2.0-rc.*` and
+carry its notes forward automatically if you don't override `release_body`.
+
+### Stable patch release
+
+Same as above, entirely on `main`: bump to `0.2.1`, commit, push. No branch
+needed — `main` already is the maintenance line for the current stable
+series.
+
+### Reopening dev for the next cycle
+
+There is nothing to do here until you're actually ready to ship the first
+release of the new odd line. `dev`'s version field can sit at whatever it was
+before the promotion (e.g. still reading `0.1.11`) indefinitely — nothing in
+the pipeline reacts to anything except a version bump being pushed. The
+"0.3.x" line has no existence anywhere in the repo — no tag, no branch, no
+marker — until the commit that bumps the version to `0.3.0` (or whatever the
+first real 0.3.x version is). That commit is both the only record of the
+reopening and the release trigger itself.
+
+If you bump the version as its own empty commit right after the promotion,
+that alone will cut a `0.3.0` devel release with no new content — harmless,
+but worth knowing. Folding the bump into the first real feature commit of the
+new cycle avoids the empty release, at the cost of a less clean "here's where
+0.3.x began" marker in history.
+
+## Issue tracking across the "train" (`label-dev-fixes` in `release.yml`)
+
+GitHub only auto-closes an issue for a commit's closing keyword (`Closes #X`,
+`Fixes #X`, `Resolves #X`, ...) when that commit lands on the repo's
+**default branch**. `dev` isn't the default branch (`main` is), so those
+commits would otherwise never mark anything as done — the issue would sit
+open even after the fix has shipped in a dev build.
+
+To compensate, every time a **final** version (no `-rc`/`-beta`/etc. suffix)
+is pushed on `dev`, the `label-dev-fixes` job in `release.yml`:
+
+1. Finds the previous `v*` tag reachable in `dev`'s history (i.e. the last
+   dev release, of any kind).
+2. Scans every commit message in that range for GitHub's closing-keyword
+   grammar (`close(s/d)`, `fix(es/ed)`, `resolve(s/d)` followed by one or
+   more `#NNN`, comma/`and`-separated).
+3. Applies the `fixed in dev` label to each referenced issue — it does
+   **not** close it, since the fix hasn't reached the stable line yet — and
+   posts a comment pointing at the dev build (with the usual "no guarantees"
+   caveat) and naming the tentative next stable version (current dev MINOR
+   + 1, patch `.0`; a guess, not a promise, since promotion timing isn't
+   fixed). If the issue is already labeled, the job skips it — no repeat
+   comments across multiple final dev releases.
+
+This mirrors the Mozilla-style "train" model: an issue accumulates the
+`fixed in dev` label as soon as its fix rides a dev release, and stays open
+(for tracking "is this in `main` yet") until whoever promotes `dev` → `main`
+closes it as part of that release, or closes it by hand. RC builds on `dev`
+or `main` don't trigger this job — only a final version bump does, so labels
+land once per train stop rather than once per commit.
+
+## Branch preview builds (`build-preview.yml`)
+
+Separate from all of the above: `build-preview.yml` builds an arbitrary branch
+on demand (`workflow_dispatch`, or a `/preview` comment on a pull request) and
+publishes a rolling `preview_{branch}` prerelease, so a reviewer can download
+and try an exact commit.
+
+It is **not** a scheduled build of `dev`, doesn't participate in the
+versioning/channel model above, and isn't wired to the auto-updater at all.
+These builds used to be called *nightly*, which was misleading on both counts:
+nothing about them is nightly, and nothing is on a schedule. Treat them as a
+branch or pull-request preview mechanism.
+
+### External (fork) pull requests
+
+A preview build compiles the branch with the release signing secrets in scope,
+so external pull requests are never built automatically: the `preview-build`
+label does not dispatch for them, and `/preview` replies with a pointer to the
+command below.
+
+After reading the diff, a maintainer runs `/create-preview-external`. That
+resolves the pull request's head SHA, points `preview/pr-<number>` at it, and
+builds that branch. It imports **one commit** — later pushes need the command
+again, so every external build is one a maintainer chose to run. Preview
+branches whose pull request has closed are swept away the next time any
+preview is activated.
+
+## Windows Microsoft C++ prerequisite
+
+Windows installers contain neither Microsoft CRT DLLs nor its redistributable.
+NSIS obtains the runtime directly from [Microsoft's latest-x64 endpoint](https://aka.ms/vc14/vc_redist.x64.exe)
+under Microsoft's terms. DragonFruit's AGPL license is unchanged; see the
+[FSF runtime guidance](https://www.gnu.org/licenses/gpl-faq.html#WindowsRuntimeAndGPL)
+and [Microsoft redistribution rules](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
+Build-tool licensing remains the release owner's responsibility.
+
+`scripts/prepare-windows-runtime.ps1` pins the minimum to `14.51.36247.0` and checks
+it against the selected Visual Studio installation's newest x64 CRT using direct
+`vswhere` discovery. It never updates the pin automatically. It generates the
+NSIS/WiX includes and downloads only checksum-pinned
+InetC, the free HTTPS plugin described in `scripts/windows-runtime-download-plugin.json`.
+Its zlib notice, `scripts/inetc-license.txt`, ships as `licenses/InetC.txt`.
+Preparation writes the generated notice as `windows-resources/nsis-plugins/InetC.txt`:
+the pinned Tauri WiX bundler preserves the source basename even when a resource
+mapping specifies a different destination filename. Keeping the source and
+destination basenames equal makes both MSI and NSIS ship the expected notice.
+The NSIS prerequisite hook reads that same generated file and embeds it as
+`$PLUGINSDIR\InetC.txt`; changing the notice basename must update both consumers.
+The native-resource build step and Windows pre-bundle hook run preparation.
+
+`src-tauri/nsis/runtime-prerequisite.nsh` checks the registered native x64 runtime
+and numeric system DLL version. If inadequate, an early consent page precedes
+any reinstall/uninstall pages. InetC downloads the latest official installer;
+`scripts/verify-windows-runtime.ps1` requires a valid Microsoft corporate signature
+and a VC14 version at least as new as the build requires, then setup runs
+**`/q /norestart`** and rechecks the runtime. Failure or cancellation stops setup;
+exit `3010` requests a manual restart and rerun, never an automatic reboot/launch.
+Silent `/S` and passive `/P` installations must have the prerequisite provisioned
+first. `src-tauri/wix/runtime-prerequisite.wxs` blocks an inadequate runtime with
+a Microsoft download link; it never nests an installer and allows uninstall.
+Tauri links that fragment through its supported `componentGroupRefs` option; the
+empty group anchors the searches and blocking action without installing a dummy component.
+The MSI search specifies the official CRT's resource language `1033`, not the
+Windows UI locale. MSI also compares language when the installed version equals
+the minimum; leaving it unspecified would reject the tagged Microsoft DLL.
+
+There is no Microsoft installer checksum pin or update bot: Microsoft may update
+its signed download independently. The shipped InetC plugin remains pinned.
+On Windows PowerShell 5.1 or 7:
+
+```powershell
+$minimum = ./scripts/prepare-windows-runtime.ps1
+./scripts/verify-windows-runtime.ps1 -InstallerPath C:\Temp\VC_redist.x64.exe -MinimumVersion $minimum
+```
+
+Preparation accepts `-OutputDirectory` and a higher `-MinimumVersion`; it cannot
+lower the pinned floor. A toolset requiring a newer runtime fails the build rather
+than changing the pin. Output defaults resolve relative to the script after
+parameter binding, including Windows PowerShell `-File` invocations from another
+directory. One Windows validation job checks the current Microsoft
+download. `scripts/verify-windows-bundles.ps1` rejects bundled Microsoft runtime
+payloads and checks the NSIS helpers and plugin notice before publication.
+Windows install/upgrade smoke must still cover missing/old/current runtimes,
+consent/UAC cancellation, failed downloads/signatures, and reboot-required results.
+
+## Updater implementation notes
+
+- `src-tauri/tauri.conf.json`'s `plugins.updater.endpoints` points at the
+  stable feed by default; `src-tauri/src/updater_channel.rs` overrides the
+  endpoint at runtime based on the user's saved channel preference
+  (`STABLE_ENDPOINT` / `DEV_ENDPOINT`), independent of the static config.
+- **Linux never runs the check.** The release job builds only a `.flatpak`
+  (`build_kind: flatpak`, `--no-bundle`), so `latest.json` / `latest-dev.json`
+  have no `linux-x86_64` key — and the updater could not install over a running
+  Flatpak anyway, since `/app` is read-only inside the sandbox. `check_updates`
+  returns `None` early on Linux and the Settings → Updates tab shows a
+  "Managed by Flatpak" card with the `flatpak update` command instead of the
+  channel picker (`updatesAreExternal()` in
+  `src/features/updater/updateBridge.ts`). Adding a Linux entry to the feed
+  would only make sense alongside an AppImage build.
+- The plugin's default version comparator is a plain `release.version >
+  current_version` using `semver::Version::Ord` — no custom comparator is
+  registered. This means there's no downgrade support: a user who updates to
+  a higher-MINOR prerelease and then switches their channel preference back
+  to stable will not be offered the (numerically lower) stable version until
+  stable catches back up. This is expected given the current setup, not a
+  bug — if channel-switch-triggered downgrades are ever wanted, that
+  requires registering a custom `version_comparator` in
+  `updater_channel.rs`.

@@ -8,20 +8,43 @@ import {
   CloudOff,
   Download,
   ExternalLink,
-  Loader2,
+  Package,
   RotateCcw,
 } from 'lucide-react';
+import { FLATPAK_APP_ID, LINUX_RELEASES_URL } from '@/features/updater/updateBridge';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Button, Spinner } from '@/components/atoms';
 import { useUpdateChecker } from '@/features/updater/useUpdateChecker';
 import type { UpdateState } from '@/features/updater/useUpdateChecker';
+import { isAllowSameVersionEnabled, enableAllowSameVersionForSession } from '@/features/updater/debugForceSession';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import {
+  formatUpdateDownloadedBytes,
+  formatUpdateReadyToInstall,
+  formatUpdateVersionChip,
+  formatUpdateVersionReady,
+} from '@/features/updater/updaterMessages';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import type { UnitFormat } from '@/utils/unitFormatting';
 
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function formatBytes(bytes: number, fmt: UnitFormat): string {
+  if (bytes < 1024) return fmt.quantity(bytes, 0, 'B');
+  if (bytes < 1024 * 1024) return fmt.quantity(bytes / 1024, 1, 'KB');
+  return fmt.quantity(bytes / (1024 * 1024), 1, 'MB');
+}
+
+async function openExternal(url: string): Promise<void> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_external_url', { url });
+  } catch {
+    window.open(url, '_blank');
+  }
 }
 
 function ProgressBar({ pct }: { pct: number }) {
@@ -46,64 +69,52 @@ function ProgressBar({ pct }: { pct: number }) {
 // ---------------------------------------------------------------------------
 
 function IdleState({ onCheck }: { onCheck: () => void }) {
+  const { _ } = useLingui();
   return (
-    <button
-      type="button"
-      onClick={onCheck}
-      className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150 hover:brightness-110"
-      style={{
-        borderColor: 'var(--border-subtle)',
-        background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
-      }}
-    >
-      <div className="flex items-center gap-2.5">
-        <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
-          style={{
-            borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-2)',
-          }}
-        >
-          <CloudDownload className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Check for Updates
-          </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            See if a newer version of DragonFruit is available
-          </span>
-        </span>
-      </div>
-    </button>
+    <div className="grid grid-cols-2 gap-2">
+      <Button
+        variant="secondary"
+        size="md"
+        onClick={onCheck}
+        className="inline-flex items-center justify-center gap-1.5"
+      >
+        <RotateCcw className="h-3.5 w-3.5" />
+        <Trans>Check for Updates</Trans>
+      </Button>
+      <Button
+        variant="secondary"
+        size="md"
+        disabled
+        className="inline-flex items-center justify-center gap-1.5 opacity-50 cursor-not-allowed"
+        title={_(msg`No update available`)}
+      >
+        <Download className="h-3.5 w-3.5" />
+        <Trans>Install</Trans>
+      </Button>
+    </div>
   );
 }
 
 function CheckingState() {
   return (
-    <div
-      className="w-full rounded-lg border px-3 py-2.5"
-      style={{
-        borderColor: 'var(--border-subtle)',
-        background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
-      }}
-    >
-      <div className="flex items-center gap-2.5">
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 py-16">
+      <div className="flex flex-col items-center gap-3 text-center">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border"
           style={{
-            borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-2)',
+            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
+            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 82%)',
+            color: 'var(--accent)',
           }}
         >
-          <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--accent)' }} />
+          <Spinner size="xl" />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Checking for updates…
+        <span className="min-w-0">
+          <span className="block text-lg font-bold" style={{ color: 'var(--text-strong)' }}>
+            <Trans>Checking for Updates…</Trans>
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            Querying GitHub releases
+          <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
+            <Trans>Querying GitHub releases</Trans>
           </span>
         </span>
       </div>
@@ -113,45 +124,36 @@ function CheckingState() {
 
 function UpToDateState({ onCheck }: { onCheck: () => void }) {
   return (
-    <div
-      className="w-full rounded-lg border px-3 py-2.5"
-      style={{
-        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 50%)',
-        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)',
-      }}
-    >
-      <div className="flex items-center gap-2.5">
+    <div className="flex flex-1 flex-col items-center justify-center gap-8 py-16">
+      <div className="flex flex-col items-center gap-3 text-center">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border"
           style={{
-            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
-            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 85%)',
+            borderColor: 'color-mix(in srgb, var(--success), var(--border-subtle) 40%)',
+            background: 'color-mix(in srgb, var(--success), var(--surface-1) 82%)',
+            color: 'var(--success)',
           }}
         >
-          <Check className="h-3.5 w-3.5" style={{ color: 'var(--accent-secondary)' }} />
+          <Check className="h-6 w-6" />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Up To Date!
+        <span className="min-w-0">
+          <span className="block text-lg font-bold" style={{ color: 'var(--success)' }}>
+            <Trans>Up to date</Trans>
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            You're running the latest version of DragonFruit.
+          <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
+            <Trans>You’re on the latest version</Trans>
           </span>
         </span>
-        <button
-          type="button"
-          onClick={onCheck}
-          className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-all duration-150"
-          style={{
-            color: 'var(--text-muted)',
-            borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-2)',
-          }}
-        >
-          <RotateCcw className="h-3 w-3" />
-          Check Again
-        </button>
       </div>
+      <Button
+        variant="secondary"
+        size="auto"
+        onClick={onCheck}
+        className="!h-10 px-8 text-sm inline-flex items-center justify-center gap-1.5"
+      >
+        <RotateCcw className="h-4 w-4" />
+        <Trans>Check Again</Trans>
+      </Button>
     </div>
   );
 }
@@ -159,110 +161,123 @@ function UpToDateState({ onCheck }: { onCheck: () => void }) {
 function AvailableState({
   state: s,
   onDownload,
-  onDismiss,
+  onCheck,
 }: {
   state: UpdateState & { status: 'available' };
   onDownload: () => void;
-  onDismiss: () => void;
+  onCheck: () => void;
 }) {
+  const { _ } = useLingui();
   const info = s.info;
+  const [showWarning, setShowWarning] = React.useState(false);
 
   return (
-    <div
-      className="w-full rounded-lg border overflow-hidden"
-      style={{
-        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
-        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
-      }}
-    >
-      {/* Header */}
-      <div className="flex items-center gap-2.5 px-3 py-2.5">
+    <div className="flex min-h-0 flex-1 flex-col space-y-2">
+      <div className="flex flex-col items-center gap-2.5 text-center">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
-            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 82%)',
+            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 40%)',
+            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 82%)',
+            color: 'var(--accent-secondary)',
           }}
         >
-          <Download className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+          <Download className="h-4 w-4" />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Update Available
+        <span className="min-w-0">
+          <span className="block text-base font-bold" style={{ color: 'var(--accent-secondary)' }}>
+            <Trans>Update Available</Trans>
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            DragonFruit v{info.version} is available (you have v{info.currentVersion})
+          <span className="block text-xs mt-1 font-medium" style={{ color: 'var(--text-muted)' }}>
+            {info.version === info.currentVersion
+              ? formatUpdateVersionChip(info.version, _)
+              : formatUpdateVersionReady(info.version, _)}
           </span>
         </span>
       </div>
 
-      {/* Release notes */}
       {info.body && (
         <div
-          className="mx-3 mb-2 max-h-28 overflow-y-auto custom-scrollbar rounded-md border px-2.5 py-2 text-[11px] leading-relaxed"
+          className="flex-1 min-h-0 overflow-y-auto custom-scrollbar rounded-md border px-3 py-3 text-xs leading-relaxed"
           style={{
             borderColor: 'var(--border-subtle)',
-            background: 'color-mix(in srgb, var(--surface-1), transparent 30%)',
+            background: 'var(--surface-0)',
             color: 'var(--text-muted)',
           }}
         >
-          <div className="prose prose-invert prose-sm max-h-none text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <div className="prose prose-invert max-w-none prose-sm prose-headings:font-semibold prose-headings:text-[13px] prose-headings:text-[var(--text-strong)] prose-h2:text-sm prose-h3:text-xs prose-p:text-xs prose-p:leading-relaxed prose-p:text-[var(--text-muted)] prose-li:text-xs prose-li:leading-relaxed prose-a:text-[var(--accent)] prose-a:underline-offset-2 hover:prose-a:underline prose-strong:text-[var(--text-strong)] prose-code:font-mono prose-code:text-[11px] prose-code:font-medium prose-code:text-[var(--text-strong)] prose-code:bg-[var(--surface-1)] prose-code:border prose-code:border-[var(--border-subtle)] prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-[var(--surface-1)] prose-pre:border prose-pre:border-[var(--border-subtle)] prose-pre:p-3 prose-pre:rounded-md prose-pre:overflow-x-auto prose-pre:text-[11px] prose-pre:leading-relaxed prose-pre:prose-code:bg-transparent prose-pre:prose-code:border-0 prose-pre:prose-code:p-0 prose-pre:prose-code:text-[var(--text-muted)] prose-hr:my-2 prose-hr:border-[var(--border-subtle)]" style={{ color: 'var(--text-muted)' }}>
             <ReactMarkdown>{info.body}</ReactMarkdown>
           </div>
         </div>
       )}
 
-      {/* Actions — single "Download & Install" button using the plugin */}
-      <div className="flex items-center gap-2 px-3 pb-2.5">
-        <button
-          type="button"
-          onClick={onDownload}
-          className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] font-semibold transition-all duration-150"
-          style={{
-            color: 'var(--accent-contrast)',
-            borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
-            background: 'color-mix(in srgb, var(--accent), transparent 12%)',
-          }}
+      <div className="grid grid-cols-3 gap-2">
+        <Button
+          variant="secondary"
+          size="md"
+          onClick={onCheck}
+          className="inline-flex items-center justify-center gap-1.5"
         >
-          <Download className="h-3.5 w-3.5" />
-          Download &amp; Install
-        </button>
-
-        <button
-          onClick={async () => {
-            const url = `https://github.com/Open-Resin-Alliance/DragonFruit/releases/tag/v${info.version}`;
-            try {
-              const { invoke } = await import('@tauri-apps/api/core');
-              await invoke('open_external_url', { url });
-            } catch {
-              window.open(url, '_blank');
-            }
+          <RotateCcw className="h-3.5 w-3.5" />
+          <Trans>Check for Updates</Trans>
+        </Button>
+        <Button
+          variant="secondary"
+          size="md"
+          className="inline-flex items-center justify-center gap-1.5"
+          onClick={() => {
+            void openExternal(`https://github.com/Open-Resin-Alliance/DragonFruit/releases/tag/v${info.version}`);
           }}
-          className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] transition-all duration-150"
           style={{
-            color: 'var(--text-muted)',
-            borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-2)',
-            cursor: 'pointer',
+            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 86%)',
+            color: 'var(--accent-secondary)',
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          View on GitHub
-        </button>
-
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-all duration-150"
-          style={{
-            color: 'var(--text-muted)',
-            borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-2)',
-          }}
+          <Trans>View on GitHub</Trans>
+        </Button>
+        <Button
+          variant="tinted-accent"
+          size="md"
+          onClick={() => setShowWarning(true)}
+          className="inline-flex items-center justify-center gap-1.5"
         >
-          Dismiss
-        </button>
+          <Download className="h-3.5 w-3.5" />
+          <Trans>Install</Trans>
+        </Button>
       </div>
+      <StructuredDialogModal
+        open={showWarning}
+        ariaLabel={_(msg`Confirm update and restart`)}
+        title={_(msg`Update & Restart?`)}
+        subtitle={formatUpdateReadyToInstall(info.version, _)}
+        icon={<Download className="h-4 w-4" />}
+        iconTone="warning"
+        onClose={() => setShowWarning(false)}
+        onBackdropClick={() => setShowWarning(false)}
+        actions={
+          <>
+            <Button variant="secondary" size="auto" className="!h-9 px-4 text-xs" onClick={() => setShowWarning(false)}>{_(msg`Cancel`)}</Button>
+            <Button variant="tinted-accent" size="auto" className="!h-9 px-4 text-xs inline-flex items-center justify-center gap-1.5" onClick={async () => { setShowWarning(false); try { await (window as unknown as { __df_flushAutosave?: () => Promise<void> }).__df_flushAutosave?.(); } catch {} try { await new Promise<void>((r) => setTimeout(r, 400)); } catch {} onDownload(); }}>{_(msg`Update & Restart`)}</Button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <p>
+            <Trans>DragonFruit will <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>download, verify and install</span> the update, then restart automatically.</Trans>
+          </p>
+          <p>
+            <Trans>Please <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>save your scene and any unsaved progress</span> before continuing.</Trans>
+          </p>
+          <p
+            className="pt-3 mt-1 border-t text-sm font-semibold leading-relaxed"
+            style={{ borderColor: 'var(--border-subtle)', color: 'color-mix(in srgb, var(--danger), white 32%)' }}
+          >
+            <Trans>Unsaved changes may be lost.</Trans>
+          </p>
+        </div>
+      </StructuredDialogModal>
     </div>
   );
 }
@@ -272,68 +287,61 @@ function DownloadingState({
 }: {
   state: UpdateState & { status: 'downloading' };
 }) {
+  const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const { contentLength, downloaded } = s.progress;
-  const pct = contentLength > 0
-    ? ((downloaded / contentLength) * 100).toFixed(1)
-    : '0.0';
+  const pctValue = contentLength > 0 ? (downloaded / contentLength) * 100 : 0;
+  const pct = fmt.fixed(pctValue, 1);
 
   return (
-    <div
-      className="w-full rounded-lg border px-3 py-2.5"
-      style={{
-        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
-        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
-      }}
-    >
-      <div className="flex items-center gap-2.5 mb-2">
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 py-16">
+      <div className="flex flex-col items-center gap-3 text-center">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border"
           style={{
-            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
             background: 'color-mix(in srgb, var(--accent), var(--surface-1) 82%)',
+            color: 'var(--accent)',
           }}
         >
-          <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--accent)' }} />
+          <Spinner size="xl" />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Downloading Update
+        <span className="min-w-0">
+          <span className="block text-lg font-bold" style={{ color: 'var(--text-strong)' }}>
+            <Trans>Downloading Update</Trans>
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            {formatBytes(downloaded)} / {formatBytes(contentLength)} ({pct}%)
+          <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
+            {formatUpdateDownloadedBytes(formatBytes(downloaded, fmt), formatBytes(contentLength, fmt), pct, _)}
           </span>
         </span>
       </div>
-      <ProgressBar pct={parseFloat(pct)} />
+      <div className="w-full max-w-sm">
+        <ProgressBar pct={pctValue} />
+      </div>
     </div>
   );
 }
 
 function InstallingState() {
   return (
-    <div
-      className="w-full rounded-lg border px-3 py-2.5"
-      style={{
-        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
-        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
-      }}
-    >
-      <div className="flex items-center gap-2.5">
+    <div className="flex flex-col items-center justify-center gap-4 py-16">
+      <div className="flex flex-col items-center gap-3 text-center">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border"
           style={{
-            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
             background: 'color-mix(in srgb, var(--accent), var(--surface-1) 82%)',
+            color: 'var(--accent)',
           }}
         >
-          <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--accent)' }} />
+          <Spinner size="xl" />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Installing Update…
+        <span className="min-w-0">
+          <span className="block text-lg font-bold" style={{ color: 'var(--text-strong)' }}>
+            <Trans>Installing Update…</Trans>
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            The update is being installed. DragonFruit will restart automatically.
+          <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
+            <Trans>The update is being installed. DragonFruit will restart automatically.</Trans>
           </span>
         </span>
       </div>
@@ -341,10 +349,11 @@ function InstallingState() {
   );
 }
 
+
 function InstalledState() {
   return (
     <div
-      className="w-full rounded-lg border px-3 py-2.5"
+      className="w-full rounded-md border p-2.5"
       style={{
         borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 50%)',
         background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)',
@@ -352,20 +361,75 @@ function InstalledState() {
     >
       <div className="flex items-center gap-2.5">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
             background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 85%)',
           }}
         >
-          <CloudOff className="h-3.5 w-3.5" style={{ color: 'var(--accent-secondary)' }} />
+          <CloudOff className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Update installed. DragonFruit will restart.
+            <Trans>Update installed. DragonFruit will restart.</Trans>
           </span>
         </span>
       </div>
+    </div>
+  );
+}
+
+function ExternalState() {
+  return (
+    <div
+      className="w-full rounded-md border p-2.5"
+      style={{
+        borderColor: 'var(--border-subtle)',
+        background: 'var(--surface-0)',
+      }}
+    >
+      <div className="flex items-center gap-2.5">
+        <span
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+          }}
+        >
+          <Package className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <Trans>Managed by Flatpak</Trans>
+          </span>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            <Trans>DragonFruit for Linux ships as a Flatpak, so updates are installed outside the app.</Trans>
+          </span>
+        </span>
+        <button
+          type="button"
+          onClick={() => void openExternal(LINUX_RELEASES_URL)}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-all duration-150"
+          style={{
+            color: 'var(--text-muted)',
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--surface-2)',
+          }}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          <Trans>Releases</Trans>
+        </button>
+      </div>
+      <code
+        className="mt-2 block rounded-md border px-2 py-1.5 text-[11px]"
+        style={{
+          borderColor: 'var(--border-subtle)',
+          background: 'var(--surface-1)',
+          color: 'var(--text-muted)',
+        }}
+      >
+        flatpak update {FLATPAK_APP_ID}
+      </code>
     </div>
   );
 }
@@ -379,7 +443,7 @@ function ErrorState({
 }) {
   return (
     <div
-      className="w-full rounded-lg border px-3 py-2.5"
+      className="w-full rounded-md border p-2.5"
       style={{
         borderColor: 'color-mix(in srgb, #b91c1c, var(--border-subtle) 50%)',
         background: 'color-mix(in srgb, #b91c1c, var(--surface-0) 92%)',
@@ -387,19 +451,19 @@ function ErrorState({
     >
       <div className="flex items-center gap-2.5">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'color-mix(in srgb, #b91c1c, var(--border-subtle) 38%)',
             background: 'color-mix(in srgb, #b91c1c, var(--surface-1) 85%)',
           }}
         >
-          <CloudOff className="h-3.5 w-3.5" style={{ color: '#ef4444' }} />
+          <CloudOff className="h-4 w-4" style={{ color: '#ef4444' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Update Failed
+            <Trans>Update Failed</Trans>
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             {message}
           </span>
         </span>
@@ -414,7 +478,7 @@ function ErrorState({
           }}
         >
           <RotateCcw className="h-3 w-3" />
-          Retry
+          <Trans>Retry</Trans>
         </button>
       </div>
     </div>
@@ -437,21 +501,83 @@ export function UpdateCheckerSection({
     checkForUpdates,
     downloadAndInstall,
     dismiss,
+    channel,
   } = useUpdateChecker();
+  const [debugForceAvailable, setDebugForceAvailable] = React.useState<UpdateState | null>(null);
+
+  // Persist session
+
+
+
+  // Dev shortcut: just enables allow_same_version for regular logic until reload
+  React.useEffect(() => {
+    const handleKeyDown = async (e: CustomEvent) => {
+      console.log('[updater] checker hotkey raw', (e as CustomEvent).detail);
+      const detail = e.detail as unknown;
+      if (!detail || typeof detail !== 'object' || !('key' in detail) || !('ctrlKey' in detail) || !('shiftKey' in detail)) return;
+      const key = (detail as { key: unknown }).key;
+      const ctrlKey = (detail as { ctrlKey: unknown }).ctrlKey;
+      const shiftKey = (detail as { shiftKey: unknown }).shiftKey;
+      if (ctrlKey !== true || shiftKey !== true || typeof key !== 'string' || key.toLowerCase() !== 'u') return;
+      enableAllowSameVersionForSession();
+      console.log('[updater] debug Ctrl+Shift+U -> allow_same_version enabled for session, channel:', channel);
+      try {
+        const { fetchUpdateInfo } = await import('@/features/updater/updateBridge');
+        const info = await fetchUpdateInfo(channel, true);
+        console.log('[updater] debug fetch result:', info);
+        if (info) setDebugForceAvailable({ status: 'available', info } as UpdateState);
+      } catch {}
+    };
+    window.addEventListener('app-hotkey-keydown', handleKeyDown as unknown as EventListener);
+    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as unknown as EventListener);
+  }, [channel]);
+
+  // Auto-check when opening Updates tab
+  React.useEffect(() => {
+    checkForUpdates();
+  }, [checkForUpdates]);
+  const effectiveState = debugForceAvailable ?? state;
+  const handleDismissDebug = React.useCallback(() => {
+    if (debugForceAvailable) setDebugForceAvailable(null);
+    dismiss();
+  }, [debugForceAvailable, dismiss]);
+  const handleForceInstall = React.useCallback(async () => {
+    if (debugForceAvailable?.status === 'available') return;
+    enableAllowSameVersionForSession();
+    console.log('[updater] Install in Up to date clicked, fetching allowSameVersion=true, channel:', channel);
+    try {
+      const { fetchUpdateInfo } = await import('@/features/updater/updateBridge');
+      const info = await fetchUpdateInfo(channel, true);
+      console.log('[updater] forceInstall fetch result:', info);
+      if (info) {
+        setDebugForceAvailable({ status: 'available', info } as UpdateState);
+        return;
+      }
+    } catch {
+      // ignore
+    }
+  }, [channel, debugForceAvailable]);
 
   return (
     <div className={className}>
-      {state.status === 'idle' && <IdleState onCheck={checkForUpdates} />}
-      {state.status === 'checking' && <CheckingState />}
-      {state.status === 'up-to-date' && <UpToDateState onCheck={checkForUpdates} />}
-      {state.status === 'available' && (
-        <AvailableState state={state} onDownload={downloadAndInstall} onDismiss={dismiss} />
+      {effectiveState.status === 'external' && <ExternalState />}
+      {effectiveState.status === 'idle' && <IdleState onCheck={checkForUpdates} />}
+      {effectiveState.status === 'checking' && <CheckingState />}
+      {effectiveState.status === 'up-to-date' && (
+        <UpToDateState onCheck={checkForUpdates} />
       )}
-      {state.status === 'downloading' && <DownloadingState state={state} />}
-      {state.status === 'installing' && <InstallingState />}
-      {state.status === 'installed' && <InstalledState />}
-      {state.status === 'error' && (
-        <ErrorState message={state.message} onRetry={checkForUpdates} />
+      {effectiveState.status === 'available' && (
+        <AvailableState
+          state={effectiveState as UpdateState & { status: 'available' }}
+          onDownload={downloadAndInstall}
+          onCheck={checkForUpdates}
+        />
+      )}
+      {effectiveState.status === 'downloading' && <DownloadingState state={effectiveState as UpdateState & { status: 'downloading' }} />}
+      {effectiveState.status === 'installing' && <InstallingState />}
+      {effectiveState.status === 'installed' && <InstalledState />}
+      {effectiveState.status === 'error' && (
+        <ErrorState message={(effectiveState as UpdateState & { status: 'error' }).message} onRetry={checkForUpdates} />
       )}
     </div>
   );

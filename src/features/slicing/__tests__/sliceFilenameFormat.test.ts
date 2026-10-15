@@ -3,8 +3,10 @@ import test from 'node:test';
 
 import {
   appendSliceExtension,
+  convertSliceFilenameHeightUnit,
   DEFAULT_SLICE_FILENAME_FORMAT,
   getSavedSliceFilenameFormat,
+  inferSliceFilenameHeightUnit,
   resolveSliceFilenameFormat,
   resolveSliceOutputExtension,
   sanitizeSliceFilenameBase,
@@ -32,6 +34,35 @@ test('micron token and detailed decimal millimeters use the same height', () => 
     layerHeightMm: 0.0375,
   });
   assert.equal(result.basename, '0.0375mm_37.5um');
+});
+
+test('height unit selector converts saved tokens and legacy micron suffixes', () => {
+  assert.equal(inferSliceFilenameHeightUnit('{printer_name}_{layer_height_um}um'), 'um');
+  assert.equal(convertSliceFilenameHeightUnit('{layer_height_um}um', 'mm'), '{layer_height}mm');
+  assert.equal(convertSliceFilenameHeightUnit('{printer_name}_{layer_height}mm', 'um'), '{printer_name}_{layer_height_um}µm');
+  assert.equal(convertSliceFilenameHeightUnit('{layer_height_um}um', 'um'), '{layer_height_um}µm');
+});
+
+test('plate context keeps batch outputs distinct with and without plate placeholders', () => {
+  const first = resolveSliceFilenameFormat('{material_name}', { ...context, plateIndex: 1, plateName: 'Left' });
+  const second = resolveSliceFilenameFormat('{material_name}', { ...context, plateIndex: 2, plateName: 'Left' });
+  assert.equal(first.basename, 'Résine_Tough_plate01');
+  assert.equal(second.basename, 'Résine_Tough_plate02');
+  assert.equal(resolveSliceFilenameFormat('{plate_name}_{plate_index}', { ...context, plateIndex: 2, plateName: 'Left' }).basename, 'Left_02');
+  assert.equal(appendSliceExtension('Left_02.CTB', 'ctb'), 'Left_02.ctb');
+  assert.equal(resolveSliceFilenameFormat('foo.ctb', { ...context, plateIndex: 1, extension: 'ctb' }).basename, 'foo_plate01.ctb');
+  assert.equal(appendSliceExtension('foo_plate01.ctb', 'ctb'), 'foo_plate01.ctb');
+  const longName = '界'.repeat(100);
+  const longFirst = resolveSliceFilenameFormat('{plate_name}', { ...context, plateName: longName, plateIndex: 1, extension: 'ctb' });
+  const longSecond = resolveSliceFilenameFormat('{plate_name}', { ...context, plateName: longName, plateIndex: 2, extension: 'ctb' });
+  assert.notEqual(longFirst.basename, longSecond.basename);
+  assert.match(longFirst.basename ?? '', /_plate01$/);
+  assert.match(longSecond.basename ?? '', /_plate02$/);
+  assert.ok(new TextEncoder().encode(appendSliceExtension(longFirst.basename!, 'ctb')).length <= 255);
+  const explicitIndexAfterLongName = resolveSliceFilenameFormat('{plate_name}_{plate_index}', {
+    ...context, plateName: longName, plateIndex: 2, extension: 'ctb',
+  });
+  assert.match(explicitIndexAfterLongName.basename ?? '', /_plate02$/);
 });
 
 test('unknown and malformed placeholders have actionable errors', () => {

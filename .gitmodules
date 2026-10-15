@@ -16,3 +16,13 @@
 [submodule "plugins/lys-import"]
 	path = plugins/lys-import
 	url = https://github.com/Open-Resin-Alliance/df-plugin-lys
+[submodule "plugins/uniformation"]
+	path = plugins/uniformation
+	url = https://github.com/Open-Resin-Alliance/df-plugin-uniformation.git
+[submodule "plugins/chitubox-import"]
+	path = plugins/chitubox-import
+	url = https://github.com/Open-Resin-Alliance/df-plugin-chitubox
+[submodule "plugins/lumen"]
+	path = plugins/lumen
+	url = https://github.com/Open-Resin-Alliance/LumenFormat.git
+	branch = main

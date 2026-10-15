@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { resetKickstandsInState } from '@/supports/state';
 import test from 'node:test';
 
 import { buildAutoBracedSnapshot } from '../autoBracing/autoBrace';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
+import { createEmptySupportCollections } from '../supportTypeRegistry';
 import type { Roots, SupportState, Trunk } from '../types';
 
 function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
@@ -22,6 +24,7 @@ function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
 function createTrunk(id: string, modelId: string, rootId: string, segmentId: string, x: number, y = 0, topZ = 4): Trunk {
     return {
         id,
+        typeId: 'trunk',
         modelId,
         rootId,
         segments: [
@@ -40,15 +43,7 @@ function createTrunk(id: string, modelId: string, rootId: string, segmentId: str
 
 function createEmptySnapshot(): SupportState {
     return {
-        roots: {},
-        trunks: {},
-        branches: {},
-        leaves: {},
-        twigs: {},
-        sticks: {},
-        braces: {},
-        anchors: {},
-        knots: {},
+        ...createEmptySupportCollections(),
         selectedId: null,
         selectedCategory: null,
         hoveredId: null,
@@ -89,12 +84,15 @@ test('buildAutoBracedSnapshot replaces old braces and generates braces with vali
         diameter: 1.1,
     };
 
+    // Marked as auto-bracing's own: a run replaces what it generated. An
+    // unmarked brace is hand-placed and is now kept, which this test predates.
     snapshot.braces['brace-old'] = {
         id: 'brace-old',
         modelId,
         startKnotId: 'k-old-a',
         endKnotId: 'k-old-b',
         profile: { diameter: 0.9 },
+        generatedBy: 'autoBracing',
     };
 
     const settings = createDefaultAutoBracingSettings();
@@ -226,7 +224,10 @@ test('buildAutoBracedSnapshot respects maxBraceLengthMm during grouping', () => 
     snapshot.trunks[trunk2.id] = trunk2;
     snapshot.trunks[trunk3.id] = trunk3;
 
-    const settings = { ...createDefaultAutoBracingSettings(), maxBraceLengthMm: 6 };
+    // seedSpacingMm is in mm (no grid scaling). 25mm puts Voronoi seed targets
+    // exactly on trunk-1 (x=0) and trunk-3 (x=25), so trunk-1/trunk-2 (5mm gap)
+    // share a cluster and trunk-3 is isolated by the 6mm max distance.
+    const settings = { ...createDefaultAutoBracingSettings(), maxBraceLengthMm: 6, seedSpacingMm: 25, seedJitterMm: 0 };
     const result = buildAutoBracedSnapshot(snapshot, settings);
 
     // trunk-1 and trunk-2 should have a brace. trunk-3 should have NONE.
@@ -242,3 +243,41 @@ test('buildAutoBracedSnapshot respects maxBraceLengthMm during grouping', () => 
     assert.equal(hasBrace1_2, true, 'Trunk 1 and 2 should be braced (5mm gap < 6mm limit)');
     assert.equal(hasBrace3, false, 'Trunk 3 should not be braced as it is too far from the group');
 });
+
+test('dense grid forests brace trunks together instead of spawning kickstands', () => {
+    // A 10×10 tall trunk grid at 2.24 mm spacing (the auto-grid shape).
+    // Voronoi cells can isolate single trunks; bracing must pair model-wide
+    // so every trunk finds a second brace axis — zero kickstands, braces on.
+    resetKickstandsInState();
+    const snapshot = createEmptySnapshot();
+    const spacing = 2.24;
+    for (let r = 0; r < 10; r++) {
+        for (let c = 0; c < 10; c++) {
+            const id = `t${r}-${c}`;
+            const x = c * spacing;
+            const y = r * spacing;
+            snapshot.roots[`r${id}`] = createRoot(`r${id}`, 'grid-model', x, y);
+            snapshot.trunks[id] = createTrunk(id, 'grid-model', `r${id}`, `seg-${id}`, x, y, 30);
+        }
+    }
+
+    const result = buildAutoBracedSnapshot(snapshot, createDefaultAutoBracingSettings());
+
+    assert.ok(result.generatedBraceCount > 0, 'the grid gets braced');
+    assert.equal(Object.keys(result.snapshot.kickstands).length, 0,
+        'every grid trunk finds two brace axes — no kickstands needed');
+});
+
+/** Three trunks in a row: the minimum auto-bracing will act on. */
+function buildLadder() {
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-a';
+    for (const [i, id] of ['a', 'b', 'c'].entries()) {
+        const root = createRoot(`root-${id}`, modelId, i * 2);
+        const trunk = createTrunk(`trunk-${id}`, modelId, root.id, `seg-${id}`, i * 2, 0, 10);
+        snapshot.roots[root.id] = root;
+        snapshot.trunks[trunk.id] = trunk;
+    }
+    return { snapshot, modelId };
+}
+

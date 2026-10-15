@@ -17,11 +17,20 @@
 /dist/
 /out/
 **/target/
+# per-variant build dirs from scripts/bench/run-slicing-bench.sh --codegen
+**/target-codegen-*/
 src-tauri/frontend-dist/**
 src-tauri/gen/
 
 # generated artifacts
 **/generated*
+
+# mkdocs Material social-plugin cache (fonts + generated card images).
+# A stale/empty font cache here breaks `mkdocs build` (infinite recursion in the
+# social plugin), so never commit it.
+/.cache/
+# mkdocs build output
+/site/
 
 # environment files (can opt-in for committing if needed)
 .env*
@@ -38,6 +47,7 @@ yarn-error.log*
 next-env.d.ts
 
 # local/project-specific
+/.claude/
 /.windsurf/
 /.vscode/
 /*.code-workspace
@@ -78,5 +88,18 @@ src-tauri/permissions.toml
 
 # compiled native binaries / COM DLLs (built locally, not committed)
 src-tauri/windows-resources/*.dll
+src-tauri/windows-resources/nsis-plugins/
+src-tauri/windows-resources/runtime-version.nsh
+src-tauri/windows-resources/runtime-version.wxi
 src-tauri/binaries/dragonfruit-voxl-thumbnailer*
 **/build
+# Editor swap files (vim leaves these next to the file being edited)
+*.swp
+*.swo
+*~
+
+# Local-only refactor scaffolding (golden masters + harness). Never commit.
+/local-only/
+
+# Directory-scoped agent notes: local working aids, not project docs.
+src/**/AGENTS.md

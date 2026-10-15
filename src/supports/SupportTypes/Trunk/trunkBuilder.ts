@@ -6,29 +6,26 @@
  */
 
 import * as THREE from 'three';
+import { v4 as uuidv4 } from 'uuid';
 import { Vec3, Roots, Trunk, Segment, Joint } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition, getSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
+// Direct, not through the barrel: the barrel re-exports renderers and their
+// React hooks, which a server route cannot import.
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import { getJointDiameter } from '../../constants';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
+import { applySizingOverridesToSettings } from '../../autoSupport/parameterSizing';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { calculateStandardPlacement, type TrunkPlacementResult } from '../../PlacementLogic/StandardPlacement';
-import { calculateSmartPlacementV2 } from '../../PlacementLogic/Pathfinding';
+import { calculateSmartPlacementV3 } from '../../PlacementLogicV3/SmartPlacementV3';
 import type { LimitationCode, WarningCode } from '../../types';
 import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteTypes';
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
 import { normalizeFirstConstructionJoint, withCentralStraightSupportJoint } from './trunkConstructionJoints';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { perfMark, perfMeasureWithSpike } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
-
-function uuidv4() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
-}
 
 const JOINT_CHAIN_Z_EPSILON = 0.0001;
 
@@ -116,7 +113,6 @@ function buildTipProfile(
         standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? (Math.PI / 4),
     };
 }
-
 export interface TrunkBuildInput {
     tipPos: Vec3;
     tipNormal: Vec3;
@@ -135,8 +131,17 @@ export interface TrunkBuildInput {
         tipLengthMm?: number;
         tipDiskLengthOverrideMm?: number;
     };
+    /** Small islands (voxel/minima <5mm² or z<15) bypass SDF — true straight, no central joint */
+    isSmallIsland?: boolean;
+    /**
+     * Build as if grid mode were off: the base is routed to wherever the model
+     * allows instead of snapping to a lattice node. The auto run's fallback for a
+     * candidate the grid could not serve uses this, so the rescued support is an
+     * ordinary free-standing pillar rather than a node placement that failed its
+     * own gates.
+     */
+    ignoreGrid?: boolean;
 }
-
 export interface TrunkBuildResult {
     root: Roots;
     trunk: Trunk;
@@ -159,51 +164,6 @@ export interface TrunkBuildResult {
  * - Route-driven shaft segments and joints
  * - ContactCone at the tip
  */
-// ---------------------------------------------------------------------------
-// Placement result cache — covers V2 A* + V1 fallback together.
-// Multi-entry LRU per model (24 slots) avoids cache thrashing while staying
-// tight enough that trunk/stick decisions revalidate near collision boundaries.
-// ---------------------------------------------------------------------------
-const PLACEMENT_CACHE_QUANT = 0.1; // mm - keep hover cache tight near collision/cavity boundaries
-const NORMAL_CACHE_QUANT = 0.02;   // ~1.1 degree buckets
-const MAX_PLACEMENT_CACHE_ENTRIES = 24;
-
-// Map<modelId, Map<cacheKey, result>> — insertion-ordered for FIFO eviction
-type ModelPlacementCache = Map<string, TrunkPlacementResult>;
-const placementCacheByModel = new Map<string, ModelPlacementCache>();
-
-function placementCacheKey(tipPos: Vec3, tipNormal: Vec3): string {
-    const Q = PLACEMENT_CACHE_QUANT;
-    const NQ = NORMAL_CACHE_QUANT;
-    return `${Math.round(tipPos.x / Q)},${Math.round(tipPos.y / Q)},${Math.round(tipPos.z / Q)},${Math.round(tipNormal.x / NQ)},${Math.round(tipNormal.y / NQ)},${Math.round(tipNormal.z / NQ)}`;
-}
-
-function getPlacementCache(modelId: string, key: string): TrunkPlacementResult | undefined {
-    return placementCacheByModel.get(modelId)?.get(key);
-}
-
-function setPlacementCache(modelId: string, key: string, result: TrunkPlacementResult): void {
-    let cache = placementCacheByModel.get(modelId);
-    if (!cache) {
-        cache = new Map();
-        placementCacheByModel.set(modelId, cache);
-    }
-    if (cache.has(key)) {
-        // Re-insert to promote to newest (for FIFO correctness)
-        cache.delete(key);
-    } else if (cache.size >= MAX_PLACEMENT_CACHE_ENTRIES) {
-        // Evict oldest entry (first inserted)
-        cache.delete(cache.keys().next().value!);
-    }
-    cache.set(key, result);
-}
-
-/** Clear cached placement for a specific model (call when model moves). */
-export function clearPlacementCache(modelId?: string): void {
-    if (modelId) placementCacheByModel.delete(modelId);
-    else placementCacheByModel.clear();
-}
-
 export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     const { tipPos, tipNormal, modelId, mesh, overrides, isPreview } = input;
 
@@ -223,33 +183,29 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         tipPos,
         tipNormal,
         tipProfile,
-        rootsTopZ
+        rootsTopZ,
+        isSmallIsland: input.isSmallIsland,
     };
 
     let placement: TrunkPlacementResult;
+    // Small islands keep the construction-joint bypass below, but they no
+    // longer bypass the pathfinder: an elevated small feature (a jaw overhang
+    // above the chest) dropped as a straight pillar either pierces the model
+    // or clears so tightly that the post-thickening cull kills it (#591
+    // follow-up: Puck jaw/mouth lost all supports this way).
     if (mesh) {
-        // V2 grid A* pathfinder (SDF-backed).
+        // V3 router (SDF-backed, bounded).
         // Both preview and click use FULL collision checks to ensure consistent safety.
-        // Preview uses lower budget (800 expansions) for responsiveness.
-        const v2Context = isPreview ? { maxExpansions: 800 } : undefined;
-
-        // Cache key: position + normal quantised at 0.5mm / 0.05 normal.
-        // Only used for preview → preview reuse; click-time bypasses cache
-        // to ensure fresh collision validation against any moved models.
-        const cacheKey = isPreview ? placementCacheKey(tipPos, tipNormal) : null;
-        const cached = cacheKey ? getPlacementCache(modelId, cacheKey) : undefined;
-
-        if (cached) {
-            placement = cached;
-        } else {
-            perfMark('trunk:v2-placement');
-            const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
-            perfMeasureWithSpike('trunk:v2-placement', 'trunk:v2-placement');
-            placement = result;
-            if (cacheKey) {
-                setPlacementCache(modelId, cacheKey, placement);
-            }
-        }
+        // One deterministic search, every time. Hover and click run the same
+        // code on the same inputs, so a preview cannot promise a route the click
+        // then refuses. V3 costs a few dozen SDF probes (measured ~0.04mm warm),
+        // which is not worth a cache that can only make the two paths disagree.
+        perfMark('trunk:v3-placement');
+        placement = calculateSmartPlacementV3(
+            { ...placementInput, mesh, modelId, isPreview },
+            input.ignoreGrid ? { ignoreGrid: true } : undefined,
+        );
+        perfMeasureWithSpike('trunk:v3-placement', 'trunk:v3-placement');
     } else {
         placement = calculateStandardPlacement(placementInput);
     }
@@ -263,7 +219,10 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
 export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: TrunkPlacementResult): TrunkBuildResult {
     const { tipPos, tipNormal, modelId, overrides, mesh } = input;
     const settings = getSettings();
-    const settingsCodeHex = encodeSupportSettingsHex(settings);
+    // Hex must describe the geometry actually built — tier overrides applied
+    // (auto supports) — or Support Studio loads the global parameters instead
+    // of the support's own.
+    const settingsCodeHex = encodeSupportSettingsHex(applySizingOverridesToSettings(settings, overrides));
     const tipProfile = buildTipProfile(settings, overrides);
     const tipDiskLengthOverrideMm = overrides?.tipDiskLengthOverrideMm;
     const shaftDiameter = overrides?.shaftDiameterMm ?? settings.shaft.diameterMm;
@@ -333,8 +292,9 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     });
     const routeJoints = normalizedAuthoredChains.routeJoints;
     const isStraightSupport = routeJoints.length === 0;
-    const initialConstructionJoints = normalizedAuthoredChains.constructionJoints;
-    const fallbackConstructionJoints = isStraightSupport
+    // Small islands: no central joint at all — true straight 1 segment even if grid offset 1mm is slanted slightly
+    const initialConstructionJoints = input.isSmallIsland ? [] : normalizedAuthoredChains.constructionJoints;
+    const fallbackConstructionJoints = isStraightSupport && !input.isSmallIsland
         ? withCentralStraightSupportJoint({
             basePos: placement.basePos,
             rootTopZ: rootsTopZ,
@@ -372,6 +332,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         warning: placement.warning,
         angle: placement.angle,
         coneAxis: effectiveConeAxis,
+        gridIgnored: placement.gridIgnored,
     };
     const route: TrunkRouteResult | SnappedTrunkRouteResult = placement.snappedNodeKey
         ? {
@@ -490,6 +451,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     // Build Trunk
     const trunk: Trunk = {
         id: trunkId,
+        typeId: 'trunk',
         modelId: modelId, // Link to model
         settingsCodeHex,
         rootId: rootId,

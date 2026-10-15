@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildCtbLayerPlan } from '../../slicing/ctbLayerTiming';
-import { ctbPreviewLayer, estimateCtbPlanSeconds, sliceProfileFingerprint } from '../ctbArtifact';
+import { ctbPreviewLayer, estimateCtbPlanSeconds, sliceProfileFingerprint, invalidatePrintingArtifacts } from '../ctbArtifact';
 import type { MaterialProfile, PrinterProfile } from '../../profiles/profileStore';
 import { DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS } from '../../profiles/profileStore';
 import type { CtbTimingConfigV1 } from '../../slicing/ctbTiming';
@@ -32,7 +32,7 @@ test('estimate counts independent waits and max of LOD/motion, including tiny du
   assert.ok(Math.abs(estimateCtbPlanSeconds(snapshot) - 82.21) < 1e-8);
 });
 
-test('phase 3 settings edits require reslice; legacy ID fingerprint stays compatible', () => {
+test('settings edits require reslice independently of CTB timing enablement', () => {
   const printer = { id: 'p', display: { outputFormat: '.ctb', formatVersion: 'v4', settingsMode: 'simple' } } as PrinterProfile;
   const material = { id: 'm', ctbTimingV1: config, liftSpeedMmMin: 60, name: 'Resin' } as MaterialProfile;
   const original = sliceProfileFingerprint(printer, material);
@@ -40,11 +40,11 @@ test('phase 3 settings edits require reslice; legacy ID fingerprint stays compat
   assert.notEqual(original, sliceProfileFingerprint(printer, { ...material, ctbTimingV1: { ...config, startupDummy: false } }));
   assert.notEqual(original, sliceProfileFingerprint(printer, { ...material, ctbTimingV1: { ...config, enabled: false } }));
   assert.equal(original, sliceProfileFingerprint(printer, { ...material, name: 'Renamed' }));
-  assert.equal(sliceProfileFingerprint(printer, { ...material, ctbTimingV1: undefined }), 'p::m');
+  assert.notEqual(original, sliceProfileFingerprint(printer, { ...material, ctbTimingV1: undefined }));
   const disabled = { ...material, ctbTimingV1: { ...config, enabled: false } };
   const disabledBaseline = sliceProfileFingerprint(printer, disabled);
   assert.notEqual(disabledBaseline, original, 'enabling timing invalidates a legacy artifact with the same IDs');
-  assert.equal(disabledBaseline, sliceProfileFingerprint(printer, { ...disabled, liftSpeedMmMin: 90 }), 'disabled timing retains legacy ID-only invalidation');
+  assert.notEqual(disabledBaseline, sliceProfileFingerprint(printer, { ...disabled, liftSpeedMmMin: 90 }), 'disabled timing still invalidates changed motion');
   assert.notEqual(original, sliceProfileFingerprint({ ...printer, display: { ...printer.display, formatVersion: 'v5' } }, material));
   assert.notEqual(original, sliceProfileFingerprint(printer, { ...material, id: 'other-material' }));
 });
@@ -86,4 +86,28 @@ test('PWM range edits and default edits invalidate the slice without requiring f
   assert.equal(original, sliceProfileFingerprint({ ...printer,
     ctbMotionCapability: { firmware: 'declared', confirmed: true },
   }, material));
+});
+
+
+test('reslicing plate B cannot restore plate A after settings or geometry invalidation', () => {
+  const artifact = (profileFingerprint: string, nativeTempPath: string) => ({ profileFingerprint, nativeTempPath }) as import('../../slicing/sliceExportOrchestrator').SliceExportArtifact;
+  const a = artifact('settings-1', 'plate-a.ctb');
+  const b = artifact('settings-1', 'plate-b.ctb');
+  const plates = { a: { artifact: a }, b: { artifact: b } };
+  let invalid = invalidatePrintingArtifacts(new Set(), plates, 'settings-1');
+  assert.equal(invalid.size, 0);
+  invalid = invalidatePrintingArtifacts(invalid, plates, 'settings-2');
+  assert.ok(invalid.has(a) && invalid.has(b));
+  const replacementB = artifact('settings-2', 'new-plate-b.ctb');
+  plates.b.artifact = replacementB;
+  invalid = invalidatePrintingArtifacts(invalid, plates, 'settings-2');
+  assert.ok(invalid.has(a), 'switching back to A still requires reslicing');
+  assert.ok(!invalid.has(replacementB), 'only the new B snapshot is current');
+  invalid = invalidatePrintingArtifacts(invalid, plates);
+  assert.ok(invalid.has(replacementB), 'a geometry edit invalidates every existing snapshot');
+  const replacementA = artifact('settings-2', 'new-plate-a.ctb');
+  plates.a.artifact = replacementA;
+  invalid = invalidatePrintingArtifacts(invalid, plates, 'settings-2');
+  assert.ok(!invalid.has(replacementA));
+  assert.ok(invalid.has(replacementB), 'slicing A does not undo B geometry invalidation');
 });

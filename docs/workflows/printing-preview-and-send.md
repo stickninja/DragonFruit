@@ -43,7 +43,10 @@ explanation.
 
 For CTB V4/V5 profiles, open the material's **Timing** tab and enable
 **Use per-layer CTB settings**. This switch governs both per-layer timing and
-range lift/retract motion. Set separate bottom and normal timings. Range overrides use
+range lift/retract motion. Set separate burn-in and normal defaults there and use
+the inline calculator for light-off delay. Open **Layer overrides** to add a
+single-layer or range rule. Select the rule to edit its **Timing**, **Motion**,
+or **Light** fields; a range can also have an optional name. Range overrides use
 inclusive, one-based **model layer** numbers. Single-layer overrides use the
 same start and end. Later matching rules take precedence only for the fields
 they specify. The LOD calculator adds constant-speed motion time to the desired
@@ -67,7 +70,7 @@ still rejects range motion overrides. No firmware identification or
 confirmation is required. The encoded file and inspector show the written
 values; confirm behavior on the intended printer separately.
 
-In the Timing tab, blank motion fields inherit independently from the bottom
+In **Layer overrides → Motion**, blank motion fields inherit independently from the burn-in
 or normal settings; later matching ranges win per field. Simple mode exposes
 lift travel and lift/retract speeds, with retract travel equal to total lift.
 Two Stage mode also exposes the second lift stage and the second-stage retract
@@ -81,9 +84,9 @@ groups before applying a value to each group. A motion or calculator input
 change after Apply leaves saved raw LOD and waits untouched and prompts you to
 reapply. Invalid speeds or a retract split larger than total lift show errors
 and block export until corrected. If Two Stage values remain after switching
-to Simple, clear them in the Timing tab or switch back to Two Stage.
+to Simple, clear them in Layer overrides → Motion or switch back to Two Stage.
 
-The optional startup dummy adds one file layer before model layer 1. It uses a
+The optional startup dummy remains in the Timing tab. It adds one file layer before model layer 1. It uses a
 tiny pixel, short exposure, fixed PWM byte 1 and minimal lift. It shares the
 first real layer's Z; every model layer retains its original Z and raster sample
 height.
@@ -93,9 +96,9 @@ the preview stays blank instead of showing model geometry.
 
 Timing controls require CTB V4/V5 (including encrypted variants). Unsupported
 versions fail before mesh preparation; disable timing or select a supported
-version. With timing disabled, legacy export behavior is preserved. Changes to
-enabled CTB timing, exposure or motion settings invalidate the current artifact
-and require re-slicing.
+version. With timing disabled, legacy export behavior is preserved. Changes to timing, exposure, motion, PWM, anti-aliasing, or printer layer settings
+invalidate affected plate artifacts and require re-slicing, including when CTB
+timing is disabled. Re-slicing one plate does not make another plate current.
 
 **Reslice Now** regenerates the preview without overwriting the previously saved
 file. The completed action becomes Preview, the old saved path is cleared, and
@@ -129,6 +132,11 @@ Available actions depend on slice intent and connected integrations:
 
 If file intent was used, DragonFruit can reveal the saved file location in desktop runtime.
 
+The filename pattern is edited in **Settings → Slicing**. Printing shows the
+resolved output name, and an individual save can use a different name in the
+file dialog. For multiple plates, **Slice All** saves one file per populated
+plate in a chosen folder and checks for existing target files before writing.
+
 ## Practical checks
 
 - Verify key support-heavy layers before sending.
@@ -143,3 +151,14 @@ If file intent was used, DragonFruit can reveal the saved file location in deskt
 ![Printing workflow placeholder](../assets/placeholders/workflow-printing-preview-send.png)
 
 > Screenshot placeholder: Printing mode with layer scrub slider and printing action panel.
+
+### Multiple plates and CTB ranges
+
+Each plate has its own generated file, model-layer count, and encoded-layer count.
+The left-side encoded settings inspector follows the selected plate's completed
+file. It clears old values while a different layer or file is being read. A dummy
+adds one file layer to that plate without shifting its model layers.
+
+Ranges use model layers on each plate. If a range ends beyond a shorter plate,
+that plate cannot be exported until the range is corrected; ranges are never
+silently shortened. The error reports that plate's valid model-layer bounds.

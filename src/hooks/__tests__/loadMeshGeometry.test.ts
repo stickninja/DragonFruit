@@ -117,6 +117,7 @@ function makeReport(overrides?: {
     model_triangle_count: null,
     residual_issues: [],
     fully_repaired: false,
+    cancelled: false,
     total_ms: 0,
   };
 }
@@ -222,5 +223,112 @@ describe('evaluateNativeRepairQualityGate', () => {
     const decision = evaluateNativeRepairQualityGate(report);
     assert.equal(decision.reject, true);
     assert.match(decision.reason ?? '', /boundary edges increased too aggressively/i);
+  });
+});
+
+describe('processGeometry classification bypass', () => {
+  it('skips native processing entirely when skipClassification is true', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+    let classifyCalled = false;
+    let repairCalled = false;
+    await processGeometry(geom, {
+      skipClassification: true,
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+      _repairFromGeometry: async () => { repairCalled = true; return null; }
+    });
+    assert.equal(classifyCalled, false, 'should not run classification');
+    assert.equal(repairCalled, false, 'should not run repair');
+  });
+
+  it('calls only classification when skipClassification is false and nativeProcessingMode is classify-only', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+    let classifyCalled = false;
+    let repairCalled = false;
+    await processGeometry(geom, {
+      skipClassification: false,
+      nativeProcessingMode: 'classify-only',
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+      _repairFromGeometry: async () => { repairCalled = true; return null; }
+    });
+    assert.equal(classifyCalled, true, 'should run classification');
+    assert.equal(repairCalled, false, 'should not run repair');
+  });
+
+  it('runs classification when nativeProcessingMode is none but skipClassification is not true', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+    let classifyCalled = false;
+    let repairCalled = false;
+    await processGeometry(geom, {
+      nativeProcessingMode: 'none',
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+      _repairFromGeometry: async () => { repairCalled = true; return null; }
+    });
+    assert.equal(classifyCalled, true, 'should run classification');
+    assert.equal(repairCalled, false, 'should not run repair');
+  });
+
+  /**
+   * A VOXL entry's baked classification is the answer the native pass would
+   * produce for these exact triangles, so re-running the classifier can only
+   * reproduce it — at the cost of staging the whole mesh across the IPC
+   * boundary. These two tests pin that the split is restored instead.
+   */
+  it('uses a baked classification instead of running the native classifier', async () => {
+    // Four triangles laid out model-first: the baked boundary puts the first
+    // three in the model section and the last one in the support section.
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([
+      0,0,0, 1,0,0, 0,1,0,
+      0,0,1, 1,0,1, 0,1,1,
+      0,0,2, 1,0,2, 0,1,2,
+      0,0,3, 1,0,3, 0,1,3,
+    ], 3));
+    let classifyCalled = false;
+    let repairCalled = false;
+
+    const result = await processGeometry(geom, {
+      bakedClassification: { ...makeReport(), model_triangle_count: 3 },
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+      _repairFromGeometry: async () => { repairCalled = true; return null; },
+    });
+
+    assert.equal(classifyCalled, false, 'baked classification must not be recomputed');
+    assert.equal(repairCalled, false, 'should not run repair');
+    assert.equal(result.meshDefects?.nativeRepairReport?.model_triangle_count, 3);
+    assert.equal(
+      result.meshDefects?.modelSectionGeometry?.getAttribute('position').count,
+      9,
+      'model section must hold the first 3 triangles',
+    );
+    assert.equal(
+      result.meshDefects?.supportSectionGeometry?.getAttribute('position').count,
+      3,
+      'support section must hold the trailing triangle',
+    );
+  });
+
+  it('honours a baked classification that found no split', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+    let classifyCalled = false;
+
+    const result = await processGeometry(geom, {
+      // null (not undefined): classified, and there is no boundary to split at.
+      bakedClassification: { ...makeReport(), model_triangle_count: null },
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+    });
+
+    assert.equal(classifyCalled, false, 'a no-split classification is still an answer');
+    assert.ok(result.meshDefects?.nativeRepairReport);
+    assert.equal(result.meshDefects?.supportSectionGeometry, undefined);
+    assert.equal(result.meshDefects?.modelSectionGeometry, undefined);
   });
 });

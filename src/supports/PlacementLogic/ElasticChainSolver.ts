@@ -1,11 +1,15 @@
 import { Vec3 } from '../types';
+import type { SupportTypeId } from '../supportTypeRegistry';
 
 /**
- * Snapshot of a branch's state before dragging begins.
+ * Snapshot of a flexing shaft's state before dragging begins.
  * Used to ensure reversibility (elasticity).
  */
 export interface ElasticChainInitialState {
-    branchId: string;
+    /** The flexing shaft this capture belongs to. */
+    shaftId: string;
+    /** Its type, so the solved segments are written back to the right store. */
+    shaftTypeId: SupportTypeId;
     knotPos: Vec3; // Initial Knot Position
     joints: { id: string; pos: Vec3 }[]; // Ordered bottom-to-top
     contactCone?: { pos: Vec3 }; // Fixed socket position (where shaft connects)
@@ -19,8 +23,14 @@ export interface ElasticChainResult {
 
 const EPS = 1e-6;
 
+// Matches the callers' `settings.shaft.maxAngleDeg ?? 80` fallback. NaN/undefined
+// would otherwise pass through Math.min/Math.max and silently disable every
+// angle constraint (all NaN comparisons are false), not produce NaN output.
+const FALLBACK_MAX_ANGLE_DEG = 80;
+
 function toSafeTan(maxAngleDeg: number) {
-    const clamped = Math.min(89.999, Math.max(0.001, maxAngleDeg));
+    const angle = Number.isFinite(maxAngleDeg) ? maxAngleDeg : FALLBACK_MAX_ANGLE_DEG;
+    const clamped = Math.min(89.999, Math.max(0.001, angle));
     return Math.tan((clamped * Math.PI) / 180);
 }
 
