@@ -1,6 +1,6 @@
 # Support Studio Stage 1: bracing acceptance
 
-Status: **implemented; runtime catalog regression corrected, optimized frontend UI verified, and replacement Windows build passed on 2026-10-16; manual checks and user acceptance pending.** This is a separately authorized tools sequence on the unpublished 0.4.1 integration candidate. [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance. No release or version bump is authorized by this stage.
+Status: **implemented; runtime catalog regression corrected, optimized frontend UI verified, and replacement Windows build passed on 2026-10-16; user reports bracing, undo/redo, and scene save/reopen working. Remaining detailed manual checks and explicit Stage 1 acceptance are pending.** This is a separately authorized tools sequence on the unpublished 0.4.1 integration candidate. [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance. No release or version bump is authorized by this stage.
 
 ## Scope
 
@@ -8,17 +8,17 @@ Retain legacy fixed sizing and add parent-relative uniform brace sizing, plus op
 
 ## Acceptance checks
 
-The status column distinguishes automated evidence from pending manual checks.
+The status column distinguishes automated evidence, user reports, and pending manual checks.
 The actual methods and limitations are recorded below.
 
 | Area | Required behavior | Status |
 | --- | --- | --- |
 | Fixed sizing | Existing fixed-diameter behavior, including legacy endpoint geometry, remains the default. Existing settings and presets retain that behavior. | Automated checks passed; manual/native review pending |
 | Relative sizing | Each brace diameter equals the smaller actual parent shaft segment diameter at its two attachment points multiplied by the entered percentage. Cover unequal parent diameters and attachments on different segments; the new relative brace itself stays uniform. | Automated checks passed; manual/native review pending |
-| Settings | Mode, fixed diameter, percentage, and the live-placement option survive the intended settings/preset round trips; missing fields retain compatible defaults. Invalid imported values cannot produce invalid geometry. | Automated and browser save/reload checks passed |
-| Apply/Clear | Existing brace patterns and Cluster Spacing retain their behavior. Apply preserves manual braces and supports explicit regeneration for two eligible shafts. Clear All retains its existing behavior: it deletes all braces on the current model, including manual braces, while leaving other models alone. Undo/redo restores a consistent support graph. | Automated checks passed; manual/native review pending |
-| Live placement | The option starts off. When enabled, manually placing an eligible trunk or branch generates braces using current pattern and sizing settings. Existing supports of other models or plates are excluded. Placing with the option off retains existing behavior. | Automated checks passed; manual/native placement pending |
-| History | One undo removes the placed trunk or branch and its newly generated braces; one redo restores both. Existing or manually created braces remain intact during live placement. | Automated checks passed; manual/native undo/redo pending |
+| Settings | Mode, fixed diameter, percentage, and the live-placement option survive the intended settings/preset round trips; missing fields retain compatible defaults. Invalid imported values cannot produce invalid geometry. | Automated and browser save/reload checks passed; user reports scene save/reopen working |
+| Apply/Clear | Existing brace patterns and Cluster Spacing retain their behavior. Apply preserves manual braces and supports explicit regeneration for two eligible shafts. Clear All retains its existing behavior: it deletes all braces on the current model, including manual braces, while leaving other models alone. Undo/redo restores a consistent support graph. | Automated checks passed; user reports selected-support Apply updates bracing after adding a support; remaining manual scenarios pending |
+| Live placement | The option starts off. When enabled, manually placing an eligible trunk or branch generates braces using current pattern and sizing settings. Existing supports of other models or plates are excluded. Placing with the option off retains existing behavior. | Automated checks passed; user reports bracing placement working; detailed scenario review pending |
+| History | One undo removes the placed trunk or branch and its newly generated braces; one redo restores both. Existing or manually created braces remain intact during live placement. | Automated checks passed; user reports undo/redo working |
 | Integration | TypeScript, focused automated checks, documentation accuracy, and relevant lint/localization checks pass. Record any GUI checks separately from automated checks. | Automated checks passed; runtime catalog regression corrected; production frontend UI and replacement Windows build passed |
 | Regression boundary | Manual brace placement/editing, existing support placement families, plate isolation, and legacy settings remain usable. Later tools are not introduced in this stage. | Broad automated suite passed; manual/native regression review pending |
 
@@ -80,7 +80,23 @@ identity remains `DragonFruit (stickninja)`, version `0.4.1`. The corrected
 installer is **21,975,350 bytes**, SHA-256
 `23B36F7AA4D560E9335C08D44EC73491867A60A2428296627349C19BF02FF55A`.
 This replaces the initial artifact above. Native installation has not been
-performed, user acceptance remains pending, and no new release is authorized.
+independently verified, explicit Stage 1 acceptance remains pending, and no new
+release is authorized.
+
+### User-reported manual checks
+
+The user reported that bracing "works and works well so far" and supplied a
+screenshot showing cross braces. They then confirmed "undo and redo work" and
+"save scene and reopen work as expected". These reports establish successful
+manual use of bracing placement, undo/redo, and scene save/reopen in the user's
+tested workflow. They are user-reported results, separate from the agent's
+automated and browser checks. They do not establish detailed numeric geometry,
+every placement/plate scenario, installation behavior, or physical printing.
+The user also reported that adding a support, selecting the surrounding supports,
+and applying bracing successfully adjusts the braces for the changed support
+geometry. This selected-support Apply workflow is a user-reported success, not
+an independently repeated agent check. Explicit Stage 1 acceptance has not yet
+been given.
 
 ## Browser review image
 
@@ -92,7 +108,8 @@ support placement or print strength.
 
 [Open the review image](assets/fork-support-studio/stage-1-bracing.png).
 
-Manual/native support placement and undo/redo, physical printing,
-and explicit user acceptance remain pending. Planned checks are not completed
-results. This feature makes no claim about physical print strength or printer
-behavior.
+Detailed manual geometry and regression scenarios, independently verified
+installation behavior, physical printing, and explicit Stage 1 acceptance remain
+pending. Planned checks are not completed results. This feature makes no claim
+about physical print strength or printer behavior. The next stage and release
+remain unauthorized until the required acceptance is explicit.
