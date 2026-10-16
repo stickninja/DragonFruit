@@ -116,6 +116,16 @@ release was performed.
 Stage 1 evidence remains in its [acceptance record](support-studio-bracing-acceptance.md)
 and does not establish Stage 2 behavior.
 
+## Stage 3 shared-controller regression review
+
+During Stage 3 integration on 2026-10-16, the optimized frontend's Cluster
+workflow was reviewed again against the exact assets prepared for Windows
+embedding. Preview, Cancel, option-change staleness, Apply, Undo, Redo, and
+compact layout passed: seven selected trunks reduced to four while preserving
+seven contacts, with zero uncaught page errors. This adds browser regression
+evidence after the shared preview-controller refactor; Stage 2 remains
+unaccepted pending combined review. See [Stage 3 evidence](support-studio-grid-acceptance.md).
+
 ## Remaining acceptance boundary
 
 Stage 2 remains awaiting explicit user acceptance. The user authorized Stage 3 to proceed on 2026-10-16 so Stages 2 and 3 can be reviewed together. This exception does not mark Stage 2 accepted; Stage 4 remains deferred until the user explicitly accepts both stages after combined review. A build alone does not establish graph correctness, native pointer behavior, installation behavior, or physical print strength. No physical-print claim is made by this optimization.

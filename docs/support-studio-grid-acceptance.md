@@ -1,6 +1,6 @@
 # Support Studio Stage 3: Grid Optimization acceptance
 
-Status: **implemented; automated checks and development browser review passed; production/native/build checks pending; awaiting combined Stage 2/3 review and explicit user acceptance.** On 2026-10-16 the user instructed: “Proceed with Stage 3, I’ll review Stage 2 and 3 together”. This is an explicit exception to the normal sequence, not acceptance of Stage 2. Stage 1 remains accepted. Stage 4 is deferred until explicit acceptance after combined review. [Phase 0.5](upstream-0.1.17-acceptance.md) remains unaccepted; the package remains the unpublished 0.4.1 candidate. No release or version bump is authorized.
+Status: **implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed; candidate ready for combined Stage 2/3 review and explicit user acceptance.** On 2026-10-16 the user instructed: “Proceed with Stage 3, I’ll review Stage 2 and 3 together”. This is an explicit exception to the normal sequence, not acceptance of Stage 2. Stage 1 remains accepted. Stage 4 is deferred until explicit acceptance after combined review. [Phase 0.5](upstream-0.1.17-acceptance.md) remains unaccepted; the package remains the unpublished 0.4.1 candidate. No release or version bump is authorized.
 
 ## Scope and agreed intent
 
@@ -10,24 +10,24 @@ Support Studio's **Optimize** card offers **Cluster** and **Grid**. The existing
 
 ## Acceptance checks
 
-Statuses distinguish completed synthetic automation from completed development browser review, pending production/native review, and broader manual scenarios. A planned manual check is not evidence of completion.
+Statuses distinguish completed synthetic automation, development/production browser review, and builds from pending native and broader manual scenarios. A planned manual check is not evidence of completion.
 
 | Area | Required behavior | Status |
 | --- | --- | --- |
-| Lattice and selection | Selected eligible grounded trunks align root XY and vertical lower legs to the requested spacing using the existing zero-origin grid math. Negative coordinates and half-step ties agree with placement. No whole-model fallback or implicit trunk reduction/merge. Already aligned and empty/no-op selections remain unchanged. | Automated fixtures and development browser alignment passed; production/native review pending |
-| Exact contacts | Compare all model contacts before/after, including position, normal/orientation, tip profile, diameter, penetration, socket identity, and contact-cone geometry. No model contact moves or disappears. | Automated exact-cone and codec checks passed; development browser contact counts preserved; production/native review pending |
+| Lattice and selection | Selected eligible grounded trunks align root XY and vertical lower legs to the requested spacing using the existing zero-origin grid math. Negative coordinates and half-step ties agree with placement. No whole-model fallback or implicit trunk reduction/merge. Already aligned and empty/no-op selections remain unchanged. | Automated fixtures and development/production browser alignment passed; native review pending |
+| Exact contacts | Compare all model contacts before/after, including position, normal/orientation, tip profile, diameter, penetration, socket identity, and contact-cone geometry. No model contact moves or disappears. | Automated exact-cone and codec checks passed; development/production browser contact counts preserved; native review pending |
 | Broad geometry | Cover short/tall trunks, offset and already aligned roots, rotated/scaled model context, edge-of-plate roots, blocked preferred nodes, alternate nodes, cramped geometry, curved spans, and malformed/unsupported geometry. Safe cases align; unsafe cases skip without graph damage. | Automated short/tall, tiny shifts, bounds, blocked/alternate nodes, curved/malformed fixtures passed; rotated/scaled model and broader native/manual review pending |
 | Dependencies | Preserve existing branches, leaves, knots, shared joints, and their world attachment positions or skip the trunk. Verify valid segment references and normalized attachment positions; protect kickstands, shared roots, and unsupported low attachments. | Automated branch/leaf/manual-brace world geometry and unsafe dependent checks passed; native/manual review pending |
 | Node ownership | Respect occupied nodes from selected and unselected trunks, considering root and contact ownership. Do not overlap a second pillar or silently replace an existing owner. | Automated root/contact owners, alternate nodes, and competing selected roots passed; native/manual review pending |
 | Bounds and collisions | Full root footprints remain within active plate bounds. Moved roots, lower legs, and diagonals respect model, neighboring model, support, brace, and root collision checks and length-aware angle rules. Bounded search reports failure without unbounded work. | Automated full-root bounds, shaft/root/brace and own/neighboring-mesh checks passed; native/manual review pending |
 | Bracing | Preserve manual braces, links outside selection, shared knots, and kickstands. Regenerate only disposable automatic braces internal to affected selected trunks under the current Stage 1 sizing/pattern settings. Verify relative uniform diameters and both attachment endpoints. | Automated regeneration, stationary links, external links, Crosses preservation, and rejected-link cleanup passed; Grid-specific relative-size and native/manual review pending |
 | Ownership | Reject mixed-model selections, inactive, locked or changed plates, and reassignment. Keep other models/plates and unselected graph entities intact. | Automated model/plate/lock guards passed; browser/native review pending |
-| Preview lifecycle | Preview, repeated preview, Cancel, switching Cluster/Grid, leaving Optimize, and no-op/failure do not mutate committed graph, selection, settings, history, or serialized scene. Ephemeral geometry suppresses editing consistently with Cluster preview. | Controller, DOM, and development browser Preview/Cancel/tool-switching checks passed; production/native review pending |
-| Staleness | Selection, graph, Undo/Redo, options, model mesh/transforms, active/model plate, plate bounds, or relevant bracing/grid context changes invalidate a proposal. Apply revalidates the full context and cannot commit stale geometry. | Controller/DOM checks passed, including locks/bounds and normalized settings; development browser option staleness passed; production/native review pending |
-| Atomic history | Apply produces one typed support edit. One Undo restores the complete previous graph; one Redo restores the aligned graph with contacts/dependents/braces intact. Repeated cycles are stable; no-op and Cancel create no entry. | Controller/DOM checks and development browser Apply/Undo/Redo passed; production/native cycles pending |
+| Preview lifecycle | Preview, repeated preview, Cancel, switching Cluster/Grid, leaving Optimize, and no-op/failure do not mutate committed graph, selection, settings, history, or serialized scene. Ephemeral geometry suppresses editing consistently with Cluster preview. | Controller, DOM, and development/production browser Preview/Cancel/tool-switching checks passed; native review pending |
+| Staleness | Selection, graph, Undo/Redo, options, model mesh/transforms, active/model plate, plate bounds, or relevant bracing/grid context changes invalidate a proposal. Apply revalidates the full context and cannot commit stale geometry. | Controller/DOM checks passed, including locks/bounds and normalized settings; development/production browser option staleness passed; native review pending |
+| Atomic history | Apply produces one typed support edit. One Undo restores the complete previous graph; one Redo restores the aligned graph with contacts/dependents/braces intact. Repeated cycles are stable; no-op and Cancel create no entry. | Controller/DOM checks and development/production browser Apply/Undo/Redo passed; native cycles pending |
 | Save/reopen | Applied geometry survives ordinary binary VOXL save/parse/store reload with exact contacts, valid knots, ownership, and braces. Legacy scenes and Stage 1 settings remain compatible. Preview/options do not serialize. Distinguish codec automation from actual browser/native save/reopen. | Actual binary VOXL serialization/parse/store roundtrip passed; browser/native save/reopen pending |
-| UI/localization | Cluster and Grid choices, numeric controls/units, summaries, skip/no-op/failure feedback, and disabled/stale states are usable at compact sizes. Extract and compile all catalog messages; test compact production IDs. Verify the existing Grid placement tab. | DOM/catalog/localization checks and development browser 1280 × 800 review passed; production/native review pending |
-| Integration/build | Record core, controller, DOM, support/scene regressions, TypeScript, relevant lint/localization gates, docs accuracy, optimized frontend and any Windows build actually performed. Preserve Stage 2 behavior. | 915 support/VOXL unit tests, DOM, TypeScript, lint/localization/docs gates, and development browser checks passed; production/native/build evidence pending |
+| UI/localization | Cluster and Grid choices, numeric controls/units, summaries, skip/no-op/failure feedback, and disabled/stale states are usable at compact sizes. Extract and compile all catalog messages; test compact production IDs. Verify the existing Grid placement tab. | DOM/catalog/localization checks and development/production browser 1280 × 800 review passed; native review pending |
+| Integration/build | Record core, controller, DOM, support/scene regressions, TypeScript, relevant lint/localization gates, docs accuracy, optimized frontend and any Windows build actually performed. Preserve Stage 2 behavior. | 915 support/VOXL unit tests, DOM, TypeScript, lint/localization/docs gates, and development/production browser checks passed; Windows x64/NSIS build passed; installation/native evidence pending |
 
 ## Checks actually performed
 
@@ -94,8 +94,49 @@ controls remained visible. The run reported **zero uncaught page errors**.
 These are development-browser checks on the synthetic scene; they do not
 establish production frontend, native installation/UI, or physical printing.
 
-Optimized frontend build and production-browser review, native installation/UI,
-and Windows package build remain pending in this record.
+### Optimized frontend evidence
+
+The optimized frontend build completed. The primary production-browser review
+served the exact static assets prepared for embedding in the Windows application.
+Grid passed actual viewport Preview, Cancel, tool switching, option-change
+staleness, Apply, Undo, and Redo: two selected trunks shifted while retaining
+their two model contacts. At **1280 × 800**, all controls remained visible.
+The run reported **zero uncaught page errors**. The primary visually inspected
+full-size and compact screenshots and found no raw catalog IDs or clipped
+controls.
+
+Cluster production regression review also passed Preview, Cancel, option-change
+staleness, Apply, Undo, Redo, and the compact layout: seven selected trunks
+reduced to four trunks while preserving seven contacts, with **zero uncaught
+page errors**. This verifies the existing Stage 2 workflow after the shared
+preview refactor; it does not mark Stage 2 accepted.
+
+These images show the actual optimized frontend and synthetic scene. They
+establish the recorded browser workflow, not native installation or print
+strength.
+
+![Stage 3 committed supports before grid optimization](assets/fork-support-studio/stage-3-grid-before.png)
+
+![Stage 3 proposed grid geometry](assets/fork-support-studio/stage-3-grid-preview.png)
+
+![Stage 3 compact production controls](assets/fork-support-studio/stage-3-grid-compact.png)
+
+### Windows candidate build
+
+Source commit `27acd6a0` produced the optimized frontend and Windows x64
+executable/NSIS installer successfully with exit code 0. The release compilation
+completed in 4 minutes 48 seconds. PE machine type `0x8664` identifies x64;
+ProductName is `DragonFruit (stickninja)`, CompanyName is `stickninja`, and
+ProductVersion remains `0.4.1`.
+
+The local combined-review candidate is named
+`DragonFruit-stickninja-grid-stage3-x64-setup.exe`, **21,987,643 bytes**, with
+SHA-256 `B6F8C10B87EC934B1727F863F5D1CACFF1C4C880C11C072A7F212DD848128B24`.
+The copied review artifact's hash matches the built installer. Documentation and
+screenshots follow separately; the candidate's application source is the commit
+above. This is an unpublished build for combined Stage 2/3 review. Installation,
+native UI, remaining detailed manual scenarios, and physical printing have not
+been independently verified. No release or version bump was performed.
 
 ## Remaining acceptance boundary
 

@@ -24,7 +24,7 @@ On 2026-10-16 the user separately authorized starting Support Studio bracing on 
 | --- | --- | --- |
 | 1 | Bracing: legacy fixed sizing or parent-relative uniform diameter, and optional automatic bracing during manual trunk/branch placement. | **Accepted by the user on 2026-10-16.** See [Stage 1 evidence and remaining limits](support-studio-bracing-acceptance.md). |
 | 2 | Cluster Optimization: reduce selected trunks while preserving model contacts using existing branch and knot geometry. | **Implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed. Candidate ready for explicit user acceptance.** See [Stage 2 acceptance](support-studio-cluster-acceptance.md). |
-| 3 | Grid Optimization: align selected grounded trunks and roots to the existing lattice while preserving model contacts. | **Implemented; automated checks and development browser review passed; production/native/build checks pending. Authorized for combined Stage 2/3 review on 2026-10-16.** See [Stage 3 acceptance](support-studio-grid-acceptance.md). Stage 2 remains unaccepted. |
+| 3 | Grid Optimization: align selected grounded trunks and roots to the existing lattice while preserving model contacts. | **Implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed. Candidate ready for combined Stage 2/3 review and explicit user acceptance.** See [Stage 3 acceptance](support-studio-grid-acceptance.md). Stage 2 remains unaccepted. |
 | 4 | Advanced Placement: Line, Arc, Fill/Rim, Area, Symmetry. | Deferred until the user explicitly accepts Stages 2 and 3 after combined review. |
 | 5 | Support influence. | Deferred until Stage 4 is accepted. |
 
