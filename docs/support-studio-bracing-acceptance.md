@@ -1,6 +1,6 @@
 # Support Studio Stage 1: bracing acceptance
 
-Status: **authorized on 2026-10-16; implementation and verification in progress; awaiting user acceptance.** This is a separately authorized tools sequence on the unpublished 0.4.1 integration candidate. [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance. No release or version bump is authorized by this stage.
+Status: **implemented; automated, browser settings, and Windows build checks passed on 2026-10-16; awaiting manual checks and user acceptance.** This is a separately authorized tools sequence on the unpublished 0.4.1 integration candidate. [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance. No release or version bump is authorized by this stage.
 
 ## Scope
 
@@ -19,7 +19,7 @@ The actual methods and limitations are recorded below.
 | Apply/Clear | Existing brace patterns and Cluster Spacing retain their behavior. Apply preserves manual braces and supports explicit regeneration for two eligible shafts. Clear All retains its existing behavior: it deletes all braces on the current model, including manual braces, while leaving other models alone. Undo/redo restores a consistent support graph. | Automated checks passed; manual/native review pending |
 | Live placement | The option starts off. When enabled, manually placing an eligible trunk or branch generates braces using current pattern and sizing settings. Existing supports of other models or plates are excluded. Placing with the option off retains existing behavior. | Automated checks passed; manual/native placement pending |
 | History | One undo removes the placed trunk or branch and its newly generated braces; one redo restores both. Existing or manually created braces remain intact during live placement. | Automated checks passed; manual/native undo/redo pending |
-| Integration | TypeScript, focused automated checks, documentation accuracy, and relevant lint/localization checks pass. Record any GUI checks separately from automated checks. | Automated checks passed as recorded below; native build pending |
+| Integration | TypeScript, focused automated checks, documentation accuracy, and relevant lint/localization checks pass. Record any GUI checks separately from automated checks. | Automated checks and Windows NSIS build passed as recorded below |
 | Regression boundary | Manual brace placement/editing, existing support placement families, plate isolation, and legacy settings remain usable. Later tools are not introduced in this stage. | Broad automated suite passed; manual/native regression review pending |
 
 ## Checks actually performed
@@ -31,7 +31,7 @@ On 2026-10-16:
 - The focused bracing controls DOM test passed (**1 test**), covering Fixed/Relative state, the default 50% value, live bracing off/on, preservation of fixed settings, and the existing pattern/Apply/Clear controls.
 - TypeScript's no-emit check passed. The clean-directory lint check passed **42 directories with 0 errors and 0 warnings**. The localization literal check passed **59 paths and 163 files**, after test selectors received the documented ignore comments. Documentation accuracy passed **167 documents**.
 - Headless Edge QA exercised the actual application with a synthetic cube: import, Support Studio bracing controls, the Fixed default and live option off, switching to Relative with 50%, entering 60%, turning live bracing on, and explicitly saving settings. Reloading and reimporting the model restored the actual Relative 60% and live-on controls as well as the stored settings. Visual review at **1280 × 800** confirmed all bracing controls remained visible without clipping. There were no uncaught page errors; the development session logged an inherited, unrelated TopBar hydration warning.
-- The production frontend compile completed during the Windows package build. Native Rust compilation was still running when this record was updated, so the native build remains pending.
+- The Windows NSIS build completed successfully from code commit `a02de123`. Production frontend compilation, its TypeScript check, static export, the optimized Windows x64 binary, and the NSIS installer all passed. The executable's PE ProductName and FileDescription are `DragonFruit (stickninja)`; ProductVersion and FileVersion are `0.4.1`. The installer SHA-256 is `99BFB0186B826F549765DDDEF96F96A9B6FCA24AB7AC9C21EBD58D00CD64872F`. This package has not been installed or released.
 
 ## Browser review image
 
@@ -42,7 +42,7 @@ records the settings review, not manual support placement or print strength.
 
 [Open the review image](assets/fork-support-studio/stage-1-bracing.png).
 
-Native build, manual/native support placement and undo/redo, physical printing,
+Manual/native support placement and undo/redo, physical printing,
 and explicit user acceptance remain pending. Planned checks are not completed
 results. This feature makes no claim about physical print strength or printer
 behavior.
