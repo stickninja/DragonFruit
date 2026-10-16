@@ -34,6 +34,7 @@ import {
 } from './defaults';
 import {
     createDefaultAutoBracingSettings,
+    normalizeAutoBracingSettings,
     type AutoBracingSettings,
 } from '../autoBracing/settings';
 import {
@@ -276,6 +277,6 @@ export function mergeSettingsWithDefaults(base?: SupportSettings): SupportSettin
         joint: { ...defaults.joint, ...base.joint },
         grid: { ...defaults.grid, ...base.grid },
         meshToMesh: { ...defaults.meshToMesh, ...base.meshToMesh },
-        autoBracing: { ...defaults.autoBracing, ...base.autoBracing },
+        autoBracing: normalizeAutoBracingSettings(base.autoBracing),
     };
 }

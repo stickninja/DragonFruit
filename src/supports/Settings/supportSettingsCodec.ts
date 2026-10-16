@@ -1,4 +1,5 @@
 import { createDefaultSettings, type SupportSettings } from './types';
+import { normalizeAutoBracingSettings } from '../autoBracing/settings';
 
 const CODEC_VERSION = 1;
 
@@ -64,7 +65,7 @@ function mergeWithDefaults(base?: SupportSettings): SupportSettings {
         joint: { ...defaults.joint, ...base.joint },
         grid: { ...defaults.grid, ...base.grid },
         meshToMesh: { ...defaults.meshToMesh, ...base.meshToMesh },
-        autoBracing: { ...defaults.autoBracing, ...base.autoBracing },
+        autoBracing: normalizeAutoBracingSettings(base.autoBracing),
     };
 }
 

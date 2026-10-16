@@ -1,7 +1,11 @@
 export type AutoBracingPattern = 'singleDiagonal' | 'crossDiagonal' | 'zigZag';
+export type BraceSizingMode = 'fixed' | 'relative';
 
 export interface AutoBracingSettings {
+    braceSizingMode: BraceSizingMode;
+    braceDiameterPercent: number;
     braceDiameterMm: number;
+    autoBraceWhilePlacing: boolean;
     initialPattern: AutoBracingPattern;
     initialDistanceMm: number;
     repeatingPattern: AutoBracingPattern;
@@ -28,6 +32,7 @@ type NumericConstraint = {
 
 type NumericAutoBracingSettingKey =
     | 'braceDiameterMm'
+    | 'braceDiameterPercent'
     | 'initialDistanceMm'
     | 'patternIntervalMm'
     | 'seedSpacingMm'
@@ -41,6 +46,7 @@ export const AUTO_BRACING_PATTERN_OPTIONS: readonly AutoBracingPattern[] = [
 ];
 
 export const AUTO_BRACING_CONSTRAINTS = {
+    braceDiameterPercent: { min: 1, max: 100, step: 1, defaultValue: 50, integer: true },
     braceDiameterMm: { min: 0.5, max: 2.0, step: 0.05, defaultValue: 1.0 },
     initialDistanceMm: { min: 0.1, max: 25, step: 0.1, defaultValue: 2.0 },
     patternIntervalMm: { min: 1.0, max: 50, step: 0.1, defaultValue: 8.0 },
@@ -116,7 +122,10 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 
 export function createDefaultAutoBracingSettings(): AutoBracingSettings {
     return {
+        braceSizingMode: 'fixed',
+        braceDiameterPercent: AUTO_BRACING_CONSTRAINTS.braceDiameterPercent.defaultValue,
         braceDiameterMm: AUTO_BRACING_CONSTRAINTS.braceDiameterMm.defaultValue,
+        autoBraceWhilePlacing: false,
         initialPattern: 'crossDiagonal',
         initialDistanceMm: AUTO_BRACING_CONSTRAINTS.initialDistanceMm.defaultValue,
         repeatingPattern: 'crossDiagonal',
@@ -135,7 +144,10 @@ export function normalizeAutoBracingSettings(input?: Partial<AutoBracingSettings
     const source = input ?? defaults;
 
     return {
+        braceSizingMode: source.braceSizingMode === 'relative' ? 'relative' : 'fixed',
+        braceDiameterPercent: clampNumeric(source.braceDiameterPercent, AUTO_BRACING_CONSTRAINTS.braceDiameterPercent),
         braceDiameterMm: clampNumeric(source.braceDiameterMm, AUTO_BRACING_CONSTRAINTS.braceDiameterMm),
+        autoBraceWhilePlacing: normalizeBoolean(source.autoBraceWhilePlacing, defaults.autoBraceWhilePlacing),
         initialPattern: normalizePattern(source.initialPattern, defaults.initialPattern),
         initialDistanceMm: clampNumeric(source.initialDistanceMm, AUTO_BRACING_CONSTRAINTS.initialDistanceMm),
         repeatingPattern: normalizePattern(source.repeatingPattern, defaults.repeatingPattern),

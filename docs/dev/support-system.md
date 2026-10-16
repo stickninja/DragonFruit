@@ -111,6 +111,60 @@ either case would clear the support selection set.
 - By hand: modifier keys choose the family, the first click's target chooses the type — [Support Placement Modifiers](../reference/support-placement-modifiers.md).
 - Automatically: `autoSupport/` generates candidates from island analysis and overhang regions, then sizes and places a forest. Gated behind an experiment.
 
+## Support Studio bracing
+
+`src/supports/autoBracing/settings.ts` owns the normalized bracing settings;
+`AutoBracingSettingsCard.tsx` presents them. Fixed diameter remains the default.
+`resolveAutoBraceDiameter` in `src/supports/autoBracing/braceDiameter.ts` resolves
+relative sizing from the smaller local shaft diameter at the two attachment
+points. For example, parents measuring 1.2 and 0.8 mm at those points with a 50%
+setting produce a uniform 0.4 mm brace:
+
+```ts
+resolveAutoBraceDiameter(
+  { ...settings, braceSizingMode: 'relative', braceDiameterPercent: 50 },
+  1.2,
+  0.8,
+);
+```
+
+Use the actual shaft segment diameters at the attachment points rather than
+assuming one nominal diameter for the whole parent. Invalid parent geometry falls back to fixed sizing.
+Relative results carry `profile.uniformDiameter` so individual, instanced, and
+export geometry use the stored diameter; legacy braces retain their existing
+geometry behavior. `resolveBraceEndpointDiameters` and `uniformBraceDiameterOf`
+in `src/supports/SupportTypes/Brace/braceDiameters.ts` expose that distinction to
+rendering and host-diameter consumers, including knot edits and snapped placement.
+See [Data Storage](data-storage.md#support-studio-bracing-settings)
+for defaults and serialization.
+
+`buildAutoBracedSnapshot` in `src/supports/autoBracing/autoBrace.ts` retains its
+full Apply behavior. Its optional `{ changedSupportIds, allowTwoSupports }`
+argument controls placement scope and the two-support minimum. `changedSupportIds` selects local
+insertion for live placement: each candidate pair must include a changed
+support, stay in its model, and satisfy the existing spacing, grid/cardinal,
+pattern, and mesh-clearance rules. Local insertion accepts two eligible supports,
+preserves existing braces and knots, suppresses duplicate attachment pairs, and
+does not generate or replace kickstands. Explicit Apply enables `allowTwoSupports`,
+allowing a just-created pair to be regenerated after a sizing change;
+the default builder and automatic-support integration retain their three-support
+minimum. Model ownership also keeps links on that model's assigned plate.
+
+`commitManualSupportPlacement` in
+`src/supports/autoBracing/liveBracing.ts` takes the support type, changed support
+IDs, placement mutation, and legacy history callback. Trunk and branch placement
+use it around primitive insertion and host repairs. With live bracing disabled
+it uses existing history.
+When enabled, one typed support edit snapshot contains the placement and its
+generated graph, including roots, knots, and host diameter repairs. If bracing
+fails, the contact placement still commits with undo. Keep history registration
+at app-root lifetime and preserve manual and unrelated braces during live placement.
+Apply preserves manual braces. Clear All retains its existing model-wide deletion
+behavior, including manual braces on that model.
+
+See [Stage 1 acceptance](../support-studio-bracing-acceptance.md) for required
+checks and the current review status.
+
 ## The placement guide line
 
 Hovering a model in Support mode marks the band where the tip will land: the

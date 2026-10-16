@@ -1,6 +1,6 @@
+import { resolveBraceEndpointDiameters } from './braceDiameters';
 import { registerSupportProxyGeometry } from '../../proxyGeometry/seam';
 import { braceBezierToBatchedShaft } from '../../Curves/batchedBezierShaft';
-import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { knotHostId, spanKnotHostType } from '../../supportTypeRegistry';
 import type { Brace } from '../../types';
 
@@ -8,31 +8,15 @@ import type { Brace } from '../../types';
  * A brace spans two knots and is addressed as a segment of its own, under the
  * synthetic id its type declares.
  *
- * The visual diameter is derived from the host knot diameters rather than read
- * off `profile.diameter`, mirroring SupportRenderer: the profile value alone
- * produces the thin brace setting and loses the dynamic sizing that matches the
- * trunk thickness the brace attaches to.
+ * Relative braces retain their resolved uniform diameter; legacy braces keep
+ * the host-knot sizing used by the detailed and scene batch renderers.
  */
 registerSupportProxyGeometry<Brace>('brace', (brace, ctx) => {
   const startKnot = ctx.state.knots[brace.startKnotId];
   const endKnot = ctx.state.knots[brace.endKnotId];
   if (!startKnot || !endKnot) return;
 
-  const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
-  const startHostDiameter = Math.min(
-    profileDiameter,
-    Math.max(
-      0.001,
-      (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-    ),
-  );
-  const endHostDiameter = Math.min(
-    profileDiameter,
-    Math.max(
-      0.001,
-      (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-    ),
-  );
+  const { startDiameter: startHostDiameter, endDiameter: endHostDiameter } = resolveBraceEndpointDiameters(brace, startKnot, endKnot);
 
   const braceDiameter = (startHostDiameter + endHostDiameter) * 0.5;
 

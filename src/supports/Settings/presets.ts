@@ -6,7 +6,7 @@
 
 import { SupportPreset, PresetCollection, SupportSettings, createDefaultSettings } from './types';
 import { getSettings, setSettings, saveSettingsToLocalStorage } from './state';
-import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
+import { createDefaultAutoBracingSettings, normalizeAutoBracingSettings } from '../autoBracing/settings';
 import { createDefaultAutoSupportSettings, migrateLegacySizingPreset } from '../autoSupport/settings';
 import type { AutoSupportSettings } from '../autoSupport/settings';
 import {
@@ -62,11 +62,11 @@ function normalizePresetSettings(
             ...fallback.meshToMesh,
             ...(source.meshToMesh ?? {}),
         },
-        autoBracing: {
+        autoBracing: normalizeAutoBracingSettings({
             ...defaults.autoBracing,
             ...fallback.autoBracing,
             ...(source.autoBracing ?? {}),
-        },
+        }),
         autoSupport: {
             ...defaults.autoSupport,
             ...fallback.autoSupport,

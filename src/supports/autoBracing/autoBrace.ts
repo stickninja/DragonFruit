@@ -31,7 +31,7 @@ import { partitionSupportsWithVoronoi } from './voronoiPartitioning';
 import { applyInitialPattern } from './initialPattern';
 import { applyRepeatingPattern } from './repeatingPattern';
 import { runZigZagChain } from './zigzagChain';
-import { buildBraceProfile } from './braceDiameter';
+import { buildBraceProfile, resolveAutoBraceDiameter } from './braceDiameter';
 import type { KickstandBuildResult } from '../SupportTypes/Kickstand/types';
 import { generateLateralStabilisers, getSupportTypeDescriptor, parsePrefixedSegmentId, isAutoBraceableShaftType, isLateralStabiliserType, lateralStabiliserTypes, spanKnotHostType, SUPPORT_TYPES, type SupportCollectionKey, type SupportEdge, type SupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
 import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
@@ -308,7 +308,7 @@ function isCardinalDelta(dx: number, dy: number, spacingMm: number): boolean {
 // Supports closer than this are one post: two brace surfaces that overlap
 // cannot be bridged, so the floor follows the brace diameter.
 function autoBracingMinPairSpanMm(settings: AutoBracingSettings): number {
-    return Math.max(AUTO_BRACING_HARD_RULES.minPairSpanMm, settings.braceDiameterMm);
+    return Math.max(AUTO_BRACING_HARD_RULES.minPairSpanMm, settings.braceSizingMode === 'relative' ? 0 : settings.braceDiameterMm);
 }
 
 function buildGroupPairs(
@@ -461,7 +461,12 @@ function buildGroupPairs(
 }
 
 /** Kickstand state is derived from the snapshot; a second argument could only disagree. */
-export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: AutoBracingSettings): BuildSnapshotResult {
+export function buildAutoBracedSnapshot(
+    snapshot: SupportState,
+    inputSettings: AutoBracingSettings,
+    options?: { changedSupportIds?: ReadonlySet<string>; allowTwoSupports?: boolean },
+): BuildSnapshotResult {
+    const localIds = options?.changedSupportIds;
     const stabiliserBase: StabiliserSource = {
         kickstands: snapshot.kickstands,
         roots: snapshot.roots,
@@ -472,9 +477,20 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     const maxRun = maxHorizontalRunFromBraceLen(settings.maxBraceLengthMm);
     // Every declared braceable shaft type -- trunk AND branch. This filtered on
     // the literal 'trunk', so branch samples were built and then discarded here.
-    const trunkSamples = buildSupportSamples(snapshot).filter(s => isAutoBraceableShaftType(s.supportKind));
+    let trunkSamples = buildSupportSamples(snapshot).filter(s => isAutoBraceableShaftType(s.supportKind));
+    if (localIds) {
+        const changed = trunkSamples.filter(s => localIds.has(s.supportId));
+        // Only the inserted supports and their neighbours enter the pairing
+        // algorithm. A click must never re-pair the existing forest.
+        trunkSamples = trunkSamples.filter(s => changed.some(c => {
+            if (c.modelId !== s.modelId) return false;
+            if (c.supportId === s.supportId) return true;
+            const distance = horizontalDistanceAtZ(c, s, referenceZForDistance(c, s));
+            return distance && distance.hDist <= maxRun + EPS;
+        }));
+    }
 
-    if (trunkSamples.length < AUTO_BRACING_HARD_RULES.minGroupSize) {
+    if (trunkSamples.length < (localIds || options?.allowTwoSupports ? 2 : AUTO_BRACING_HARD_RULES.minGroupSize)) {
         return {
             snapshot,
             generatedBraceCount: 0,
@@ -487,7 +503,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
     let stabiliserState = stabiliserBase;
     let selectedStabiliserCleared: boolean | null = null;
-    {
+    if (!localIds) {
         const nextStabilisers: StabiliserSource['kickstands'] = {};
         const nextRoots: StabiliserSource['roots'] = {};
         const nextKnots: StabiliserSource['knots'] = {};
@@ -544,7 +560,15 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     const effectiveSeedSpacingMm = settings.seedSpacingMm;
     const effectiveSeedJitterMm = settings.seedJitterMm;
 
-    const trunkGroupIds = partitionSupportsWithVoronoi(
+    const localGroups = new Map<string, string[]>();
+    if (localIds) {
+        for (const support of trunkSamples) {
+            const ids = localGroups.get(support.modelId) ?? [];
+            ids.push(support.supportId);
+            localGroups.set(support.modelId, ids);
+        }
+    }
+    const trunkGroupIds = localIds ? [...localGroups.values()] : partitionSupportsWithVoronoi(
         trunkSamples.map((trunk) => {
             const base = getGridCorrelatedPoint(trunk, activeGridSettings);
             const visualBase = getSupportBottomAnchor(trunk);
@@ -597,7 +621,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     // amongst the existing trunks in the preliminary pass.
     // A tall shaft needs two bracing axes; when no neighbour is in reach there
     // is nothing to brace against, so ask for a support that stands alone.
-    const generatedStabilisers = lateralStabiliserTypes().flatMap((typeId) =>
+    const generatedStabilisers = localIds ? [] : lateralStabiliserTypes().flatMap((typeId) =>
         generateLateralStabilisers(typeId, {
             snapshot,
             existing: stabiliserState,
@@ -632,7 +656,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         generatedStabiliserCount = generatedStabilisers.length;
     }
 
-    const stabiliserSamples = buildStabiliserSamples(stabiliserState);
+    const stabiliserSamples = localIds ? [] : buildStabiliserSamples(stabiliserState);
 
     const segmentOwnerTrunkId = new Map<string, string>();
     for (const trunk of Object.values(snapshot.trunks)) {
@@ -696,7 +720,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     const keptBraces: SupportState['braces'] = {};
     for (const [id, brace] of Object.entries(snapshot.braces)) {
         const isOurs = brace.generatedBy === 'autoBracing';
-        if (isOurs && settings.removeExistingBracing) continue;
+        if (!localIds && isOurs && settings.removeExistingBracing) continue;
         keptBraces[id] = brace;
     }
 
@@ -780,7 +804,17 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     const pairsByModel = new Map<string, Edge[]>();
     const pairDistanceOverrides = new Map<string, PairDistanceOverride>();
     const pairKey = (aId: string, bId: string) => [aId, bId].sort().join(':');
-    const braceProfile = buildBraceProfile(settings.braceDiameterMm);
+    const attachmentKey = (a: Pick<Knot, 'parentShaftId' | 'pos'>, b: Pick<Knot, 'parentShaftId' | 'pos'>) => {
+        const endpoint = (k: Pick<Knot, 'parentShaftId' | 'pos'>) =>
+            `${k.parentShaftId}@${k.pos.x.toFixed(4)},${k.pos.y.toFixed(4)},${k.pos.z.toFixed(4)}`;
+        return [endpoint(a), endpoint(b)].sort().join('|');
+    };
+    const existingAttachments = new Set<string>();
+    for (const brace of Object.values(keptBraces)) {
+        const start = snapshot.knots[brace.startKnotId];
+        const end = snapshot.knots[brace.endKnotId];
+        if (start && end) existingAttachments.add(attachmentKey(start, end));
+    }
 
     for (let groupIndex = 0; groupIndex < groupedSupports.length; groupIndex += 1) {
         const groupMembers = groupedSupports[groupIndex];
@@ -795,6 +829,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                 activeGridSettings,
                 autoBracingMinPairSpanMm(settings),
             );
+            if (localIds) pairs = pairs.filter(pair => localIds.has(pair.a.supportId) || localIds.has(pair.b.supportId));
             if (modelId) pairsByModel.set(modelId, pairs);
         }
         const extra = groupMembers.filter((s) => isLateralStabiliserType(s.supportKind));
@@ -1066,12 +1101,24 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                 const horizontalSpan = Math.sqrt(dx * dx + dy * dy);
                 if (!ignoreMaxDistance && horizontalSpan > settings.maxBraceLengthMm + EPS) return;
 
-                if (!linePassesMeshClearance(lowAnchor.pos, highAnchor.pos, lowAnchor.modelId, settings.braceDiameterMm)) return;
+                const braceDiameter = resolveAutoBraceDiameter(settings, lowAnchor.hostDiameterMm, highAnchor.hostDiameterMm);
+                if (horizontalSpan < Math.max(AUTO_BRACING_HARD_RULES.minPairSpanMm, braceDiameter)) return;
+                if (!linePassesMeshClearance(lowAnchor.pos, highAnchor.pos, lowAnchor.modelId, braceDiameter)) return;
+                const key = attachmentKey(
+                    { parentShaftId: lowAnchor.segmentId, pos: lowAnchor.pos },
+                    { parentShaftId: highAnchor.segmentId, pos: highAnchor.pos },
+                );
+                if (existingAttachments.has(key)) return;
+                existingAttachments.add(key);
+                const braceProfile = {
+                    ...buildBraceProfile(braceDiameter),
+                    ...(settings.braceSizingMode === 'relative' ? { uniformDiameter: true } : {}),
+                };
 
                 const sId = createKnotId(), eId = createKnotId(), bId = createBraceId();
                 generatedKnots[sId] = { id: sId, parentShaftId: lowAnchor.segmentId, t: lowAnchor.t, pos: lowAnchor.pos, diameter: lowAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
                 generatedKnots[eId] = { id: eId, parentShaftId: highAnchor.segmentId, t: highAnchor.t, pos: highAnchor.pos, diameter: highAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
-                generatedBraces[bId] = { id: bId, modelId: lowAnchor.modelId, startKnotId: sId, endKnotId: eId, profile: braceProfile, debugSection: section, generatedBy: 'autoBracing' };
+                generatedBraces[bId] = { id: bId, typeId: spanKnotHostType(), modelId: lowAnchor.modelId, startKnotId: sId, endKnotId: eId, profile: braceProfile, debugSection: section, generatedBy: 'autoBracing' };
 
                 // Only trunk↔trunk braces count toward the two-axis stability
                 // contract — braces to kickstands are the kickstand's own bracing.
@@ -1175,7 +1222,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     nextSnapshot.braces = { ...keptBraces, ...generatedBraces };
 
     const generatedBraceCount = Object.keys(generatedBraces).length;
-    const removedBraceCount = Object.keys(snapshot.braces).length;
+    const removedBraceCount = Object.keys(snapshot.braces).length - Object.keys(keptBraces).length;
     const changed = generatedBraceCount > 0 || removedBraceCount > 0;
 
     // Fold the kickstand result back in: nextSnapshot was spread from the input
@@ -1208,7 +1255,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
 export function runAutoBracing(): AutoBraceResult {
     const before = cloneSupportState(getSnapshot());
-    const built = buildAutoBracedSnapshot(before, getSettings().autoBracing);
+    const built = buildAutoBracedSnapshot(before, getSettings().autoBracing, { allowTwoSupports: true });
     if (!built.changed) return built;
 
     setSnapshot(built.snapshot);

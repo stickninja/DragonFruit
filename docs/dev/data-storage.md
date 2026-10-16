@@ -29,6 +29,29 @@ This page is the developer-facing source of truth for client-side persistence us
 the batch of code defaults the preset blob was written at. It is a wire field,
 not a setting — see [Code defaults that move](#code-defaults-that-move).
 
+### Support Studio bracing settings
+
+The existing `autoBracing` block in `support-settings` adds:
+
+| Field | Default | Load/write contract |
+| --- | --- | --- |
+| `braceSizingMode` | `fixed` | `fixed` or `relative`; missing or invalid modes use `fixed`. |
+| `braceDiameterPercent` | `50` | Whole percentage from 1–100; finite values are clamped and rounded; nonfinite or missing values use 50. |
+| `autoBraceWhilePlacing` | `false` | Opt-in live bracing; missing or invalid values use false. |
+
+`braceDiameterMm` retains its existing 0.5–2 mm fixed-size constraint. The
+relative result is the smaller local attachment diameter multiplied by the
+percentage; the fixed-size lower bound does not clamp that result. Full support
+settings, presets, and scene settings carry the new fields without a new storage
+key. The compact preset hex codec remains v1 and carries General geometry only;
+it does not become a bracing-settings exchange format.
+
+New relative braces store `profile.uniformDiameter: true` beside their resolved
+`profile.diameter`. This retains the uniform result through geometry assembly
+and scene serialization. Older braces without the marker retain their existing
+geometry behavior. See [Support System](support-system.md) for generation and
+history boundaries.
+
 ### Support presets (`support-presets-v1`)
 
 `src/supports/Settings/presets.ts` owns the store: `byId`, `allIds` and

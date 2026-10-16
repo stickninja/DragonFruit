@@ -453,6 +453,10 @@ msgstr ""
 msgid "{value}x"
 msgstr ""
 
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:153
+msgid "%"
+msgstr ""
+
 #. Shown when the estimated print time rounds down to under one minute. Keep the "<" comparison symbol.
 #: src/features/printing/printingMonitorFormat.ts:25
 msgid "< 1 min"
@@ -849,7 +853,7 @@ msgstr ""
 #: src/components/controls/IslandsPanel.tsx:313
 #: src/features/hole-punching/HolePunchPanel.tsx:253
 #: src/features/hollowing/HollowingPanel.tsx:371
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:236
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:267
 msgid "Apply"
 msgstr ""
 
@@ -1088,6 +1092,10 @@ msgstr ""
 #: src/components/organisms/modals/SceneFileModals.tsx:294
 #: src/components/organisms/modals/SceneFileModals.tsx:313
 msgid "Auto-Arrange"
+msgstr ""
+
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:237
+msgid "Auto-brace while placing"
 msgstr ""
 
 #. Toggle button sharing a narrow row with the preset dropdown. Keep it about as short as the English.
@@ -1444,8 +1452,13 @@ msgctxt "Mesh analysis row"
 msgid "Boundary loops"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:119
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:140
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:144
 msgid "Brace Diameter"
+msgstr ""
+
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:122
+msgid "Brace sizing"
 msgstr ""
 
 #. Support kind tab. One of four tabs on a narrow row, so keep it to one short word.
@@ -1845,7 +1858,7 @@ msgid "Clear"
 msgstr ""
 
 #: src/features/organicCut/OrganicCutPanel.tsx:889
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:249
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:280
 msgid "Clear All"
 msgstr ""
 
@@ -2111,7 +2124,7 @@ msgstr ""
 msgid "Closing the remaining gaps"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:185
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:210
 msgid "Cluster Spacing"
 msgstr ""
 
@@ -2528,7 +2541,7 @@ msgstr ""
 msgid "Crisp text and details."
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:101
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:107
 msgid "Crosses"
 msgstr ""
 
@@ -3684,6 +3697,10 @@ msgstr ""
 msgid "Fix the motion settings before applying raw LOD."
 msgstr ""
 
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:133
+msgid "Fixed"
+msgstr ""
+
 #: src/components/settings/MultiPlateSettingsTab.tsx:83
 msgctxt "Plate ordering mode: a fixed number of beds per row."
 msgid "Fixed"
@@ -3982,7 +3999,7 @@ msgstr ""
 msgid "Hierarchy"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:190
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:215
 msgctxt "Cluster spacing"
 msgid "High"
 msgstr ""
@@ -4334,11 +4351,11 @@ msgstr ""
 msgid "Inherit"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:149
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:174
 msgid "Initial Distance"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:179
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:204
 msgid "Initial Pattern"
 msgstr ""
 
@@ -4985,7 +5002,7 @@ msgstr ""
 msgid "Loops of a multi-loop cut you are not editing."
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:188
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:213
 msgctxt "Cluster spacing"
 msgid "Low"
 msgstr ""
@@ -5118,7 +5135,7 @@ msgstr ""
 msgid "Max angle from vertical for fan-out leaves"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:132
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:157
 msgid "Max Brace Distance"
 msgstr ""
 
@@ -5221,7 +5238,7 @@ msgstr ""
 msgid "Meshes"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:189
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:214
 msgctxt "Cluster spacing"
 msgid "Mid"
 msgstr ""
@@ -5298,6 +5315,13 @@ msgstr ""
 #: src/features/scene/sceneHistoryLabels.ts:45
 msgctxt "Undo history entry"
 msgid "Mirror in {axes}"
+msgstr ""
+
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:153
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:166
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:183
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:197
+msgid "mm"
 msgstr ""
 
 #: src/features/hollowing/HollowingPanel.tsx:145
@@ -5884,6 +5908,10 @@ msgstr ""
 msgid "occupied"
 msgstr ""
 
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:140
+msgid "Of smaller parent"
+msgstr ""
+
 #. Lowercase on/off marker next to a small toggle in the support settings cards.
 #: src/supports/Settings/components/BaseFlareSettingsCard.tsx:22
 msgid "off"
@@ -6316,6 +6344,10 @@ msgstr ""
 #: src/components/organisms/modals/PrintingModals.tsx:983
 #: src/components/organisms/modals/PrintingModals.tsx:989
 msgid "Pending"
+msgstr ""
+
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:141
+msgid "Percentage of the smaller parent trunk diameter at the brace ends. The brace keeps one diameter along its length."
 msgstr ""
 
 #: src/components/settings/GeneralSettingsTab.tsx:327
@@ -7022,6 +7054,10 @@ msgstr ""
 msgid "Regions where both voxel and geometric islands overlap"
 msgstr ""
 
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:133
+msgid "Relative"
+msgstr ""
+
 #: src/features/updater/updaterMessages.ts:24
 msgid "Release {releaseDate}"
 msgstr ""
@@ -7321,11 +7357,11 @@ msgstr ""
 msgid "Repairs holes, broken surfaces, and other mesh problems."
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:162
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:187
 msgid "Repeat Interval"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:180
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:205
 msgid "Repeating Pattern"
 msgstr ""
 
@@ -8351,7 +8387,7 @@ msgstr ""
 msgid "Simplified"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:101
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:107
 msgid "Single Diagonal"
 msgstr ""
 
@@ -8465,6 +8501,10 @@ msgstr ""
 
 #: src/supports/Settings/presetMessages.ts:51
 msgid "Slot {slot}"
+msgstr ""
+
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:144
+msgid "Smaller parent diameter percent"
 msgstr ""
 
 #. Tool rail label in Prepare mode. The tool brushes and smooths local surface regions.
@@ -10154,10 +10194,10 @@ msgstr ""
 msgid "Zero polygons. Infinite potential."
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:101
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:107
 msgid "Zig Zag"
 msgstr ""
 
-#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:163
+#: src/supports/autoBracing/AutoBracingSettingsCard.tsx:188
 msgid "Zigzag chains step by their own rise — interval has no effect"
 msgstr ""

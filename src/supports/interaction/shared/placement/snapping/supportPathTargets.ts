@@ -1,3 +1,4 @@
+import { uniformBraceDiameterOf } from '../../../../SupportTypes/Brace/braceDiameters';
 import type { SnapTarget } from '../../../SnappingManager';
 import type { Segment, SupportState, Vec3, Brace, Knot } from '../../../../types';
 import { getPlacementSurface, knotHostId, spanKnotHostType, SUPPORT_TYPES, typeIdForCollection, type SupportCollectionKey, type SupportTypeId } from '../../../../supportTypeRegistry';
@@ -78,11 +79,11 @@ function resolveBraceEndDiameters(brace: Brace, knotById: Record<string, Knot>):
     const endKnot = knotById[brace.endKnotId];
     if (!startKnot || !endKnot) return null;
 
-    const startDia = Math.max(
+    const startDia = uniformBraceDiameterOf(brace) ?? Math.max(
         0.001,
         (startKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
     );
-    const endDia = Math.max(
+    const endDia = uniformBraceDiameterOf(brace) ?? Math.max(
         0.001,
         (endKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
     );
@@ -204,11 +205,11 @@ export function buildSupportPathSnapTargets(
             const endKnot = knotMap.get(brace.endKnotId);
             if (!startKnot || !endKnot) continue;
 
-            const startHostDia = Math.max(
+            const startHostDia = uniformBraceDiameterOf(brace) ?? Math.max(
                 0.001,
                 (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
             );
-            const endHostDia = Math.max(
+            const endHostDia = uniformBraceDiameterOf(brace) ?? Math.max(
                 0.001,
                 (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
             );

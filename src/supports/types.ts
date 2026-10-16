@@ -255,6 +255,8 @@ export interface BraceFields {
     curve?: BraceCurve;
     profile: {
         diameter: number;
+        /** New relative braces retain their resolved diameter along the whole span. */
+        uniformDiameter?: boolean;
     };
     debugSection?: 'initial' | 'repeating';
 }

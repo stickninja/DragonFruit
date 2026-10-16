@@ -10,6 +10,9 @@ import {
 
 test('auto-bracing defaults are created from the SSOT constraint defaults', () => {
     const settings = createDefaultAutoBracingSettings();
+    assert.equal(settings.braceSizingMode, 'fixed');
+    assert.equal(settings.braceDiameterPercent, 50);
+    assert.equal(settings.autoBraceWhilePlacing, false);
 
     assert.equal(settings.braceDiameterMm, AUTO_BRACING_CONSTRAINTS.braceDiameterMm.defaultValue);
     assert.equal(settings.initialDistanceMm, AUTO_BRACING_CONSTRAINTS.initialDistanceMm.defaultValue);
@@ -21,6 +24,25 @@ test('auto-bracing defaults are created from the SSOT constraint defaults', () =
     assert.equal(settings.repeatingPattern, 'crossDiagonal');
     assert.equal(settings.debugSectionColorsEnabled, false);
     assert.equal(settings.debugVoronoiSeedsEnabled, false);
+});
+
+test('legacy and invalid sizing settings normalize without enabling live placement', () => {
+    const legacy = normalizeAutoBracingSettings({ braceDiameterMm: 0.7 });
+    assert.equal(legacy.braceDiameterMm, 0.7);
+    assert.equal(legacy.braceSizingMode, 'fixed');
+    assert.equal(legacy.braceDiameterPercent, 50);
+    assert.equal(legacy.autoBraceWhilePlacing, false);
+    const invalid = normalizeAutoBracingSettings({
+        braceSizingMode: 'other' as never,
+        braceDiameterPercent: NaN,
+        autoBraceWhilePlacing: 'true' as never,
+    });
+    assert.equal(invalid.braceSizingMode, 'fixed');
+    assert.equal(invalid.braceDiameterPercent, 50);
+    assert.equal(invalid.autoBraceWhilePlacing, false);
+    assert.equal(normalizeAutoBracingSettings({ braceDiameterPercent: -1 }).braceDiameterPercent, 1);
+    assert.equal(normalizeAutoBracingSettings({ braceDiameterPercent: 101 }).braceDiameterPercent, 100);
+    assert.equal(normalizeAutoBracingSettings({ braceDiameterPercent: 25.6 }).braceDiameterPercent, 26);
 });
 
 test('normalizeAutoBracingSettings clamps numeric values and restores invalid patterns', () => {

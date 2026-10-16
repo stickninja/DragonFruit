@@ -1,3 +1,4 @@
+import { uniformBraceDiameterOf } from './SupportTypes/Brace/braceDiameters';
 import { SupportState, SupportEntityAny, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, BraceCurve, Joint, Knot, Vec3, Leaf, Brace } from './types';
 import { calculateBezierControlPoints, getBezierPointAtT, toVector3, toVec3 } from './Curves/BezierUtils';
 import { calculateKnotPositionOnSegmentFromT } from './SupportPrimitives/Knot/knotUtils';
@@ -965,11 +966,11 @@ export function recomputeSpanHostKnotGeometry(
             pos = a.clone().lerp(b, t);
         }
 
-        const startDia = Math.max(
+        const startDia = uniformBraceDiameterOf(brace) ?? Math.max(
             0.001,
             (startKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
         );
-        const endDia = Math.max(
+        const endDia = uniformBraceDiameterOf(brace) ?? Math.max(
             0.001,
             (endKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
         );

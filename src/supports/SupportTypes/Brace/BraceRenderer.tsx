@@ -1,3 +1,4 @@
+import { resolveBraceEndpointDiameters } from './braceDiameters';
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
@@ -12,7 +13,6 @@ import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
-import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { segmentSelectionId, spanKnotHostType } from '../../supportTypeRegistry';
 
 const DEBUG_SECTION_COLORS: Record<string, string> = {
@@ -95,21 +95,8 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     const startVec = useMemo(() => new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z), [startKnot.pos.x, startKnot.pos.y, startKnot.pos.z]);
     const endVec = useMemo(() => new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z), [endKnot.pos.x, endKnot.pos.y, endKnot.pos.z]);
 
+    const { startDiameter: startHostDiameter, endDiameter: endHostDiameter } = resolveBraceEndpointDiameters(brace, startKnot, endKnot);
     const uniformBraceDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
-    const startHostDiameter = Math.min(
-        uniformBraceDiameter,
-        Math.max(
-            0.001,
-            (startKnot.diameter ?? (uniformBraceDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-        ),
-    );
-    const endHostDiameter = Math.min(
-        uniformBraceDiameter,
-        Math.max(
-            0.001,
-            (endKnot.diameter ?? (uniformBraceDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-        ),
-    );
     const bezierCurve = brace.curve?.type === 'bezier' ? brace.curve : null;
     const isBezierBrace = !!bezierCurve;
     const isTaperedBrace = Math.abs(startHostDiameter - endHostDiameter) > 1e-4;

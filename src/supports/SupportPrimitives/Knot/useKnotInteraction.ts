@@ -1,3 +1,4 @@
+import { uniformBraceDiameterOf } from '../../SupportTypes/Brace/braceDiameters';
 import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
@@ -1038,11 +1039,11 @@ export function useKnotInteraction(enabled: boolean = true) {
                 const startKnot = getKnotById(brace.startKnotId);
                 const endKnot = getKnotById(brace.endKnotId);
                 if (startKnot && endKnot) {
-                    const startDia = Math.max(
+                    const startDia = uniformBraceDiameterOf(brace) ?? Math.max(
                         0.001,
                         (startKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
                     );
-                    const endDia = Math.max(
+                    const endDia = uniformBraceDiameterOf(brace) ?? Math.max(
                         0.001,
                         (endKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
                     );
@@ -1197,11 +1198,11 @@ export function useKnotInteraction(enabled: boolean = true) {
                 t = bt;
                 finalOnLine = snapVec3(bp);
 
-                const startDia = Math.max(
+                const startDia = uniformBraceDiameterOf(curvedBrace!) ?? Math.max(
                     0.001,
                     (startKnot.diameter ?? (curvedBrace!.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
                 );
-                const endDia = Math.max(
+                const endDia = uniformBraceDiameterOf(curvedBrace!) ?? Math.max(
                     0.001,
                     (endKnot.diameter ?? (curvedBrace!.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
                 );

@@ -7,6 +7,7 @@ import { ANATOMY_CONFIG } from '../../AnatomyPreviewConfig';
 import { applyInitialPattern } from '@/supports/autoBracing/initialPattern';
 import { applyRepeatingPattern } from '@/supports/autoBracing/repeatingPattern';
 import { runZigZagChain } from '@/supports/autoBracing/zigzagChain';
+import { resolveAutoBraceDiameter } from '@/supports/autoBracing/braceDiameter';
 import { AUTO_BRACING_HARD_RULES } from '@/supports/autoBracing/settings';
 import type { AutoBracingPattern } from '@/supports/autoBracing/settings';
 
@@ -113,7 +114,6 @@ export function BracePreview({
     previewState,
 }: BracePreviewProps) {
     const autoBracing = settings.autoBracing ?? {};
-    const braceDiameter = autoBracing.braceDiameterMm ?? 1.0;
     const initialPattern: string = autoBracing.initialPattern ?? 'crossDiagonal';
     const initialDistance = autoBracing.initialDistanceMm ?? 2.0;
     const repeatingPattern: string = autoBracing.repeatingPattern ?? 'crossDiagonal';
@@ -122,7 +122,7 @@ export function BracePreview({
     const rootsDiameterMm = settings.roots?.diameterMm ?? 2.0;
     const rootsDiskHeightMm = settings.roots?.diskHeightMm ?? 0.2;
     const rootsConeHeightMm = settings.roots?.coneHeightMm ?? 0.3;
-    const braceRadius = braceDiameter / 2;
+    const braceRadius = resolveAutoBraceDiameter(autoBracing, shaftDiameterMm, shaftDiameterMm) / 2;
 
     const HIGHLIGHT_COLOR = ANATOMY_CONFIG.colors.highlight;
     const DIM_COLOR = ANATOMY_CONFIG.colors.dim;
@@ -130,7 +130,7 @@ export function BracePreview({
     const focusKey = previewState.activeSettingKey;
     const isBraceFocused = focusKey?.startsWith('brace') ?? false;
     const isPatternFocused = focusKey === 'initialPattern' || focusKey === 'repeatingPattern';
-    const isDiameterFocused = focusKey === 'braceDiameterMm';
+    const isDiameterFocused = focusKey === 'braceDiameterMm' || focusKey === 'braceDiameterPercent';
 
     // Three trunks with varying spacing to show different brace distances
     const rootsTopZ = rootsDiskHeightMm + rootsConeHeightMm;

@@ -1,3 +1,4 @@
+import { uniformBraceDiameterOf } from '../Brace/braceDiameters';
 import { useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -282,11 +283,11 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
 
                     if (brace && startKnot && endKnot) {
-                        const startDia = Math.max(
+                        const startDia = uniformBraceDiameterOf(brace) ?? Math.max(
                             0.001,
                             (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                         );
-                        const endDia = Math.max(
+                        const endDia = uniformBraceDiameterOf(brace) ?? Math.max(
                             0.001,
                             (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                         );
@@ -340,11 +341,11 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                             const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
 
                             if (brace && startKnot && endKnot) {
-                                const startDia = Math.max(
+                                const startDia = uniformBraceDiameterOf(brace) ?? Math.max(
                                     0.001,
                                     (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                                 );
-                                const endDia = Math.max(
+                                const endDia = uniformBraceDiameterOf(brace) ?? Math.max(
                                     0.001,
                                     (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                                 );

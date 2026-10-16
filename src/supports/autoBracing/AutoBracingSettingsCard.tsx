@@ -9,6 +9,7 @@ import { Button, Toast, ToastViewport } from '@/components/atoms';
 import { CENTERED_SELECT_PADDING, SelectDropdown } from '@/components/ui/SelectDropdown';
 import {
     AUTO_BRACING_PATTERN_OPTIONS,
+    AUTO_BRACING_CONSTRAINTS,
     type AutoBracingSettings,
     type AutoBracingPattern,
 } from './settings';
@@ -37,6 +38,43 @@ const activeModeStyle: React.CSSProperties = {
     color: 'var(--text-strong)',
 };
 
+const ToggleButton = ({
+    checked,
+    onChange,
+    label,
+}: {
+    checked: boolean;
+    onChange: () => void;
+    label: string;
+}) => (
+    <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={onChange}
+        className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between"
+        style={checked
+            ? {
+                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)',
+                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
+                color: 'var(--text-strong)',
+            }
+            : {
+                borderColor: 'var(--border-subtle)',
+                background: 'var(--surface-1)',
+                color: 'var(--text-muted)',
+            }}
+    >
+        <span className="text-[12px] font-semibold uppercase tracking-wide">{label}</span>
+        <span
+            className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
+            style={{ background: checked ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
+        >
+            <span className={`h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
+        </span>
+    </button>
+);
+
 export function AutoBracingSettingsCard({
     settings,
     onChange,
@@ -45,45 +83,13 @@ export function AutoBracingSettingsCard({
     status,
 }: AutoBracingSettingsCardProps) {
     const { _ } = useLingui();
+    const relativeSizing = settings.braceSizingMode === 'relative';
+    const diameterConstraint = relativeSizing
+        ? AUTO_BRACING_CONSTRAINTS.braceDiameterPercent
+        : AUTO_BRACING_CONSTRAINTS.braceDiameterMm;
     // Zigzag chains step by their own rise, not the fixed interval — when
     // both patterns are zigzag the interval does nothing and is disabled.
     const intervalDisabled = settings.initialPattern === 'zigZag' && settings.repeatingPattern === 'zigZag';
-    const ToggleButton = ({
-        checked,
-        onChange,
-        label,
-    }: {
-        checked: boolean;
-        onChange: () => void;
-        label: string;
-    }) => (
-        <button
-            type="button"
-            role="switch"
-            aria-checked={checked}
-            onClick={onChange}
-            className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between"
-            style={checked
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-                    color: 'var(--text-strong)',
-                }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                }}
-        >
-            <span className="text-[12px] font-semibold uppercase tracking-wide">{label}</span>
-            <span
-                className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
-                style={{ background: checked ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
-            >
-                <span className={`h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
-            </span>
-        </button>
-    );
 
     const renderPatternSelect = (
         label: string,
@@ -113,19 +119,38 @@ export function AutoBracingSettingsCard({
 
     return (
         <div className="space-y-1.5">
+            <div className="grid grid-cols-2 gap-1.5" role="group" aria-label={_(msg`Brace sizing`)}>
+                {(['fixed', 'relative'] as const).map((mode) => (
+                    <Button
+                        key={mode}
+                        variant="secondary"
+                        size="auto"
+                        className="!h-8 px-1.5 text-[11px]"
+                        aria-pressed={settings.braceSizingMode === mode}
+                        style={settings.braceSizingMode === mode ? activeModeStyle : { background: 'var(--surface-0)' }}
+                        onClick={() => onChange({ braceSizingMode: mode })}
+                    >
+                        {mode === 'fixed' ? _(msg`Fixed`) : _(msg`Relative`)}
+                    </Button>
+                ))}
+            </div>
             {/* Row 1: Brace Diameter | Max Brace Distance */}
             <div className="grid grid-cols-2 gap-1.5 items-start">
                 <label className="space-y-1 min-w-0">
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Brace Diameter`)}</div>
-                    <div className="relative">
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{relativeSizing ? _(msg`Of smaller parent`) : _(msg`Brace Diameter`)}</div>
+                    <div className="relative" title={relativeSizing ? _(msg`Percentage of the smaller parent trunk diameter at the brace ends. The brace keeps one diameter along its length.`) : undefined}>
                         <NumberInput
-                            value={settings.braceDiameterMm}
-                            onChange={(value) => onChange({ braceDiameterMm: value })}
-                            step={0.1}
+                            key={settings.braceSizingMode}
+                            aria-label={relativeSizing ? _(msg`Smaller parent diameter percent`) : _(msg`Brace Diameter`)}
+                            value={relativeSizing ? settings.braceDiameterPercent : settings.braceDiameterMm}
+                            onChange={(value) => onChange(relativeSizing ? { braceDiameterPercent: value } : { braceDiameterMm: value })}
+                            min={diameterConstraint.min}
+                            max={diameterConstraint.max}
+                            step={diameterConstraint.step}
                             showStepper={false}
                             className={compactInputClass}
                         />
-                        {unitHint('mm')}
+                        {unitHint(relativeSizing ? _(msg`%`) : _(msg`mm`))}
                     </div>
                 </label>
                 <label className="space-y-1 min-w-0">
@@ -138,7 +163,7 @@ export function AutoBracingSettingsCard({
                             showStepper={false}
                             className={compactInputClass}
                         />
-                        {unitHint('mm')}
+                        {unitHint(_(msg`mm`))}
                     </div>
                 </label>
             </div>
@@ -155,7 +180,7 @@ export function AutoBracingSettingsCard({
                             showStepper={false}
                             className={compactInputClass}
                         />
-                        {unitHint('mm')}
+                        {unitHint(_(msg`mm`))}
                     </div>
                 </label>
                 <label className="space-y-1 min-w-0" style={intervalDisabled ? { opacity: 0.45 } : undefined}>
@@ -169,7 +194,7 @@ export function AutoBracingSettingsCard({
                             disabled={intervalDisabled}
                             className={compactInputClass}
                         />
-                        {unitHint('mm')}
+                        {unitHint(_(msg`mm`))}
                     </div>
                 </label>
             </div>
@@ -205,6 +230,12 @@ export function AutoBracingSettingsCard({
                     })}
                 </div>
             </label>
+
+            <ToggleButton
+                checked={settings.autoBraceWhilePlacing}
+                onChange={() => onChange({ autoBraceWhilePlacing: !settings.autoBraceWhilePlacing })}
+                label={_(msg`Auto-brace while placing`)}
+            />
 
             {status && (
                 <ToastViewport zIndex={126} offset="1.25rem">

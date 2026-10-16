@@ -1,4 +1,5 @@
 "use client";
+import { resolveBraceEndpointDiameters } from './SupportTypes/Brace/braceDiameters';
 
 import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useCallback, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
@@ -1791,21 +1792,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const endKnot = braceRenderKnotsById[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
 
-            const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
-            const startHostDiameter = Math.min(
-                profileDiameter,
-                Math.max(
-                    0.001,
-                    (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-                ),
-            );
-            const endHostDiameter = Math.min(
-                profileDiameter,
-                Math.max(
-                    0.001,
-                    (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-                ),
-            );
+            const { startDiameter: startHostDiameter, endDiameter: endHostDiameter } = resolveBraceEndpointDiameters(brace, startKnot, endKnot);
             const isTaperedBrace = Math.abs(startHostDiameter - endHostDiameter) > 1e-4;
 
             // Tapered braces are rendered in the detailed path so we can preserve

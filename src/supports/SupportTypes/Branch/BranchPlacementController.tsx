@@ -1,3 +1,4 @@
+import { uniformBraceDiameterOf } from '../Brace/braceDiameters';
 /**
  * BranchPlacementController
  * 
@@ -22,6 +23,7 @@ import { addSupportEntity, subscribe, getSnapshot, addKnot, addSupportEntityWith
 import { buildContactBridge, parsePrefixedSegmentId, selectTypeForPlacement } from '../../supportTypeRegistry';
 import type { SupportTypeId } from '../../supportTypeRegistry';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
+import { commitManualSupportPlacement } from '../../autoBracing/liveBracing';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { addAction } from '../../history/actionTypes';
 import { SnapTarget } from '../../interaction/SnappingManager';
@@ -395,11 +397,11 @@ export function BranchPlacementController() {
                 const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
 
                 if (brace && startKnot && endKnot) {
-                    const startDia = Math.max(
+                    const startDia = uniformBraceDiameterOf(brace) ?? Math.max(
                         0.001,
                         (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                     );
-                    const endDia = Math.max(
+                    const endDia = uniformBraceDiameterOf(brace) ?? Math.max(
                         0.001,
                         (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                     );
@@ -485,11 +487,11 @@ export function BranchPlacementController() {
                         const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
 
                         if (brace && startKnot && endKnot) {
-                            const startDia = Math.max(
+                            const startDia = uniformBraceDiameterOf(brace) ?? Math.max(
                                 0.001,
                                 (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                             );
-                            const endDia = Math.max(
+                            const endDia = uniformBraceDiameterOf(brace) ?? Math.max(
                                 0.001,
                                 (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                             );
@@ -772,16 +774,16 @@ export function BranchPlacementController() {
             console.log('[BranchPlacement] Creating branch via snap click', branch);
             const markedBranch = markPlacementSurface('branch', branch, placementSurface);
 
-            addKnot(parentKnot);
-            addSupportEntity(markedBranch);
-
-            pushSupportHistory({
+            commitManualSupportPlacement('branch', new Set([markedBranch.id]), () => {
+                addKnot(parentKnot);
+                addSupportEntity(markedBranch);
+            }, () => pushSupportHistory({
                 type: addAction('branch'),
                 payload: {
                     branch: markedBranch,
                     knot: parentKnot,
                 },
-            });
+            }));
 
             // finalize() resets to idle + sets justFinalized to block stale useFrame
             // from re-setting previewData before React re-renders

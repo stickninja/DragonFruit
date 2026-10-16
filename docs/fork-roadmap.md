@@ -16,6 +16,20 @@ The upstream multiple-plate scene, slice, and export workflow replaces the earli
 
 Acceptance requires the checks in [the Phase 0.5 record](upstream-0.1.17-acceptance.md) to be performed and recorded, followed by explicit user acceptance. A completed build or a matching mockup alone does not complete the phase.
 
+## Support Studio tools sequence
+
+On 2026-10-16 the user separately authorized starting Support Studio bracing on the integration candidate and approved the following order. This authorization does not accept Phase 0.5 or authorize a release. The package remains the unpublished 0.4.1 candidate. Complete each stage's checks and obtain explicit user acceptance before beginning the next stage.
+
+| Stage | Scope | Status or exit condition |
+| --- | --- | --- |
+| 1 | Bracing: legacy fixed sizing or parent-relative uniform diameter, and optional automatic bracing during manual trunk/branch placement. | **Authorized; in progress, awaiting acceptance.** See [Stage 1 acceptance](support-studio-bracing-acceptance.md). |
+| 2 | Cluster Optimization. | Deferred until Stage 1 is accepted. |
+| 3 | Grid Optimization. | Deferred until Stage 2 is accepted. |
+| 4 | Advanced Placement: Line, Arc, Fill/Rim, Area, Symmetry. | Deferred until Stage 3 is accepted. |
+| 5 | Support influence. | Deferred until Stage 4 is accepted. |
+
+Stage 1 preserves existing brace patterns, Cluster Spacing, and Apply/Clear behavior. Apply and live placement preserve manual braces; Clear All continues to delete all braces on the current model, including manual braces. Relative sizing uses the smaller actual parent shaft segment diameter at each generated brace's two attachment points. The new relative brace has one uniform diameter. Automatic bracing while placing is off by default, stays within the placed support's model and plate, and shares the placement's undo operation. Cluster/grid optimization, advanced placement, and support influence are outside this stage.
+
 ## Phase 0.4 scope and acceptance
 
 Phase 0.4 adds resin quantity/cost conversions for material/color profiles and per-layer motion and PWM overrides for CTB V4/V5, including encrypted variants. This version continues to use one shared printer and material selection. Range motion no longer requires firmware identification or confirmation, and there is no replacement gate. The user accepted the phase on 2026-09-28. The acceptance record distinguishes completed file and UI checks from remaining manual and hardware checks; the 0.4.0 release notes record the verified Windows package and upgrade checks.
