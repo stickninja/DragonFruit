@@ -1,6 +1,6 @@
 # Support Studio Stage 2: Cluster Optimization acceptance
 
-Status: **active; explicitly authorized by the user on 2026-10-16 after accepting Stage 1.** Implementation and verification are in progress. This record does not mark planned checks as passed. The package remains the unpublished 0.4.1 candidate; [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance. No release or version bump is authorized.
+Status: **implemented; automated checks, optimized frontend browser review, and Windows build passed; candidate ready for explicit user acceptance.** Stage 2 was explicitly authorized by the user on 2026-10-16 after accepting Stage 1. Installation, native UI, and detailed manual/physical-print scenarios remain unverified. This record does not mark planned checks as passed. The package remains the unpublished 0.4.1 candidate; [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance. No release or version bump is authorized.
 
 ## Scope
 
@@ -27,8 +27,8 @@ physical printing must be distinguished.
 | Stale proposal | Editing supports, selection, settings, model transforms, mesh, or plate context after preview invalidates the proposal or requires a fresh preview. Apply must not commit a proposal against a different graph or context. | Automated checks and development browser preview scenarios passed; native/manual review pending |
 | Atomic history | Apply commits the complete graph change as one typed support edit. One Undo restores the exact prior graph and contacts; one Redo restores the optimized graph. Repeat cycles preserve valid dependencies and unrelated supports. | Automated and development browser Apply/Undo/Redo checks passed; native/manual review pending |
 | Save/reopen | After Apply, save and reopen a scene and compare the optimized supports, contacts, knots, ownership, and braces. Legacy scenes and Stage 1 settings remain compatible. Preview itself is not persisted. | Automated binary VOXL roundtrip passed; browser/native save-reopen pending |
-| Production UI and localization | Controls, feedback, disabled/no-op/stale states, counts, and units are readable in the optimized frontend. Extract and compile new messages for all catalogs; verify compact production IDs resolve without source-message fallbacks. Check panel visibility at a compact window size. | Compiled catalog tests passed; development compact panel reviewed; optimized frontend review pending |
-| Integration and build | Record focused core/DOM tests, regression checks for support/scene serialization, TypeScript, relevant lint/localization gates, documentation accuracy, optimized frontend build, and any Windows build actually performed. | Automated/type/lint/docs gates passed; optimized frontend and Windows builds pending |
+| Production UI and localization | Controls, feedback, disabled/no-op/stale states, counts, and units are readable in the optimized frontend. Extract and compile new messages for all catalogs; verify compact production IDs resolve without source-message fallbacks. Check panel visibility at a compact window size. | Compiled catalog tests and optimized frontend browser checks passed, including compact panel |
+| Integration and build | Record focused core/DOM tests, regression checks for support/scene serialization, TypeScript, relevant lint/localization gates, documentation accuracy, optimized frontend build, and any Windows build actually performed. | Automated/type/lint/docs gates, optimized frontend, and Windows x64/NSIS build passed; installation pending |
 
 ## Checks actually performed
 
@@ -72,7 +72,46 @@ reduction. The own-commit confirmation problem found during review was repaired
 and the final run reported no uncaught page errors. These are browser checks,
 not native installation or physical printing. The UI agent's latest focused run
 passed **10 controller tests and 4 DOM tests**, with TypeScript and focused lint
-also passing. Optimized frontend and Windows builds remain pending.
+also passing. Optimized frontend checks and the Windows build were subsequently
+completed below.
+
+### Optimized frontend evidence
+
+Implementation commit `85b373ac` was built from a clean working tree. The
+optimized frontend completed successfully. Primary headless Edge review served
+the exact static assets prepared for embedding in the Windows application,
+separately from the development server. It passed actual viewport Preview,
+Cancel, option-change staleness, Apply confirmation, Ctrl+Z Undo and
+Ctrl+Shift+Z Redo, and compact **1280 × 800** controls. The latest run reduced
+four selected trunks to two retained trunks, preserving their four contacts;
+the whole fixture changed from eight trunks to six. The run reported **zero
+uncaught page errors**. Production screenshots were visually reviewed.
+
+These images show the actual optimized frontend and synthetic scene. They
+establish the recorded browser workflow, not native installation or print
+strength.
+
+![Stage 2 committed supports before optimization](assets/fork-support-studio/stage-2-cluster-before.png)
+
+![Stage 2 proposed cluster geometry](assets/fork-support-studio/stage-2-cluster-preview.png)
+
+![Stage 2 compact production controls](assets/fork-support-studio/stage-2-cluster-compact.png)
+
+### Windows candidate build
+
+The optimized Windows x64 executable and NSIS installer completed successfully
+with exit code 0 from implementation commit `85b373ac`. The executable's PE
+ProductName is `DragonFruit (stickninja)`, CompanyName is `stickninja`, and
+FileVersion and ProductVersion remain `0.4.1`; machine type `0x8664` identifies
+x64. Documentation and screenshots follow in a separate documentation commit;
+the candidate's application code is the implementation commit above.
+
+The local review candidate is named
+`DragonFruit-stickninja-cluster-stage2-x64-setup.exe`, **21,987,099 bytes**,
+SHA-256 `A33A78AD96FDC08EA06E93FE8211D56365104B9768E020C507C69E44CFBF630B`.
+This is an unpublished build for user review. Installation, native UI behavior,
+and physical printing have not been independently verified. No version bump or
+release was performed.
 
 Stage 1 evidence remains in its [acceptance record](support-studio-bracing-acceptance.md)
 and does not establish Stage 2 behavior.
