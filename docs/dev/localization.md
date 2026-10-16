@@ -5,7 +5,7 @@ UI translations. Strings are marked in the source with the Lingui macros
 (`` t`…` ``, `` msg`…` `` resolved via `useLingui()`, or `<Trans>`), and the SWC
 plugin transforms them at build time.
 
-**Supported locales:** English (source), Spanish, German, French.
+**Supported locales:** English (source), Spanish, German, French, Slovak, Czech.
 
 ## Catalogs
 
@@ -25,14 +25,35 @@ Each locale is a pair of files directly under `src/locales/`:
 | `npm run i18n:compile` | `lingui compile`         | Reads the `.po` files and **regenerates the `.js`** catalogs consumed at runtime. Does not touch the `.po`.                                                                                        |
 | `npm run i18n:update`  | `extract && compile`     | Both steps in sequence.                                                                                                                                                                            |
 
-Typical loop: mark new strings → `npm run i18n:extract` → fill in the empty
-`msgstr` values in the `.po` files → `npm run i18n:compile` (or just
-`npm run i18n:update` once the translations are in place).
+Typical loop: mark new strings → `npm run i18n:extract` → leave new target-locale
+`msgstr` values empty for Crowdin → `npm run i18n:compile` (or run
+`npm run i18n:update` for both steps). Compilation supplies English text for
+untranslated entries until translations arrive.
 
 > The compiled `.js` catalogs are committed as build artifacts so the app build
 > never needs to invoke the Lingui CLI itself — run `extract`/`compile` locally
 > after changing translatable strings and commit the regenerated catalogs
 > alongside your `.po` edits.
+
+Extraction alone does not make a message available to the production app.
+Stage 1 bracing initially shipped updated `.po` files with stale `.js` catalogs:
+the installed UI displayed compact message IDs for its new labels and units.
+Development rendering and tests that pass source messages can hide this omission,
+and a successful frontend/native build does not regenerate the catalogs.
+
+After changing bracing messages, run the regression against the checked-in
+runtime catalogs:
+
+```bash
+node --import tsx --import ./scripts/test-unit/register.mjs --test src/supports/autoBracing/__tests__/bracingCompiledCatalogs.test.ts
+```
+
+That test covers every supported locale and looks up compact production IDs
+without passing source-message fallbacks. It checks the compiled entry exists,
+resolves to nonempty text, and does not display its ID; English must match the
+source label. Continue to verify the optimized application UI separately before
+packaging. See the [Stage 1 acceptance record](../support-studio-bracing-acceptance.md)
+for the correction and the checks actually performed.
 
 ## Crowdin
 
