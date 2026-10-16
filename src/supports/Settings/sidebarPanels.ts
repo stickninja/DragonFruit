@@ -18,6 +18,11 @@ export type { SidebarTab };
 
 /** Panels that are not support types, so nothing else can answer for them. */
 const TOOL_PANELS = {
+    optimize: {
+        tab: 'optimize',
+        settingsGroups: { tip: false, shaft: false, roots: false },
+        usesScenePreview: true,
+    },
     raft: {
         tab: 'raft',
         settingsGroups: { tip: false, shaft: false, roots: false },
@@ -48,6 +53,8 @@ export interface PanelFacts {
     settingsGroups: PanelSettingsGroups;
     /** Whether the panel draws its own anatomy preview. Derived: see the registry. */
     drawsOwnPreview: boolean;
+    /** Optimization previews the selected model in the scene, with no anatomy card. */
+    usesScenePreview?: boolean;
 }
 
 /**
@@ -133,10 +140,11 @@ export function panelDrawsOwnPreview(panel: SidebarPanel): boolean {
 /** The panel the sidebar returns to when an edit session ends. */
 export const DEFAULT_SIDEBAR_PANEL: SidebarPanel = panelForTab('supportInfo');
 
-/** Tabs other than the generic one: each opens a panel drawing its own preview. */
+/** Anatomy tabs other than the generic one: each registers its own preview. */
 export const TOOL_PANEL_TABS: readonly SidebarTab[] = [
     ...new Set(
         SIDEBAR_PANELS
+            .filter((panel) => !panelFacts(panel).usesScenePreview)
             .map((panel) => panelFacts(panel).tab)
             .filter((tab): tab is SidebarTab =>
                 tab !== 'auto' && tab !== panelFacts(DEFAULT_SIDEBAR_PANEL).tab),

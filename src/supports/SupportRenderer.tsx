@@ -8,9 +8,11 @@ import { LineMaterial, LineSegments2, LineSegmentsGeometry } from 'three-stdlib'
 import { removeRootById, subscribe, getSnapshot,
   getKickstandKnots,
   getKickstandRoots,
+  getOwnedPrimitives,
   type SupportState,
 } from './state';
 import { noteActivity } from '@/utils/debug/heartbeatContext';
+import { getClusterPreview, getClusterRenderSnapshot, subscribeClusterPreview } from './optimization/clusterPreview';
 import {
     buildSupportPlacementPreviewBatch,
     resolvePlacementPreviewMaterial,
@@ -556,7 +558,10 @@ function supportCollectionRefs(state: SupportState, ...extra: unknown[]): readon
 }
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], marqueeCandidateModelIds = EMPTY_SUPPORT_ID_LIST, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 100000, placementPreviews = EMPTY_PLACEMENT_PREVIEWS, interiorView = false, cavityGeometryByModelId, modelWorldInverseById }, ref) => {
-    const state = useSyncExternalStore(subscribe, getSnapshot);
+    const committedState = useSyncExternalStore(subscribe, getSnapshot);
+    useSyncExternalStore(subscribeClusterPreview, getClusterPreview, getClusterPreview);
+    const clusterSnapshot = mode === 'support' ? getClusterRenderSnapshot() : null;
+    const state = clusterSnapshot ?? committedState;
     noteActivity('support-mode:renderer');
     const resolvedSelection = useResolvedSelectionState();
     // These debug flags are all this renderer reads from the support settings, and
@@ -578,8 +583,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     // The knots kickstands host and the roots they own, derived from the
     // registry's edges rather than a kickstand-specific store.
-    const kickstandKnotsById = useSyncExternalStore(subscribe, getKickstandKnots, getKickstandKnots);
-    const kickstandRootsById = useSyncExternalStore(subscribe, getKickstandRoots, getKickstandRoots);
+    const committedKickstandKnots = useSyncExternalStore(subscribe, getKickstandKnots, getKickstandKnots);
+    const committedKickstandRoots = useSyncExternalStore(subscribe, getKickstandRoots, getKickstandRoots);
+    const kickstandKnotsById = useMemo(() => clusterSnapshot ? getOwnedPrimitives<Knot>('kickstand', 'knots', clusterSnapshot) : committedKickstandKnots, [clusterSnapshot, committedKickstandKnots]);
+    const kickstandRootsById = useMemo(() => clusterSnapshot ? getOwnedPrimitives<Roots>('kickstand', 'roots', clusterSnapshot) : committedKickstandRoots, [clusterSnapshot, committedKickstandRoots]);
     const activeJointDragPreview = useActiveJointDragPreview();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
@@ -592,7 +599,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return () => setInteriorSupportInteractionActive(false);
     }, [interiorView, mode, passive]);
 
-    const selectionEnabled = mode === 'support';
+    const selectionEnabled = mode === 'support' && !clusterSnapshot;
     const effectiveSelectedSupportIds = selectionEnabled ? resolvedSelection.selectedIds : [];
     const selectedSupportIdSet = useMemo(() => new Set(effectiveSelectedSupportIds), [effectiveSelectedSupportIds]);
     const selectedId = selectionEnabled ? resolvedSelection.selectedId : null;
@@ -602,7 +609,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const dimNonSelected = selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
 
-    const interactionHooksEnabled = !passive;
+    const interactionHooksEnabled = !passive && !clusterSnapshot;
     const [gizmoInteractionLockActive, setGizmoInteractionLockActive] = React.useState(false);
     const knotGizmoInteractionLockTimeoutRef = React.useRef<number | null>(null);
     const [contactDiskHudHoverActive, setContactDiskHudHoverActive] = React.useState(false);
@@ -3310,13 +3317,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     return (
         <group ref={groupRef}>
             {/* Joint Creation Manager */}
-            <JointCreationManager />
-
-            {/* Joint Gizmo */}
-            <JointGizmo />
-            {/* Knot Gizmo (for sliding knots along shafts) */}
-            <KnotGizmo />
-            <BezierGizmoManager />
+            {!clusterSnapshot && <>
+                <JointCreationManager />
+                <JointGizmo />
+                <KnotGizmo />
+                <BezierGizmoManager />
+            </>}
 
             {/* Joints are solids with no line form, so a simple view does not draw
                 them at all. Unmounted, not faded: a zero-alpha batch left mounted

@@ -52,6 +52,19 @@ and scene serialization. Older braces without the marker retain their existing
 geometry behavior. See [Support System](support-system.md) for generation and
 history boundaries.
 
+### Support Studio Cluster Optimization
+
+Cluster Optimization's reduction, reach, and angle controls live only while
+the Optimize card is mounted; leaving that tab resets them to their defaults.
+They add no localStorage key, support-settings field, preset schema, or scene
+settings block. A preview is ephemeral and must not enter serialization or
+history. Applying a proposal changes the existing trunk, branch, root, shaft,
+joint, contact-cone, and knot collections through one support edit snapshot;
+the resulting ordinary support graph uses the existing scene save/load format.
+Undo/Redo records the complete before/after graph rather than an optimization
+recipe. See [Support System](support-system.md) and the
+[Stage 2 acceptance record](../support-studio-cluster-acceptance.md).
+
 ### Support presets (`support-presets-v1`)
 
 `src/supports/Settings/presets.ts` owns the store: `byId`, `allIds` and

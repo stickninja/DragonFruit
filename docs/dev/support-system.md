@@ -139,7 +139,7 @@ See [Data Storage](data-storage.md#support-studio-bracing-settings)
 for defaults and serialization.
 
 `buildAutoBracedSnapshot` in `src/supports/autoBracing/autoBrace.ts` retains its
-full Apply behavior. Its optional `{ changedSupportIds, allowTwoSupports }`
+full Apply behavior. Its optional `{ changedSupportIds, allowTwoSupports, gridSettings }`
 argument controls placement scope and the two-support minimum. `changedSupportIds` selects local
 insertion for live placement: each candidate pair must include a changed
 support, stay in its model, and satisfy the existing spacing, grid/cardinal,
@@ -149,6 +149,8 @@ does not generate or replace kickstands. Explicit Apply enables `allowTwoSupport
 allowing a just-created pair to be regenerated after a sizing change;
 the default builder and automatic-support integration retain their three-support
 minimum. Model ownership also keeps links on that model's assigned plate.
+An explicit `gridSettings` override makes preview regeneration deterministic;
+omitting it preserves the existing current-settings fallback.
 
 `commitManualSupportPlacement` in
 `src/supports/autoBracing/liveBracing.ts` takes the support type, changed support
@@ -164,6 +166,111 @@ behavior, including manual braces on that model.
 
 See [Stage 1 acceptance](../support-studio-bracing-acceptance.md) for required
 checks and the current review status.
+
+## Support Studio Cluster Optimization
+
+`src/supports/optimization/clusterOptimization.ts` owns the pure selected-trunk
+planner. Use `buildClusterOptimization` when the user requests fewer grounded
+trunks while retaining existing model contacts. It accepts a `SupportState`,
+explicit support IDs, `ClusterOptimizationOptions`, and
+`ClusterOptimizationContext`, returning `ClusterOptimizationResult` without
+writing the live store, history, or persistence:
+
+```ts
+const proposal = buildClusterOptimization(
+  snapshot,
+  selectedTrunkIds,
+  { reductionPercent: 50, maxReachMm: 8, maxJoinAngleDeg: 45 },
+  { modelId, mesh, plateId, modelPlateId, collisionMeshes, autoBracingSettings, gridSettings },
+);
+```
+
+`DEFAULT_CLUSTER_OPTIMIZATION_OPTIONS` supplies those defaults; the angle is
+measured from vertical; reach limits the full new diagonal length. Existing
+length-aware rules can tighten the angle for longer spans. Context identifies the model and its mesh, optionally
+the active/model plate IDs, neighboring model meshes for collision queries,
+support-collision model IDs, current automatic-bracing settings, and optional
+grid settings for deterministic brace regeneration. Hosts come from the explicit selected
+trunks of that model and plate. There is no whole-model fallback.
+
+The result exposes the replacement `snapshot`, `changedCount`, selected/target/
+remaining trunk counts, before/after contact counts, `skipped` IDs with reasons,
+`candidateChecks`, spatially filtered `hostChecks`, and removed/generated automatic-brace counts. Skip reasons
+distinguish ownership, unsupported geometry, dependents, unavailable parents,
+collision, and the search limit. The requested target is a goal; safety may
+leave more trunks. `CLUSTER_MAX_CANDIDATE_CHECKS` bounds geometry queries for
+the whole run at 6000, with at most 64 host samples per candidate.
+
+A converted trunk becomes a branch with the same support ID and unchanged
+contact-cone object, including its socket joint ID and tip profile. The planner
+grafts below the first shaft segment's lowest retained knot, shortens that
+segment, and remaps attachment positions along it while preserving their world
+positions. It uses existing segment endpoints, branch geometry, collision, and
+length-aware angle rules. The new connection is a conservative straight diagonal
+to the preserved source shaft; this does not invoke the full placement
+pathfinder to search around obstacles. Blocked connections are skipped.
+`segmentDistanceSq` in `src/supports/PlacementLogic/segmentDistance.ts` is the
+shared leaf helper for support-span crossing checks, also used by automatic
+placement. Curved first/host segments, incompatible root planes,
+shared roots, unsupported legacy attachments, and unsafe dependents are skipped
+instead of invoking a destructive trunk-removal cascade.
+
+When bracing settings are supplied, only generated braces whose two endpoint
+shafts belong to selected trunks are eligible for regeneration. Their unused
+brace-only knots may be removed; shared knots, manual braces, links outside the
+selection, and existing kickstands remain protected. Regeneration connects only
+selected surviving rooted trunks, and local generation does not add kickstands.
+Such dependencies can
+prevent a conversion. The result reports regeneration separately from trunk
+reduction.
+
+The UI owns the ephemeral preview and must validate selection, live support
+collections, options, model geometry/transforms, and plate context before
+committing. A stale preview cannot be applied. A nonempty current proposal is
+one typed support edit snapshot with complete before/after state; a preview or
+no-op must not create history. Keep history handlers at app-root lifetime.
+Options and preview are session-only; applied graphs use existing serialization.
+
+`src/supports/optimization/clusterPreview.ts` owns this controller boundary.
+`ClusterPreviewContext` carries the active model, active/model plate IDs, active
+plate model IDs, current automatic-bracing settings, and required `gridSettings`.
+A minimal sequence is:
+
+```ts
+const error = previewClusterOptimization(context, options);
+const preview = getClusterPreview();
+// After the user reviews the proposal, with the same current context/options:
+const applied = applyClusterOptimization(context, options);
+```
+
+`clusterSelectionError` validates eligibility; `previewClusterOptimization`
+returns a selection/model/plate/mesh error or prepares a proposal. A planning
+exception returns `failed`, with a recoverable localized message and no graph or
+history mutation.
+`subscribeClusterPreview` observes idle/ready/stale/applied state.
+`getClusterRenderSnapshot` exposes a current proposal only to ephemeral scene
+rendering; ordinary serialization continues to read the committed store.
+`cancelClusterPreview` restores idle state, while `invalidateClusterPreview`
+marks a proposal stale. Apply rechecks collections, selection, mesh entries,
+options, model/plate context, and bracing/grid settings; a successful apply clears
+selection and pushes `SUPPORT_EDIT_REPLACE` with both complete snapshots.
+The applied summary clears after later graph, selection, or history changes;
+ordinary hover preserves it.
+
+`subscribeToAutoBraceMeshes` in
+`src/supports/autoBracing/meshGeometryStore.ts` lets the controller invalidate
+when current or neighboring geometry/transform registration changes. The
+Support Renderer displays the proposal through unselected batches and suppresses
+pointer editing and joint/knot/curve gizmos during preview.
+`getOwnedPrimitives(typeId, collection, snapshot)` in `src/supports/state.ts`
+accepts an optional explicit snapshot so kickstand-owned roots/knots are filtered
+against the displayed graph; omitting it retains the committed-store behavior.
+`PanelFacts.usesScenePreview` in `src/supports/Settings/sidebarPanels.ts` marks
+Optimize as using the scene rather than requiring an anatomy-preview renderer.
+
+See [Data Storage](data-storage.md#support-studio-cluster-optimization), the
+[user workflow](../workflows/support-placement.md#support-studio-cluster-optimization),
+and [Stage 2 acceptance](../support-studio-cluster-acceptance.md).
 
 ## The placement guide line
 

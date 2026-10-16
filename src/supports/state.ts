@@ -3020,6 +3020,7 @@ export function getSupportEntities<T = unknown>(typeId: SupportTypeId): T[] {
 export function getOwnedPrimitives<T = unknown>(
     typeId: SupportTypeId,
     collection: SupportCollectionKey,
+    snapshot: SupportState = state,
 ): Record<string, T> {
     const descriptor = getSupportTypeDescriptor(typeId);
     const fields = descriptor.edges
@@ -3027,9 +3028,9 @@ export function getOwnedPrimitives<T = unknown>(
         .map((edge) => edge.field);
     if (fields.length === 0) return {};
 
-    const source = state[collection] as unknown as Record<string, T>;
+    const source = snapshot[collection] as unknown as Record<string, T>;
     const owned: Record<string, T> = {};
-    for (const entity of Object.values(state[descriptor.location.key]) as Record<string, unknown>[]) {
+    for (const entity of Object.values(snapshot[descriptor.location.key]) as Record<string, unknown>[]) {
         for (const field of fields) {
             const id = entity[field];
             if (typeof id !== 'string') continue;

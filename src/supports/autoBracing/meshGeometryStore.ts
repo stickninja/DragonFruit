@@ -18,6 +18,13 @@ type MeshEntry = {
 };
 
 const meshEntries = new Map<string, MeshEntry>();
+const listeners = new Set<() => void>();
+
+/** Geometry/transform changes invalidate proposals that were checked against it. */
+export function subscribeToAutoBraceMeshes(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+}
 
 export function registerMeshForAutoBrace(modelId: string, geometry: THREE.BufferGeometry, transform: THREE.Matrix4): void {
     const mesh = new THREE.Mesh(geometry, DOUBLE_SIDED_MATERIAL);
@@ -25,10 +32,12 @@ export function registerMeshForAutoBrace(modelId: string, geometry: THREE.Buffer
     mesh.matrix.copy(transform);
     mesh.matrixWorld.copy(transform);
     meshEntries.set(modelId, { geometry, transform, mesh });
+    listeners.forEach((listener) => listener());
 }
 
 export function unregisterMeshForAutoBrace(modelId: string): void {
     meshEntries.delete(modelId);
+    listeners.forEach((listener) => listener());
 }
 
 export function getMeshEntryForAutoBrace(modelId: string): MeshEntry | undefined {

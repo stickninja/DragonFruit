@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react';
-import { Grid3X3, Pickaxe, Sailboat, WandSparkles, type LucideIcon } from 'lucide-react';
+import { Grid3X3, Network, Pickaxe, Sailboat, WandSparkles, type LucideIcon } from 'lucide-react';
 import type { SidebarTab } from '../sidebarPanels';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
@@ -20,6 +20,7 @@ const TABS: TabDef[] = [
     { tab: 'supportInfo', label: msg({ message: 'General', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Pickaxe },
     { tab: 'raft', label: msg({ message: 'Raft', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Sailboat },
     { tab: 'grid', label: msg({ message: 'Grid', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Grid3X3 },
+    { tab: 'optimize', label: msg({ message: 'Optimize', comment: 'Support Studio tab. Keep this label short for the compact tab row.' }), icon: Network },
     { tab: 'bracing', label: msg({ message: 'Bracing', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: WandSparkles },
 ];
 
@@ -39,15 +40,15 @@ export function SidebarPanelTabs({
         const element = containerRef.current;
         if (!element) return;
 
-        const TAB_COUNT = TABS.length;
+        const MAX_TABS_PER_ROW = 3;
         const GAP_PX = 4; // Tailwind gap-1
-        const MIN_TAB_WIDTH_FOR_ICON = 84;
+        const MIN_TAB_WIDTH_FOR_ICON = 112;
 
         const recompute = () => {
             const containerWidth = element.getBoundingClientRect().width;
             if (!Number.isFinite(containerWidth) || containerWidth <= 0) return;
-            const totalGap = GAP_PX * (TAB_COUNT - 1);
-            const tabWidth = (containerWidth - totalGap) / TAB_COUNT;
+            const totalGap = GAP_PX * (MAX_TABS_PER_ROW - 1);
+            const tabWidth = (containerWidth - totalGap) / MAX_TABS_PER_ROW;
             const next = tabWidth >= MIN_TAB_WIDTH_FOR_ICON;
             setShowIcons((prev) => (prev === next ? prev : next));
         };
@@ -79,8 +80,8 @@ export function SidebarPanelTabs({
     }, []);
 
     return (
-        <div ref={containerRef} className="grid grid-cols-4 gap-1">
-            {TABS.map((tab) => {
+        <div ref={containerRef} className="grid grid-cols-6 gap-1">
+            {TABS.map((tab, index) => {
                 const isActive = tab.tab === value;
                 const Icon = tab.icon;
 
@@ -93,7 +94,7 @@ export function SidebarPanelTabs({
                         // box measures centred, but the font's descender space leaves
                         // the capitals reading a hair low. Padding the bottom by a pixel
                         // shifts the centred content up half of it.
-                        className={`flex h-[34px] cursor-pointer items-center justify-center rounded-[5.5px] border px-2 pb-[1px] transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
+                        className={`flex h-[34px] min-w-0 cursor-pointer items-center justify-center rounded-[5.5px] border px-1 pb-[1px] transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${index < 2 ? 'col-span-3' : 'col-span-2'} ${showIcons ? 'gap-2' : 'gap-0'}`}
                         style={isActive
                             ? {
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 78%)',

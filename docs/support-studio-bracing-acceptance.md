@@ -1,10 +1,10 @@
 # Support Studio Stage 1: bracing acceptance
 
-Status: **implemented; runtime catalog regression corrected, optimized frontend UI verified, and replacement Windows build passed on 2026-10-16; user reports bracing, undo/redo, and scene save/reopen working. Remaining detailed manual checks and explicit Stage 1 acceptance are pending.** This is a separately authorized tools sequence on the unpublished 0.4.1 integration candidate. [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance. No release or version bump is authorized by this stage.
+Status: **accepted by the user on 2026-10-16.** The user explicitly stated, "Stage 1 is accepted. Proceed with Cluster Optimization". Runtime catalogs, optimized frontend UI, and the replacement Windows build were verified; the user reports bracing, undo/redo, and scene save/reopen working. Acceptance does not turn the remaining detailed manual/native and physical-print checks below into completed results. This is a separately authorized tools sequence on the unpublished 0.4.1 integration candidate. [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance. No release or version bump is authorized by this stage.
 
 ## Scope
 
-Retain legacy fixed sizing and add parent-relative uniform brace sizing, plus optional automatic bracing while manually placing trunks and branches. Retain existing patterns, Cluster Spacing, Apply/Clear, and manual brace editing. The next stages remain deferred in the [fork roadmap](fork-roadmap.md).
+Retain legacy fixed sizing and add parent-relative uniform brace sizing, plus optional automatic bracing while manually placing trunks and branches. Retain existing patterns, Cluster Spacing, Apply/Clear, and manual brace editing. [Stage 2 Cluster Optimization](support-studio-cluster-acceptance.md) is now authorized; later stages remain deferred in the [fork roadmap](fork-roadmap.md).
 
 ## Acceptance checks
 
@@ -80,8 +80,8 @@ identity remains `DragonFruit (stickninja)`, version `0.4.1`. The corrected
 installer is **21,975,350 bytes**, SHA-256
 `23B36F7AA4D560E9335C08D44EC73491867A60A2428296627349C19BF02FF55A`.
 This replaces the initial artifact above. Native installation has not been
-independently verified, explicit Stage 1 acceptance remains pending, and no new
-release is authorized.
+independently verified. The user subsequently accepted Stage 1; no new release
+is authorized.
 
 ### User-reported manual checks
 
@@ -95,8 +95,8 @@ every placement/plate scenario, installation behavior, or physical printing.
 The user also reported that adding a support, selecting the surrounding supports,
 and applying bracing successfully adjusts the braces for the changed support
 geometry. This selected-support Apply workflow is a user-reported success, not
-an independently repeated agent check. Explicit Stage 1 acceptance has not yet
-been given.
+an independently repeated agent check. The user subsequently explicitly accepted
+Stage 1 on 2026-10-16 and authorized Cluster Optimization.
 
 ## Browser review image
 
@@ -109,7 +109,7 @@ support placement or print strength.
 [Open the review image](assets/fork-support-studio/stage-1-bracing.png).
 
 Detailed manual geometry and regression scenarios, independently verified
-installation behavior, physical printing, and explicit Stage 1 acceptance remain
-pending. Planned checks are not completed results. This feature makes no claim
-about physical print strength or printer behavior. The next stage and release
-remain unauthorized until the required acceptance is explicit.
+installation behavior, and physical printing remain unverified. Planned checks
+are not completed results. This feature makes no claim about physical print
+strength or printer behavior. Stage 1 is accepted and Stage 2 is authorized;
+later stages and a release still require their own explicit acceptance.

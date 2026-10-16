@@ -57,6 +57,7 @@
             "src/supports/SupportPrimitives",
             "src/supports/SupportTypes",
             "src/supports/autoBracing",
+            "src/supports/optimization/ClusterOptimizationCard.tsx",
             "src/supports/rendering",
             "src/utils",
             "src/volumeAnalysis"

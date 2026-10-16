@@ -36,6 +36,7 @@
             "src/supports/autoSupport",
             "src/supports/history",
             "src/supports/interaction/shared",
+            "src/supports/optimization",
             "src/types",
             "src/utils",
             "src/volumeAnalysis/IslandScan/workflow",

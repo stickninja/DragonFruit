@@ -2,6 +2,7 @@ import * as THREE from 'three';
 
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getSettings } from '../Settings/state';
+import type { GridSettings } from '../Settings/types';
 import {
     SUPPORT_AUTO_BRACE_REPLACE,
     type SupportReplaceStatePayload,
@@ -464,7 +465,7 @@ function buildGroupPairs(
 export function buildAutoBracedSnapshot(
     snapshot: SupportState,
     inputSettings: AutoBracingSettings,
-    options?: { changedSupportIds?: ReadonlySet<string>; allowTwoSupports?: boolean },
+    options?: { changedSupportIds?: ReadonlySet<string>; allowTwoSupports?: boolean; gridSettings?: GridSettings },
 ): BuildSnapshotResult {
     const localIds = options?.changedSupportIds;
     const stabiliserBase: StabiliserSource = {
@@ -473,7 +474,7 @@ export function buildAutoBracedSnapshot(
         knots: snapshot.knots,
     };
     const settings = normalizeAutoBracingSettings(inputSettings);
-    const activeGridSettings = getSettings().grid;
+    const activeGridSettings = options?.gridSettings ?? getSettings().grid;
     const maxRun = maxHorizontalRunFromBraceLen(settings.maxBraceLengthMm);
     // Every declared braceable shaft type -- trunk AND branch. This filtered on
     // the literal 'trunk', so branch samples were built and then discarded here.

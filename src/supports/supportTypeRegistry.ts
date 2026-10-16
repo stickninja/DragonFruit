@@ -11,7 +11,7 @@ import { getSettings } from './Settings/state';
  * that apply to supports generally, so it is not any one type's page. Two of
  * the four are also tool panel ids, where page and tool are the same thing.
  */
-export type SidebarTab = 'supportInfo' | 'raft' | 'grid' | 'bracing';
+export type SidebarTab = 'supportInfo' | 'raft' | 'grid' | 'bracing' | 'optimize';
 
 /** Every declared support type, named once in `SupportFieldsByType`. */
 export type SupportTypeId = keyof SupportFieldsByType;

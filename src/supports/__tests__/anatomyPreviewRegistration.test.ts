@@ -42,6 +42,13 @@ test('the default panel uses the generic preview', () => {
     );
 });
 
+test('Optimize declares its scene preview instead of falling through to an anatomy card', () => {
+    assert.equal(panelForTab('optimize'), 'optimize');
+    assert.equal(panelFacts('optimize').usesScenePreview, true);
+    assert.equal(hasOwnAnatomyPreview('optimize'), false);
+    assert.equal(TOOL_PANEL_TABS.includes('optimize'), false);
+});
+
 test('panelFacts agrees with the registry for every panel', () => {
     // A tool panel declares no `drawsOwnPreview`, so the fact must come from
     // whether it registered a preview rather than from the object.

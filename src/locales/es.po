@@ -33,6 +33,14 @@ msgstr "{0, plural, one {# polígono} other {# polígonos}}"
 msgid "{0} of {1, plural, one {# model carries an interior cavity.} other {# models carry an interior cavity.}}"
 msgstr "{0} de {1, plural, one {# modelo tiene una cavidad interior.} other {# modelos tienen una cavidad interior.}}"
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:22
+msgid "{count, plural, one {# contact preserved} other {# contacts preserved}}"
+msgstr ""
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:23
+msgid "{count, plural, one {# fewer trunk} other {# fewer trunks}}"
+msgstr ""
+
 #. Badge counting the printers the network scan turned up.
 #: src/components/settings/FleetManagement.tsx:23
 msgid "{count, plural, one {# found} other {# found}}"
@@ -72,6 +80,14 @@ msgstr "{count, plural, one {Encontrada # impresora} other {Encontradas # impres
 #: src/components/modals/ModelSupportsModal.tsx:41
 msgid "{count, plural, one {# support entity} other {# support entities}}"
 msgstr "{count, plural, one {# entidad de soporte} other {# entidades de soporte}}"
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:24
+msgid "{count, plural, one {# support kept by geometry limits} other {# supports kept by geometry limits}}"
+msgstr ""
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:21
+msgid "{count, plural, one {# trunk selected} other {# trunks selected}}"
+msgstr ""
 
 #: src/features/scene/sceneHistoryLabels.ts:137
 msgctxt "Undo history entry"
@@ -457,6 +473,10 @@ msgstr "{value}x"
 msgid "%"
 msgstr ""
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:101
+msgid "°"
+msgstr ""
+
 #. Shown when the estimated print time rounds down to under one minute. Keep the "<" comparison symbol.
 #: src/features/printing/printingMonitorFormat.ts:25
 msgid "< 1 min"
@@ -603,20 +623,20 @@ msgid "Active print thumbnail"
 msgstr "Miniatura de la impresión en curso"
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:62
-#: src/supports/Settings/SupportSidebar.tsx:912
-#: src/supports/Settings/SupportSidebar.tsx:1076
+#: src/supports/Settings/SupportSidebar.tsx:913
+#: src/supports/Settings/SupportSidebar.tsx:1077
 msgid "Adaptive"
 msgstr "Adaptativo"
 
-#: src/supports/Settings/SupportSidebar.tsx:917
-#: src/supports/Settings/SupportSidebar.tsx:1081
+#: src/supports/Settings/SupportSidebar.tsx:918
+#: src/supports/Settings/SupportSidebar.tsx:1082
 msgid "Adaptive mode"
 msgstr "Modo adaptativo"
 
-#: src/supports/Settings/SupportSidebar.tsx:935
 #: src/supports/Settings/SupportSidebar.tsx:936
-#: src/supports/Settings/SupportSidebar.tsx:1098
+#: src/supports/Settings/SupportSidebar.tsx:937
 #: src/supports/Settings/SupportSidebar.tsx:1099
+#: src/supports/Settings/SupportSidebar.tsx:1100
 msgid "Adaptive offset"
 msgstr "Desfase adaptativo"
 
@@ -753,6 +773,10 @@ msgstr "Ajustar la tensión de la curva"
 msgid "Advanced (calibration)"
 msgstr "Avanzado (calibración)"
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:92
+msgid "Advanced limits"
+msgstr ""
+
 #: src/components/controls/IslandsPanel.tsx:330
 msgid "Advanced mode"
 msgstr "Modo avanzado"
@@ -816,7 +840,7 @@ msgstr "Oclusión ambiental"
 msgid "Analysis"
 msgstr "Análisis"
 
-#: src/app/page.tsx:11846
+#: src/app/page.tsx:11848
 msgid "Analyzing Model Islands & Minima"
 msgstr "Analizando islas y mínimos del modelo"
 
@@ -854,6 +878,7 @@ msgstr "Se aplica de inmediato en toda la aplicación."
 #: src/features/hole-punching/HolePunchPanel.tsx:253
 #: src/features/hollowing/HollowingPanel.tsx:371
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:267
+#: src/supports/optimization/ClusterOptimizationCard.tsx:115
 msgid "Apply"
 msgstr "Aplicar"
 
@@ -926,7 +951,7 @@ msgstr "Aplicando..."
 msgid "Applying…"
 msgstr "Aplicando…"
 
-#: src/app/page.tsx:11941
+#: src/app/page.tsx:11943
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "¿Seguro que quieres quitar todos los modelos de la placa?"
 
@@ -1038,7 +1063,7 @@ msgstr "Ordenar la placa automáticamente"
 msgid "Auto Brace complete: {generated, plural, one {# brace generated} other {# braces generated}}, {removed, plural, one {# legacy brace removed} other {# legacy braces removed}}."
 msgstr "Arriostrado automático completado: {generated, plural, one {# arriostre generado} other {# arriostres generados}}, {removed, plural, one {# arriostre antiguo eliminado} other {# arriostres antiguos eliminados}}."
 
-#: src/supports/Settings/SupportSidebar.tsx:610
+#: src/supports/Settings/SupportSidebar.tsx:611
 msgid "Auto Brace failed. Check console for details."
 msgstr "El arriostrado automático ha fallado. Mira la consola para más detalles."
 
@@ -1462,7 +1487,7 @@ msgid "Brace sizing"
 msgstr ""
 
 #. Support kind tab. One of four tabs on a narrow row, so keep it to one short word.
-#: src/supports/Settings/components/SidebarPanelTabs.tsx:23
+#: src/supports/Settings/components/SidebarPanelTabs.tsx:24
 msgid "Bracing"
 msgstr "Riostras"
 
@@ -1597,7 +1622,7 @@ msgstr "Modo de vista de la cámara: {currentLabel}"
 msgid "Can't open this scene"
 msgstr "No se puede abrir esta escena"
 
-#: src/app/page.tsx:11902
+#: src/app/page.tsx:11904
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:470
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:666
 #: src/components/controls/AutoSupportPanel.tsx:652
@@ -1640,6 +1665,11 @@ msgstr "Cancelar la importación de este modelo"
 #: src/supports/Settings/components/PresetSelector.tsx:820
 msgid "Cancel overwrite"
 msgstr "Cancelar la sobrescritura"
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:117
+#: src/supports/optimization/ClusterOptimizationCard.tsx:117
+msgid "Cancel preview"
+msgstr ""
 
 #: src/components/organisms/modals/PrintingModals.tsx:489
 msgid "Cancel Print Job"
@@ -1862,18 +1892,18 @@ msgstr "Transparente"
 msgid "Clear All"
 msgstr "Borrar todo"
 
-#: src/supports/Settings/SupportSidebar.tsx:631
+#: src/supports/Settings/SupportSidebar.tsx:632
 msgid "Clear All failed. Check console for details."
 msgstr "«Borrar todo» ha fallado. Mira la consola para más detalles."
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:11179
+#: src/app/page.tsx:11181
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1776
 msgid "Clear build plate"
 msgstr "Vaciar la placa de impresión"
 
-#: src/app/page.tsx:11891
+#: src/app/page.tsx:11893
 msgid "Clear Build Plate?"
 msgstr "¿Vaciar la placa de impresión?"
 
@@ -1891,7 +1921,7 @@ msgstr "Quitar el vaciado"
 msgid "Clear Override"
 msgstr "Quitar la anulación"
 
-#: src/app/page.tsx:11932
+#: src/app/page.tsx:11934
 msgid "Clear Plate"
 msgstr "Vaciar placa"
 
@@ -1970,7 +2000,7 @@ msgstr "Cerrar"
 msgid "Close calculator"
 msgstr ""
 
-#: src/app/page.tsx:11897
+#: src/app/page.tsx:11899
 msgid "Close clear-plate confirmation"
 msgstr "Cerrar la confirmación de vaciado"
 
@@ -2124,6 +2154,23 @@ msgstr "Cerrando agujeros pequeños"
 msgid "Closing the remaining gaps"
 msgstr "Cerrando los huecos restantes"
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:66
+msgid "Cluster optimization"
+msgstr ""
+
+#: src/supports/optimization/clusterPreview.ts:14
+msgctxt "Undo history entry"
+msgid "Cluster optimization"
+msgstr ""
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:120
+msgid "Cluster optimization applied as one undoable change."
+msgstr ""
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:32
+msgid "Cluster preview failed. Adjust the selection or limits and try again."
+msgstr ""
+
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:210
 msgid "Cluster Spacing"
 msgstr "Separación entre grupos"
@@ -2209,10 +2256,10 @@ msgstr "Compresión"
 msgid "Computing placements and resolving collisions."
 msgstr "Calculando posiciones y resolviendo colisiones."
 
-#: src/supports/Settings/SupportSidebar.tsx:898
-#: src/supports/Settings/SupportSidebar.tsx:898
-#: src/supports/Settings/SupportSidebar.tsx:1062
-#: src/supports/Settings/SupportSidebar.tsx:1062
+#: src/supports/Settings/SupportSidebar.tsx:899
+#: src/supports/Settings/SupportSidebar.tsx:899
+#: src/supports/Settings/SupportSidebar.tsx:1063
+#: src/supports/Settings/SupportSidebar.tsx:1063
 msgid "Cone Angle"
 msgstr "Ángulo del cono"
 
@@ -2225,9 +2272,9 @@ msgstr "Modo del ángulo del cono"
 msgid "Cone H"
 msgstr "Alt. cono"
 
-#: src/supports/Settings/SupportSidebar.tsx:1001
-#: src/supports/Settings/SupportSidebar.tsx:1159
-#: src/supports/Settings/SupportSidebar.tsx:1159
+#: src/supports/Settings/SupportSidebar.tsx:1002
+#: src/supports/Settings/SupportSidebar.tsx:1160
+#: src/supports/Settings/SupportSidebar.tsx:1160
 msgid "Cone Height"
 msgstr "Altura del cono"
 
@@ -2247,7 +2294,7 @@ msgstr "Confirmar la cancelación"
 msgid "Confirm cancel print"
 msgstr "Confirmar la cancelación de la impresión"
 
-#: src/app/page.tsx:11890
+#: src/app/page.tsx:11892
 msgid "Confirm clearing the build plate"
 msgstr "Confirmar el vaciado de la placa de impresión"
 
@@ -2267,7 +2314,7 @@ msgstr "Confirmar el borrado del archivo reciente"
 msgid "Confirm delete snapshot"
 msgstr "Confirmar el borrado de la instantánea"
 
-#: src/app/page.tsx:11889
+#: src/app/page.tsx:11891
 msgid "Confirm deleting the plate"
 msgstr "Confirmar la eliminación de la placa"
 
@@ -2351,19 +2398,23 @@ msgstr ""
 msgid "Contact"
 msgstr "Contacto"
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:85
+msgid "Contact check failed"
+msgstr ""
+
 #: src/supports/Settings/components/PresetCard.tsx:132
-#: src/supports/Settings/SupportSidebar.tsx:874
-#: src/supports/Settings/SupportSidebar.tsx:874
-#: src/supports/Settings/SupportSidebar.tsx:1039
-#: src/supports/Settings/SupportSidebar.tsx:1039
+#: src/supports/Settings/SupportSidebar.tsx:875
+#: src/supports/Settings/SupportSidebar.tsx:875
+#: src/supports/Settings/SupportSidebar.tsx:1040
+#: src/supports/Settings/SupportSidebar.tsx:1040
 msgid "Contact Cone Length"
 msgstr "Longitud del cono de contacto"
 
 #: src/supports/Settings/components/PresetCard.tsx:115
-#: src/supports/Settings/SupportSidebar.tsx:858
-#: src/supports/Settings/SupportSidebar.tsx:858
-#: src/supports/Settings/SupportSidebar.tsx:1024
-#: src/supports/Settings/SupportSidebar.tsx:1024
+#: src/supports/Settings/SupportSidebar.tsx:859
+#: src/supports/Settings/SupportSidebar.tsx:859
+#: src/supports/Settings/SupportSidebar.tsx:1025
+#: src/supports/Settings/SupportSidebar.tsx:1025
 msgid "Contact Diameter"
 msgstr "Diámetro de contacto"
 
@@ -2586,7 +2637,7 @@ msgstr "Nombre de la curva"
 msgid "Curve Settings"
 msgstr "Ajustes de la curva"
 
-#: src/supports/Settings/SupportSidebar.tsx:1221
+#: src/supports/Settings/SupportSidebar.tsx:1222
 msgid "Curves"
 msgstr "Curvas"
 
@@ -2800,7 +2851,7 @@ msgctxt "Undo history entry"
 msgid "Delete models and plates"
 msgstr "Eliminar modelos y placas"
 
-#: src/app/page.tsx:11932
+#: src/app/page.tsx:11934
 #: src/components/controls/ModelManagerPanel.tsx:479
 #: src/components/controls/ModelManagerPanel.tsx:766
 #: src/components/controls/ModelManagerPanel.tsx:787
@@ -2864,11 +2915,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr "Elimina los soportes que ya tiene este modelo y coloca los nuevos"
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:11178
+#: src/app/page.tsx:11180
 msgid "Delete this plate"
 msgstr "Eliminar esta placa"
 
-#: src/app/page.tsx:11891
+#: src/app/page.tsx:11893
 #: src/components/controls/ModelManagerPanel.tsx:767
 msgid "Delete this plate?"
 msgstr "¿Eliminar esta plata?"
@@ -2997,7 +3048,7 @@ msgstr "Cuenta de GitHub desconectada."
 msgid "Discovered Printers"
 msgstr "Impresoras encontradas"
 
-#: src/app/page.tsx:11989
+#: src/app/page.tsx:11991
 #: src/components/modals/ManifoldWarningModal.tsx:38
 #: src/components/scene/MeshRepairReportModal.tsx:320
 #: src/features/updater/GlobalUpdateIndicator.tsx:234
@@ -3145,7 +3196,7 @@ msgstr "Bajar"
 msgid "Drop supported files"
 msgstr "Suelta archivos compatibles"
 
-#: src/app/page.tsx:11124
+#: src/app/page.tsx:11126
 msgid "Drop supported files to import"
 msgstr "Suelta aquí los ficheros compatibles para importarlos"
 
@@ -3508,7 +3559,7 @@ msgstr "Exportar la curva seleccionada"
 msgid "Export the selected preset as a JSON file"
 msgstr "Exporta el preajuste seleccionado como archivo JSON"
 
-#: src/app/page.tsx:11879
+#: src/app/page.tsx:11881
 #: src/features/export/components/ExportPanel.tsx:761
 msgid "Exporting…"
 msgstr "Exportando…"
@@ -3845,7 +3896,7 @@ msgstr "Generar soportes"
 msgid "Generate supports automatically on scan"
 msgstr "Generar los soportes automáticamente al escanear"
 
-#: src/app/page.tsx:11858
+#: src/app/page.tsx:11860
 msgid "Generating Supports"
 msgstr "Generando soportes"
 
@@ -3874,7 +3925,7 @@ msgstr "Dale un nombre a esta placa de impresión"
 msgid "Go back to the settings dialog"
 msgstr "Vuelve a la ventana de ajustes"
 
-#: src/app/page.tsx:11981
+#: src/app/page.tsx:11983
 msgid "Go to Settings → 3D Mouse to configure or block it."
 msgstr "Ve a Ajustes → Ratón 3D para configurarlo o bloquearlo."
 
@@ -4679,11 +4730,11 @@ msgstr "Capas:"
 msgid "Layout Mode"
 msgstr "Modo de disposición"
 
-#: src/app/page.tsx:11999
+#: src/app/page.tsx:12001
 msgid "Leaf Fanning Active: Click model to sprout leaf"
 msgstr "Abanico de hojas activo: haz clic en el modelo para que brote una hoja"
 
-#: src/app/page.tsx:12000
+#: src/app/page.tsx:12002
 msgid "Leaf Fanning: Click a support shaft to lock anchor knot"
 msgstr "Abanico de hojas: haz clic en el fuste de un soporte para fijar el nudo de anclaje"
 
@@ -4957,8 +5008,8 @@ msgid "Lock waypoint"
 msgstr "Fijar punto de paso"
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:61
-#: src/supports/Settings/SupportSidebar.tsx:911
-#: src/supports/Settings/SupportSidebar.tsx:1075
+#: src/supports/Settings/SupportSidebar.tsx:912
+#: src/supports/Settings/SupportSidebar.tsx:1076
 msgid "Locked"
 msgstr "Fijo"
 
@@ -5140,6 +5191,10 @@ msgstr "Ángulo máximo respecto a la vertical para las hojas en abanico"
 msgid "Max Brace Distance"
 msgstr "Distancia máxima del arriostre"
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:101
+msgid "Max branch angle"
+msgstr ""
+
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:160
 msgid "Max branches + leaves one trunk may carry before new trunks are started — the cap on chunk consolidation"
 msgstr "Máximo de ramas más hojas que puede cargar un tronco antes de empezar troncos nuevos: el tope de la consolidación por bloques"
@@ -5152,6 +5207,10 @@ msgstr "Distancia horizontal máxima que puede abarcar una hoja en abanico desde
 msgid "Max Overhang"
 msgstr "Voladizo máximo"
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:95
+msgid "Max reach"
+msgstr ""
+
 #: src/components/layout/TopBar.tsx:1118
 msgid "Maximize"
 msgstr "Maximizar"
@@ -5163,6 +5222,14 @@ msgstr "Maximizar ventana"
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:246
 msgid "Maximum autosave interval"
 msgstr "Intervalo máximo de guardado"
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:103
+msgid "Maximum branch angle from vertical in degrees"
+msgstr ""
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:97
+msgid "Maximum reach in millimeters"
+msgstr ""
 
 #. Built-in auto-support preset for balanced supports — the Medium tier in the Auto Support panel's preset selector.
 #: src/supports/Settings/autoSupportPresetMessages.ts:29
@@ -5322,6 +5389,7 @@ msgstr "Reflejar en {axes}"
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:166
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:183
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:197
+#: src/supports/optimization/ClusterOptimizationCard.tsx:95
 msgid "mm"
 msgstr ""
 
@@ -5351,6 +5419,10 @@ msgstr "Acciones del modelo…"
 #: src/components/controls/ModelManagerPanel.tsx:695
 msgid "Model details"
 msgstr "Detalles del modelo"
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:31
+msgid "Model geometry is unavailable. Reload the model before previewing."
+msgstr ""
 
 #: src/components/settings/CtbTimingEditor.tsx:295
 msgid "Model layer ranges"
@@ -5592,7 +5664,7 @@ msgstr ""
 msgid "New Curve"
 msgstr "Curva nueva"
 
-#: src/app/page.tsx:11980
+#: src/app/page.tsx:11982
 msgid "New input device detected."
 msgstr "Se ha detectado un dispositivo de entrada nuevo."
 
@@ -5802,6 +5874,10 @@ msgstr "No hay archivos recientes"
 msgid "No resin selected"
 msgstr "Ninguna resina seleccionada"
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:122
+msgid "No safe joins found within these limits."
+msgstr ""
+
 #: src/components/settings/LocalBackupsSettingsTab.tsx:921
 msgid "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
 msgstr "Todavía no hay instantáneas. Usa «Copiar ahora» para crear la primera copia local."
@@ -5844,8 +5920,8 @@ msgstr "Vértices no manifold"
 
 #: src/components/settings/CtbTimingEditor.tsx:270
 #: src/supports/Settings/components/TipSettingsCard.tsx:60
-#: src/supports/Settings/SupportSidebar.tsx:910
-#: src/supports/Settings/SupportSidebar.tsx:1074
+#: src/supports/Settings/SupportSidebar.tsx:911
+#: src/supports/Settings/SupportSidebar.tsx:1075
 msgid "Normal"
 msgstr "Normal"
 
@@ -5979,10 +6055,10 @@ msgstr "Altura de capa sin conexión"
 msgid "Offline layer height override in micrometers"
 msgstr "Altura de capa sin conexión, en micrómetros"
 
-#: src/supports/Settings/SupportSidebar.tsx:900
-#: src/supports/Settings/SupportSidebar.tsx:900
-#: src/supports/Settings/SupportSidebar.tsx:1064
-#: src/supports/Settings/SupportSidebar.tsx:1064
+#: src/supports/Settings/SupportSidebar.tsx:901
+#: src/supports/Settings/SupportSidebar.tsx:901
+#: src/supports/Settings/SupportSidebar.tsx:1065
+#: src/supports/Settings/SupportSidebar.tsx:1065
 msgid "Offset"
 msgstr "Desfase"
 
@@ -6182,6 +6258,11 @@ msgstr "Abriendo"
 msgid "Opening scene…"
 msgstr "Abriendo escena…"
 
+#. Support Studio tab. Keep this label short for the compact tab row.
+#: src/supports/Settings/components/SidebarPanelTabs.tsx:23
+msgid "Optimize"
+msgstr ""
+
 #: src/components/scene/MeshRepairReportModal.tsx:403
 msgid "Optional details if you want them."
 msgstr "Detalles opcionales, por si te interesan."
@@ -6203,7 +6284,7 @@ msgstr "Orientar plano sobre la placa"
 msgid "Orient Model"
 msgstr "Orientar modelo"
 
-#: src/app/page.tsx:11869
+#: src/app/page.tsx:11871
 msgid "Orienting Model"
 msgstr "Orientando el modelo"
 
@@ -6433,7 +6514,7 @@ msgstr "Punto de anclaje"
 msgid "Placement message."
 msgstr "Mensaje de colocación."
 
-#: src/app/page.tsx:11859
+#: src/app/page.tsx:11861
 msgid "Placing and bracing supports…"
 msgstr "Colocando y arriostrando los soportes…"
 
@@ -6637,6 +6718,7 @@ msgstr "Pulsa <0>{clearLabel}</0> para reiniciar todo, o <1>{doneLabel}</1> para
 
 #. Heading of the right-click menu on the support anatomy preview card in the Support Studio.
 #: src/features/slicing/components/SliceFilenameFormatEditor.tsx:90
+#: src/supports/optimization/ClusterOptimizationCard.tsx:111
 #: src/supports/Settings/AnatomyPreview/SupportAnatomyPreviewSlot.tsx:33
 msgid "Preview"
 msgstr "Vista previa"
@@ -6645,9 +6727,17 @@ msgstr "Vista previa"
 msgid "Preview for this layer is not available."
 msgstr "No hay vista previa de esta capa."
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:123
+msgid "Preview joins selected trunks while preserving their contacts."
+msgstr ""
+
 #: src/components/settings/MeshSettingsTab.tsx:228
 msgid "Preview Model"
 msgstr "Modelo de vista previa"
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:122
+msgid "Preview ready. Review the supports in the scene before applying."
+msgstr ""
 
 #: src/components/controls/IslandsPanel.tsx:221
 msgid "Previous (B)"
@@ -6816,8 +6906,8 @@ msgid "Processing {count, plural, one {# model} other {# models}}"
 msgstr "Procesando {count, plural, one {# modelo} other {# modelos}}"
 
 #: src/app/page.tsx:1845
-#: src/app/page.tsx:11849
-#: src/app/page.tsx:11861
+#: src/app/page.tsx:11851
+#: src/app/page.tsx:11863
 msgid "Processing 1 model"
 msgstr "Procesando 1 modelo"
 
@@ -7494,7 +7584,7 @@ msgstr "Restaurar"
 msgid "Restore as Current"
 msgstr "Restaurar como actual"
 
-#: src/supports/Settings/SupportSidebar.tsx:1207
+#: src/supports/Settings/SupportSidebar.tsx:1208
 msgid "Restore defaults"
 msgstr "Restaurar los valores por defecto"
 
@@ -7597,9 +7687,9 @@ msgstr "¿Carreteras? Donde imprimimos, no necesitamos carreteras."
 msgid "Root Disk H"
 msgstr "Alt. disco"
 
-#: src/supports/Settings/SupportSidebar.tsx:986
-#: src/supports/Settings/SupportSidebar.tsx:1144
-#: src/supports/Settings/SupportSidebar.tsx:1144
+#: src/supports/Settings/SupportSidebar.tsx:987
+#: src/supports/Settings/SupportSidebar.tsx:1145
+#: src/supports/Settings/SupportSidebar.tsx:1145
 msgid "Root Disk Height"
 msgstr "Altura del disco de la raíz"
 
@@ -7607,10 +7697,10 @@ msgstr "Altura del disco de la raíz"
 msgid "Roots"
 msgstr "Raíces"
 
-#: src/supports/Settings/SupportSidebar.tsx:970
-#: src/supports/Settings/SupportSidebar.tsx:970
-#: src/supports/Settings/SupportSidebar.tsx:1127
-#: src/supports/Settings/SupportSidebar.tsx:1127
+#: src/supports/Settings/SupportSidebar.tsx:971
+#: src/supports/Settings/SupportSidebar.tsx:971
+#: src/supports/Settings/SupportSidebar.tsx:1128
+#: src/supports/Settings/SupportSidebar.tsx:1128
 msgid "Roots Diameter"
 msgstr "Diámetro de las raíces"
 
@@ -7724,7 +7814,7 @@ msgstr "Guardar los ajustes actuales en este preajuste"
 msgid "Save Error"
 msgstr "Error al guardar"
 
-#: src/supports/Settings/SupportSidebar.tsx:1200
+#: src/supports/Settings/SupportSidebar.tsx:1201
 msgid "Save failed"
 msgstr "No se ha podido guardar"
 
@@ -7757,7 +7847,7 @@ msgstr "Guardar escena como…"
 msgid "Save scene options"
 msgstr "Opciones de guardado de la escena"
 
-#: src/supports/Settings/SupportSidebar.tsx:1200
+#: src/supports/Settings/SupportSidebar.tsx:1201
 msgid "Save settings"
 msgstr "Guardar los ajustes"
 
@@ -7771,7 +7861,7 @@ msgid "Save webcam snapshot"
 msgstr "Guardar una captura de la cámara web"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:637
-#: src/supports/Settings/SupportSidebar.tsx:1200
+#: src/supports/Settings/SupportSidebar.tsx:1201
 msgid "Saved"
 msgstr "Guardado"
 
@@ -7848,7 +7938,7 @@ msgstr "Escanea el modelo para detectar islas sin soporte"
 msgid "Scanning for Supports…"
 msgstr "Buscando soportes…"
 
-#: src/app/page.tsx:11859
+#: src/app/page.tsx:11861
 msgid "Scanning islands & minima…"
 msgstr "Buscando islas y mínimos…"
 
@@ -8016,6 +8106,10 @@ msgstr "Elige un perfil de impresora para ver los detalles."
 msgid "Select a printer to detect its model."
 msgstr "Selecciona una impresora para detectar su modelo."
 
+#: src/supports/optimization/ClusterOptimizationCard.tsx:28
+msgid "Select at least two trunks to optimize."
+msgstr ""
+
 #: src/components/settings/CtbTimingEditor.tsx:262
 msgid "Select CTB V4 or V5 and Simple, Two Stage, or All Fields mode in the printer profile to use per-layer timing."
 msgstr ""
@@ -8058,6 +8152,14 @@ msgstr "Seleccionar perfil"
 #: src/components/controls/IslandScanCard.tsx:176
 msgid "Select STL File"
 msgstr "Seleccionar el fichero STL"
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:29
+msgid "Select supports from the active model only."
+msgstr ""
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:30
+msgid "Select supports on the active plate."
+msgstr ""
 
 #: src/components/settings/MeshSettingsTab.tsx:629
 msgctxt "Preview state"
@@ -8132,6 +8234,10 @@ msgstr "Modo de selección: volumen completo (de izquierda a derecha)"
 #: src/components/settings/MeshSettingsTab.tsx:605
 msgid "Selection Preview"
 msgstr "Vista previa de la selección"
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:121
+msgid "Selection, geometry, or limits changed. Preview again before applying."
+msgstr ""
 
 #: src/components/scene/MeshRepairReportModal.tsx:133
 msgctxt "Mesh repair summary; self-intersections"
@@ -8460,7 +8566,7 @@ msgstr "Capas laminadas"
 msgid "Slicing"
 msgstr "Laminado"
 
-#: src/app/page.tsx:11847
+#: src/app/page.tsx:11849
 msgid "Slicing and analysis in progress..."
 msgstr "Laminado y análisis en curso..."
 
@@ -8814,7 +8920,7 @@ msgstr "Ajustes y preajustes de soportes"
 msgid "Support Size"
 msgstr "Tamaño del soporte"
 
-#: src/supports/Settings/SupportSidebar.tsx:1192
+#: src/supports/Settings/SupportSidebar.tsx:1193
 msgid "Support Studio"
 msgstr "Estudio de soportes"
 
@@ -8859,7 +8965,7 @@ msgstr "Sospechosamente vacío aquí dentro."
 msgid "Swap which cut half receives the tenon and which receives the mortise."
 msgstr "Intercambia qué mitad del corte lleva la espiga y cuál la mortaja."
 
-#: src/app/page.tsx:11870
+#: src/app/page.tsx:11872
 msgid "Sweeping orientations…"
 msgstr "Probando orientaciones…"
 
@@ -9041,7 +9147,7 @@ msgstr "El hueco tallado en la otra mitad."
 msgid "The inputs and factors the last run sized the supports with"
 msgstr "Los datos y factores con que la última ejecución dimensionó los soportes"
 
-#: src/app/page.tsx:11940
+#: src/app/page.tsx:11942
 msgid "The models on this plate are deleted with it."
 msgstr "Los modelos de esta placa se eliminan con ella."
 
@@ -9431,12 +9537,21 @@ msgid "Triangles:"
 msgstr "Triángulos:"
 
 #: src/supports/Settings/components/PresetCard.tsx:149
-#: src/supports/Settings/SupportSidebar.tsx:950
-#: src/supports/Settings/SupportSidebar.tsx:950
-#: src/supports/Settings/SupportSidebar.tsx:1112
-#: src/supports/Settings/SupportSidebar.tsx:1112
+#: src/supports/Settings/SupportSidebar.tsx:951
+#: src/supports/Settings/SupportSidebar.tsx:951
+#: src/supports/Settings/SupportSidebar.tsx:1113
+#: src/supports/Settings/SupportSidebar.tsx:1113
 msgid "Trunk Diameter"
 msgstr "Diámetro del tronco"
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:71
+#: src/supports/optimization/ClusterOptimizationCard.tsx:75
+msgid "Trunk reduction"
+msgstr ""
+
+#: src/supports/optimization/ClusterOptimizationCard.tsx:81
+msgid "Trunks"
+msgstr ""
 
 #: src/features/updater/GlobalUpdateIndicator.tsx:235
 msgid "Try again"
@@ -9471,7 +9586,7 @@ msgstr ""
 msgid "Uncured density (g/mL, optional)"
 msgstr ""
 
-#: src/app/page.tsx:11894
+#: src/app/page.tsx:11896
 msgid "Undo brings the models back"
 msgstr "Deshacer devuelve los modelos"
 
@@ -9544,7 +9659,7 @@ msgstr "Desvincular X e Y"
 msgid "Unlock build plate"
 msgstr "Desbloquear la placa de impresión"
 
-#: src/app/page.tsx:11963
+#: src/app/page.tsx:11965
 msgid "Unlock it to add or move models."
 msgstr "Desbloquéala para añadir o mover modelos."
 
@@ -9578,7 +9693,7 @@ msgstr "Cambios de escena sin guardar"
 msgid "Unsaved Scene Found"
 msgstr "Hay una escena sin guardar"
 
-#: src/app/page.tsx:11124
+#: src/app/page.tsx:11126
 msgid "Unsupported file format"
 msgstr "Formato de fichero no compatible"
 
@@ -10087,7 +10202,7 @@ msgstr "Escribe estos ajustes en los ajustes de autosoportes"
 msgid "Write these settings, and overwrite the selected preset with them"
 msgstr "Escribe estos ajustes y sobrescribe con ellos el preajuste seleccionado"
 
-#: src/app/page.tsx:11880
+#: src/app/page.tsx:11882
 msgid "Writing mesh geometry and support data to file…"
 msgstr "Escribiendo la geometría de la malla y los datos de soportes en el archivo…"
 

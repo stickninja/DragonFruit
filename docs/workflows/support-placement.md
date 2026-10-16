@@ -44,8 +44,33 @@ for two eligible shafts. Clear All deletes all braces on the current model,
 including manual braces, as before.
 
 This is [Stage 1 of the fork's Support Studio sequence](../support-studio-bracing-acceptance.md),
-currently awaiting acceptance. Cluster/grid optimization, advanced placement,
-and support influence remain deferred.
+accepted by the user on 2026-10-16.
+
+## Support Studio Cluster Optimization
+
+Select at least two trunks belonging to the active model on the active plate,
+then open **Optimize** in Support Studio. Cluster Optimization uses this explicit
+support selection; it does not fall back to the whole model. Adjust **Trunk
+reduction** to request a reduction from 0–75% (default 50%). Advanced controls
+limit reach (default 8 mm) and branch angle from vertical (default 45°).
+
+Choose **Preview** to inspect the proposed replacement graph and its selected
+trunk counts, preserved contacts, and skipped candidates. Preview does not edit
+the saved support graph. **Cancel** returns to the committed geometry. Changes
+to the selection, graph, options, model geometry or transform, or plate context
+invalidate the proposal; preview again before applying it.
+
+Choose **Apply** to commit a current proposal. Eligible trunks become branches
+on retained hosts while their model contacts retain their geometry and position.
+Unsafe candidates remain unchanged, so the actual reduction can be less than
+requested. Review the result before finalizing; one Undo restores the complete
+previous support graph and one Redo restores the optimization. Save the scene
+to keep the resulting ordinary support geometry. The optimization options and
+preview are temporary; leaving Optimize resets its options to the defaults.
+
+This is [Stage 2](../support-studio-cluster-acceptance.md), currently in progress
+and awaiting user acceptance. Grid Optimization, advanced placement, and support
+influence remain deferred.
 
 ## Interaction precedence
 

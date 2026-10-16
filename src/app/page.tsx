@@ -10922,7 +10922,9 @@ export default function Home() {
               key="support-settings"
               style={{ display: supportRailMode === 'manual' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
             >
-              <SupportSidebar activeModelId={scene.activeModelId} />
+              <SupportSidebar activeModelId={scene.activeModelId} activePlateId={scene.activePlateId}
+                plateModelIds={scene.models.filter((model) => scene.resolveModelPlateId(model) === scene.activePlateId).map((model) => model.id)}
+                modelPlateId={scene.activeModel ? scene.resolveModelPlateId(scene.activeModel) : null} />
             </div>
             {autoSupportsExperimentEnabled && (
               <div

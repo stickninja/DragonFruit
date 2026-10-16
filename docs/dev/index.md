@@ -18,6 +18,7 @@ Internals of DragonFruit, for people changing them. Start with [Architecture Ove
 | Ship something unfinished | [Experiments Framework](experiments-framework.md) |
 | Support a new printer or format | [Plugin Framework](plugins-framework.md), [Complex Plugin Contributing](plugins-complex-contributing.md), [Formats](formats.md) |
 | Change automatic support placement | [Auto-Supports](auto-supports.md) |
+| Optimize selected support clusters | [Support System](support-system.md#support-studio-cluster-optimization), [Data Storage](data-storage.md#support-studio-cluster-optimization) |
 | Add a support type | [Adding a New Support Type](support-type-extension.md), [Support System](support-system.md) |
 | Change support hover, selection or snapping | [Support Interaction](support-interaction.md) |
 | Work on island detection | [Island Detection](island-detection.md) |
