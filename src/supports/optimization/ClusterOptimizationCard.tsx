@@ -25,6 +25,7 @@ function skippedMessage(_: I18n['_'], count: number) { return _(msg`${plural(cou
 
 function errorMessage(_: I18n['_'], error: ClusterPreviewError) {
     switch (error) {
+        case 'locked': return _(msg`Unlock the active plate before optimizing supports.`);
         case 'selection': return _(msg`Select at least two trunks to optimize.`);
         case 'model': return _(msg`Select supports from the active model only.`);
         case 'plate': return _(msg`Select supports on the active plate.`);
@@ -45,7 +46,7 @@ export function ClusterOptimizationCard({ context }: { context: ClusterPreviewCo
     const selectionError = clusterSelectionError(context);
     const result = preview.result;
     const contactsPreserved = !!result && result.contactCountBefore === result.contactCountAfter;
-    const canApply = preview.status === 'ready' && !!result?.changedCount && contactsPreserved;
+    const canApply = !selectionError && preview.status === 'ready' && !!result?.changedCount && contactsPreserved;
     const plateModelsKey = [...context.plateModelIds].sort().join('\n');
     // Leaving support edit restores normalized settings with new object identities.
     // Only changed values invalidate the geometry checked by the proposal.
@@ -55,7 +56,7 @@ export function ClusterOptimizationCard({ context }: { context: ClusterPreviewCo
     React.useEffect(() => {
         invalidateClusterPreview();
         setError(null);
-    }, [context.modelId, context.plateId, context.modelPlateId, autoBracingKey, gridKey, plateModelsKey]);
+    }, [context.modelId, context.plateId, context.modelPlateId, context.isPlateLocked, autoBracingKey, gridKey, plateModelsKey]);
     React.useEffect(() => () => cancelClusterPreview(), []);
 
     const updateOptions = (patch: Partial<typeof options>) => {

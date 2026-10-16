@@ -73,6 +73,16 @@ test('low manual braces prevent unsafe grafts instead of detaching a dependent',
     assert.equal(result.snapshot.braces.manual, input.braces.manual);
 });
 
+test('nonfinite hosted knot coordinates refuse consolidation without mutating the snapshot', () => {
+    const input = scene();
+    input.knots.badA = { id: 'badA', parentShaftId: 'seg-a', t: 0.5, pos: { x: 0, y: 0, z: NaN } };
+    input.knots.badB = { id: 'badB', parentShaftId: 'seg-b', t: 0.5, pos: { x: 4, y: 0, z: Infinity } };
+    const result = plan(input);
+    assert.equal(result.changedCount, 0);
+    assert.equal(result.snapshot, input);
+    assert.ok(result.skipped.every(skip => skip.reason === 'dependent-geometry'));
+});
+
 test('existing low auto braces are rebuilt within selected shafts so a braced forest can optimize', () => {
     const input = scene([0, 4, 8, 12]);
     const mesh = boxMesh();

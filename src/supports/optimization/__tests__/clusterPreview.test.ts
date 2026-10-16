@@ -205,3 +205,20 @@ test('proposal rendering derives only the kickstand-owned roots and knots from t
         assert.deepEqual(getOwnedPrimitives('kickstand', 'roots'), {});
     } finally { fixture.cleanup(); }
 });
+
+
+test('Cluster respects the active plate lock for Preview and a previously reviewed Apply', () => {
+    const fixture = clusterPreviewFixture();
+    try {
+        const locked = { ...fixture.context, isPlateLocked: true };
+        assert.equal(previewClusterOptimization(locked, options), 'locked');
+        assert.equal(getClusterRenderSnapshot(), null);
+        assert.equal(previewClusterOptimization(fixture.context, options), null);
+        assert.equal(applyClusterOptimization(locked, options), false);
+        assert.equal(getClusterPreview().status, 'stale');
+        assert.equal(getUndoCount(), 0);
+        assert.equal(previewClusterOptimization(fixture.context, options), null);
+        assert.equal(applyClusterOptimization(fixture.context, options), true);
+        assert.equal(getUndoCount(), 1);
+    } finally { fixture.cleanup(); }
+});

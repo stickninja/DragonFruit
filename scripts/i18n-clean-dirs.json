@@ -58,6 +58,8 @@
             "src/supports/SupportTypes",
             "src/supports/autoBracing",
             "src/supports/optimization/ClusterOptimizationCard.tsx",
+            "src/supports/optimization/GridOptimizationCard.tsx",
+            "src/supports/optimization/OptimizationTools.tsx",
             "src/supports/rendering",
             "src/utils",
             "src/volumeAnalysis"

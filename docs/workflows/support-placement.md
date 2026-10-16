@@ -49,7 +49,7 @@ accepted by the user on 2026-10-16.
 ## Support Studio Cluster Optimization
 
 Select at least two trunks belonging to the active model on the active plate,
-then open **Optimize** in Support Studio. Cluster Optimization uses this explicit
+then open **Optimize** in Support Studio and choose **Cluster**. Cluster Optimization uses this explicit
 support selection; it does not fall back to the whole model. Adjust **Trunk
 reduction** to request a reduction from 0–75% (default 50%). Advanced controls
 limit reach (default 8 mm) and branch angle from vertical (default 45°).
@@ -68,9 +68,30 @@ previous support graph and one Redo restores the optimization. Save the scene
 to keep the resulting ordinary support geometry. The optimization options and
 preview are temporary; leaving Optimize resets its options to the defaults.
 
-This is [Stage 2](../support-studio-cluster-acceptance.md), currently in progress
-and awaiting user acceptance. Grid Optimization, advanced placement, and support
-influence remain deferred.
+This is [Stage 2](../support-studio-cluster-acceptance.md), awaiting user
+acceptance together with Stage 3 under the explicitly authorized combined review.
+
+## Support Studio Grid Optimization
+
+Select grounded trunks on the active model and plate, open **Optimize**, then
+choose **Grid**. Set **Grid spacing** (default 2 mm); expand **Advanced limits**
+for **Max shift** (default 2 mm) and **Max shaft angle** from vertical
+(default 45°). This aligns selected roots and
+lower trunk legs to the existing XY lattice while keeping their model contacts
+in place. It does not merge trunks or reduce their count. The separate **Grid**
+placement tab continues to control placement.
+
+Choose **Preview** to inspect the proposed aligned geometry, contact counts, and
+skipped candidates. Unsafe candidates stay unchanged; alignment may be partial.
+Choose **Cancel** to return to committed geometry, or **Apply** to commit a current
+proposal. Changes to selection, geometry, options, model/plate context, or relevant
+settings require another preview. One Undo restores the complete prior graph;
+one Redo restores the optimization. Save the scene to retain applied geometry.
+The options and preview are temporary and reset when leaving Optimize.
+
+This is [Stage 3](../support-studio-grid-acceptance.md), authorized for combined
+Stage 2/3 review on 2026-10-16. Neither stage is accepted yet. Advanced Placement
+and support influence remain deferred.
 
 ## Interaction precedence
 

@@ -231,7 +231,8 @@ one typed support edit snapshot with complete before/after state; a preview or
 no-op must not create history. Keep history handlers at app-root lifetime.
 Options and preview are session-only; applied graphs use existing serialization.
 
-`src/supports/optimization/clusterPreview.ts` owns this controller boundary.
+`src/supports/optimization/clusterPreview.ts` exposes the Cluster controller;
+`src/supports/optimization/optimizationPreview.ts` owns the shared lifecycle.
 `ClusterPreviewContext` carries the active model, active/model plate IDs, active
 plate model IDs, current automatic-bracing settings, and required `gridSettings`.
 A minimal sequence is:
@@ -271,6 +272,107 @@ Optimize as using the scene rather than requiring an anatomy-preview renderer.
 See [Data Storage](data-storage.md#support-studio-cluster-optimization), the
 [user workflow](../workflows/support-placement.md#support-studio-cluster-optimization),
 and [Stage 2 acceptance](../support-studio-cluster-acceptance.md).
+
+## Support Studio Grid Optimization
+
+`src/supports/optimization/gridOptimization.ts` owns the pure selected-trunk
+planner. Use `buildGridOptimization` to align existing roots and lower trunk
+legs to the lattice without changing model contacts or reducing trunk count.
+It takes the committed support snapshot, explicit selected trunk IDs,
+`GridOptimizationOptions`, and `GridOptimizationContext`. It returns
+`GridOptimizationResult` without writing stores, settings, history, or files:
+
+```ts
+const proposal = buildGridOptimization(
+  snapshot,
+  selectedTrunkIds,
+  { spacingMm: 2, maxMoveMm: 2, maxJoinAngleDeg: 45 },
+  {
+    modelId, mesh, plateId, modelPlateId,
+    collisionMeshes, autoBracingSettings, gridSettings,
+    plateBounds: { minX, maxX, minY, maxY },
+  },
+);
+```
+
+`DEFAULT_GRID_OPTIMIZATION_OPTIONS` supplies these defaults. Angle is measured
+from vertical. Plate bounds use world XY coordinates and must contain the full
+root radius. The planner reuses the zero-origin lattice and tie rounding from
+`src/supports/PlacementLogic/Grid/gridMath.ts`; it does not change Grid placement
+settings or move the lattice with the model. Spacing is clamped to 0.5–30 mm, maximum movement to 0–30 mm, and join angle
+to 5–45°. A bounded nearest-node search considers a 3 × 3 neighborhood within
+the requested maximum movement. `GRID_MAX_CANDIDATE_CHECKS` caps a run at 6000
+geometry candidates. Occupied
+nodes, including unselected root/contact owners, remain protected. There is no
+whole-model fallback, trunk merging, or occupied-owner replacement.
+
+The planner moves only eligible selected roots in XY and replaces the lower
+first span with a vertical node leg and a diagonal to the preserved upper shaft.
+The graft stays below retained knots; their normalized attachment positions are
+remapped to retain world positions. Contact-cone objects and upper geometry
+remain unchanged. Curved first spans, shared roots, incompatible dependents,
+kickstand hosts, invalid geometry, collisions, or insufficient height can force
+a skip. The existing length-aware angle and collision rules remain constraints;
+a partial result is valid.
+
+The result carries a replacement snapshot, changed/selected/aligned trunk counts,
+before/after contact counts, skipped IDs and reasons, candidate-check count,
+and removed/generated automatic-brace counts. Shared optimization geometry lives
+in `src/supports/optimization/optimizationGeometry.ts`; Cluster Optimization
+retains its separate reduction planner. Disposable automatic braces internal to
+selected shafts can be regenerated when geometry changes; manual braces,
+external links, shared knots, and kickstands remain protected. Each source
+attempt releases only eligible disposable links touching that source; a failed
+attempt restores its links and knots immediately. Links between stationary
+parents remain collision obstacles throughout planning. Regeneration uses the
+current Stage 1 pattern and sizing settings, then checks each new link against
+the complete retained forest and current/neighboring meshes. Rejected links and
+unused new knots are removed. Intentional Crosses intersections between generated
+links for the same parent pair remain allowed. Nonfinite hosted knot positions
+or attachment values make the source unsafe rather than entering new geometry.
+
+The Optimize UI owns the temporary Cluster/Grid choice and Grid options. Preview
+must render an ephemeral snapshot while ordinary serialization continues to read
+the committed graph. Cancel, mode switch, leaving Optimize, or invalidation
+cannot create support history. Apply must recheck selection, live collections,
+model geometry/transforms, plate IDs and bounds, options, and relevant
+bracing/grid settings, then commit one complete before/after typed support edit.
+No-op and failed plans do not create history. Keep history registration at
+app-root lifetime and prevent pointer edits to the proposed geometry.
+
+`src/supports/optimization/gridPreview.ts` exposes the Grid controller.
+`GridPreviewContext` extends `OptimizationPreviewContext` with required current
+plate bounds, or null when unavailable. The shared context includes the current
+plate lock state; locked plates reject planning and Apply. A single eligible grounded trunk is
+sufficient; missing bounds produce a plate error. Use the dedicated entry points:
+
+```ts
+const error = previewGridOptimization(context, options);
+const preview = getGridPreview();
+// Apply only after reviewing a current nonempty proposal:
+const applied = applyGridOptimization(context, options);
+```
+
+`gridSelectionError` validates selection/context, `subscribeGridPreview` observes
+idle/ready/stale/applied state, `cancelGridPreview` returns to idle, and
+`invalidateGridPreview` marks a proposal stale. Planning exceptions return a
+recoverable `failed` error without graph/history changes. `getGridRenderSnapshot`
+exposes only the current Grid proposal. Switching modes cancels the previous
+controller, so only one tool can supply scene geometry.
+
+The shared `createOptimizationPreview` factory takes a minimum trunk count,
+localized history descriptor, optional context validator, and a pure planner
+callback. It handles snapshot/selection/mesh subscriptions, option/context
+freshness, atomic typed history, and applied-summary clearing. Add a specialized
+controller beside Grid/Cluster when another pure support optimization needs the
+same lifecycle; keep its options and result domain-specific. Scene rendering
+uses `subscribeOptimizationPreview`, `getOptimizationPreviewRevision`, and
+`getOptimizationRenderSnapshot` so it never combines two proposals. Serialization
+must continue to use the committed support store.
+
+See [Data Storage](data-storage.md#support-studio-grid-optimization), the
+[user workflow](../workflows/support-placement.md#support-studio-grid-optimization),
+and [Stage 3 acceptance](../support-studio-grid-acceptance.md).
 
 ## The placement guide line
 

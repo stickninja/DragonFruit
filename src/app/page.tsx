@@ -10923,6 +10923,7 @@ export default function Home() {
               style={{ display: supportRailMode === 'manual' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
             >
               <SupportSidebar activeModelId={scene.activeModelId} activePlateId={scene.activePlateId}
+                plateBounds={scene.plateFrames.find((frame) => frame.id === scene.activePlateId) ?? null} isPlateLocked={scene.plateLocked}
                 plateModelIds={scene.models.filter((model) => scene.resolveModelPlateId(model) === scene.activePlateId).map((model) => model.id)}
                 modelPlateId={scene.activeModel ? scene.resolveModelPlateId(scene.activeModel) : null} />
             </div>

@@ -58,6 +58,15 @@ Grid support logic ensures deterministic trunk ownership and efficient branch re
   around the new contact. The code for it is gone: rehosting dependents onto a
   replacement pillar was more ways to lose supports than the shape it bought.
 
+## Optimization of existing trunks
+
+[Grid Optimization](support-system.md#support-studio-grid-optimization) applies
+the existing lattice math to explicitly selected grounded trunks. It preserves
+contacts and aligns roots/lower legs without merging or replacing node owners.
+Occupied nodes include unselected trunks and are never permission to rewrite
+their graph. Unsupported dependents or unsafe geometry make a candidate skip;
+the placement policy above remains unchanged.
+
 ## Cone direction
 
 A contact's cone is the member's last stretch into the surface, and it is what reads as

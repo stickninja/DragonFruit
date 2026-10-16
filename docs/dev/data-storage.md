@@ -65,6 +65,24 @@ Undo/Redo records the complete before/after graph rather than an optimization
 recipe. See [Support System](support-system.md) and the
 [Stage 2 acceptance record](../support-studio-cluster-acceptance.md).
 
+### Support Studio Grid Optimization
+
+Grid Optimization's spacing, maximum movement, and maximum join angle belong to
+its mounted Optimize card, alongside the temporary Cluster/Grid choice. Switching
+Cluster/Grid preserves both cards' options for that mounting; leaving Optimize
+resets them. They
+add no localStorage or sessionStorage key, support-settings field, preset schema,
+or VOXL settings block. The existing Grid placement settings retain their own
+persistence and meaning; choosing Grid Optimization does not rewrite them.
+
+The proposed graph and its summary are ephemeral. Apply records complete
+before/after support snapshots through the existing support-edit history; the
+resulting roots, shafts, joints, knots, contacts, and braces use the ordinary
+scene format. Save/load stores geometry rather than an optimization recipe.
+See [Support System](support-system.md#support-studio-grid-optimization), the
+[user workflow](../workflows/support-placement.md#support-studio-grid-optimization),
+and [Stage 3 acceptance](../support-studio-grid-acceptance.md).
+
 ### Support presets (`support-presets-v1`)
 
 `src/supports/Settings/presets.ts` owns the store: `byId`, `allIds` and

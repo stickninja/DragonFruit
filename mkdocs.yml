@@ -56,6 +56,7 @@ nav:
   - Upstream 0.1.17 Acceptance: upstream-0.1.17-acceptance.md
   - Support Studio Bracing Acceptance: support-studio-bracing-acceptance.md
   - Support Studio Cluster Acceptance: support-studio-cluster-acceptance.md
+  - Support Studio Grid Acceptance: support-studio-grid-acceptance.md
   - Fork Acceptance History:
       - Phase 0.1 Acceptance: phase-1-acceptance.md
       - Phase 0.2 Acceptance: phase-2-acceptance.md

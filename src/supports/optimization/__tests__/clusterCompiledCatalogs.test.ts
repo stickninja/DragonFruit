@@ -17,6 +17,7 @@ const messages = [
     'Preview', 'Apply', 'Cancel preview', 'Contact check failed', 'mm', '°',
     'Select at least two trunks to optimize.', 'Select supports from the active model only.',
     'Select supports on the active plate.', 'Model geometry is unavailable. Reload the model before previewing.',
+    'Unlock the active plate before optimizing supports.',
     'Cluster preview failed. Adjust the selection or limits and try again.',
     'Selection, geometry, or limits changed. Preview again before applying.',
     'Cluster optimization applied as one undoable change.',

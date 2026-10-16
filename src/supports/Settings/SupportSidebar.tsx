@@ -47,7 +47,8 @@ import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
 import { AutoBracingSettingsCard } from '../autoBracing/AutoBracingSettingsCard';
-import { ClusterOptimizationCard } from '../optimization/ClusterOptimizationCard';
+import { OptimizationTools } from '../optimization/OptimizationTools';
+import type { GridPreviewContext } from '../optimization/gridPreview';
 import { CurveSettingsCard, getCurveSettingsSelection } from '../Curves/CurveSettingsCard';
 import { clearBracesForModel, runAutoBracing } from '../autoBracing/autoBrace';
 import { shouldRunAutoBracingHotkey } from '../autoBracing/autoBracingHotkey';
@@ -172,7 +173,7 @@ function fieldFocusProps(
  * Main settings panel for support mode.
  * Displays presets and editable settings for tip, shaft, roots, base flare, and grid.
  */
-export function SupportSidebar({ activeModelId = null, activePlateId = null, modelPlateId = null, plateModelIds = [] }: { activeModelId?: string | null; activePlateId?: string | null; modelPlateId?: string | null; plateModelIds?: readonly string[] }) {
+export function SupportSidebar({ activeModelId = null, activePlateId = null, modelPlateId = null, plateModelIds = [], plateBounds = null, isPlateLocked = false }: { activeModelId?: string | null; activePlateId?: string | null; modelPlateId?: string | null; plateModelIds?: readonly string[]; plateBounds?: GridPreviewContext['plateBounds']; isPlateLocked?: boolean }) {
     const { _ } = useLingui();
     usePresetHotkeys();
     const autoBracingHotkeyActive = useActionActive('SUPPORTS', 'AUTO_BRACING');
@@ -1240,7 +1241,7 @@ export function SupportSidebar({ activeModelId = null, activePlateId = null, mod
 
                                     {activePanel === 'optimize' ? (
                                         <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
-                                            <ClusterOptimizationCard context={{ modelId: activeModelId, plateId: activePlateId, modelPlateId, plateModelIds, autoBracingSettings: settings.autoBracing, gridSettings: settings.grid }} />
+                                            <OptimizationTools context={{ plateBounds, isPlateLocked, modelId: activeModelId, plateId: activePlateId, modelPlateId, plateModelIds, autoBracingSettings: settings.autoBracing, gridSettings: settings.grid }} />
                                         </div>
                                     ) : activePanel === 'raft' ? (
                                         <>

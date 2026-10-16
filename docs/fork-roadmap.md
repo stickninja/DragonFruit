@@ -18,19 +18,21 @@ Acceptance requires the checks in [the Phase 0.5 record](upstream-0.1.17-accepta
 
 ## Support Studio tools sequence
 
-On 2026-10-16 the user separately authorized starting Support Studio bracing on the integration candidate and approved the following order. This authorization does not accept Phase 0.5 or authorize a release. The package remains the unpublished 0.4.1 candidate. Complete each stage's checks and obtain explicit user acceptance before beginning the next stage.
+On 2026-10-16 the user separately authorized starting Support Studio bracing on the integration candidate and approved the following order. This authorization does not accept Phase 0.5 or authorize a release. The package remains the unpublished 0.4.1 candidate. Complete each stage's checks and obtain explicit user acceptance before beginning the next stage, except for the explicit combined-review authorization below.
 
 | Stage | Scope | Status or exit condition |
 | --- | --- | --- |
 | 1 | Bracing: legacy fixed sizing or parent-relative uniform diameter, and optional automatic bracing during manual trunk/branch placement. | **Accepted by the user on 2026-10-16.** See [Stage 1 evidence and remaining limits](support-studio-bracing-acceptance.md). |
 | 2 | Cluster Optimization: reduce selected trunks while preserving model contacts using existing branch and knot geometry. | **Implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed. Candidate ready for explicit user acceptance.** See [Stage 2 acceptance](support-studio-cluster-acceptance.md). |
-| 3 | Grid Optimization. | Deferred until Stage 2 is accepted. |
-| 4 | Advanced Placement: Line, Arc, Fill/Rim, Area, Symmetry. | Deferred until Stage 3 is accepted. |
+| 3 | Grid Optimization: align selected grounded trunks and roots to the existing lattice while preserving model contacts. | **Implemented; automated checks and development browser review passed; production/native/build checks pending. Authorized for combined Stage 2/3 review on 2026-10-16.** See [Stage 3 acceptance](support-studio-grid-acceptance.md). Stage 2 remains unaccepted. |
+| 4 | Advanced Placement: Line, Arc, Fill/Rim, Area, Symmetry. | Deferred until the user explicitly accepts Stages 2 and 3 after combined review. |
 | 5 | Support influence. | Deferred until Stage 4 is accepted. |
+
+On 2026-10-16 the user explicitly authorized the stage-gate exception: “Proceed with Stage 3, I’ll review Stage 2 and 3 together”. This permits Stage 3 implementation before Stage 2 acceptance; it does not accept either stage. Stage 4 remains deferred until explicit acceptance of the combined Stage 2/3 review. Phase 0.5 remains unaccepted, Stage 1 remains accepted, and no release or version bump is authorized.
 
 Stage 1 preserves existing brace patterns, Cluster Spacing, and Apply/Clear behavior. Apply and live placement preserve manual braces; Clear All continues to delete all braces on the current model, including manual braces. Relative sizing uses the smaller actual parent shaft segment diameter at each generated brace's two attachment points. The new relative brace has one uniform diameter. Automatic bracing while placing is off by default, stays within the placed support's model and plate, and shares the placement's undo operation. Cluster/grid optimization, advanced placement, and support influence are outside this stage.
 
-Stage 2 works on selected trunks on one model and its assigned plate. It reduces eligible grounded trunks by replacing their model contacts with branches on retained hosts, preserving contact positions and geometry. Preview must not mutate the support graph; applying a current proposal is one undoable support edit. Existing dependency, bracing, collision, and ownership constraints take precedence over reducing the count. Grid Optimization and later tools remain deferred until their preceding stage is explicitly accepted. Acceptance of Stage 1 does not claim that its remaining manual/native or physical-print checks were performed.
+Stage 2 works on selected trunks on one model and its assigned plate. It reduces eligible grounded trunks by replacing their model contacts with branches on retained hosts, preserving contact positions and geometry. Preview must not mutate the support graph; applying a current proposal is one undoable support edit. Existing dependency, bracing, collision, and ownership constraints take precedence over reducing the count. Grid Optimization is now authorized by the combined-review exception above; later tools retain their acceptance gates. Acceptance of Stage 1 does not claim that its remaining manual/native or physical-print checks were performed.
 
 ## Phase 0.4 scope and acceptance
 
