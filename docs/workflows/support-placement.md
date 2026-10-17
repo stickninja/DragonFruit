@@ -39,6 +39,11 @@ count limit. Generation can still take longer for a large scan. Review the
 resulting contacts and support geometry before finalizing the scene. One Undo
 reverses a committed generation run.
 
+Meshes imported with duplicated face corners are analyzed with shared-position
+neighbors when detecting minima. After updating, scan again before generating
+supports to refresh previously detected minima; the detection correction does
+not alter the imported model or existing supports.
+
 ## Support Studio bracing
 
 In Support Studio's bracing controls, choose **Fixed** to use the diameter in

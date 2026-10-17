@@ -223,6 +223,29 @@ run_island_scan_native() ──►  { paramsJson }   ──────►  spaw
 | `src/volumeAnalysis/IslandScan/nativeIslandScan.ts` | TS bridge (`runIslandScanNative()`) |
 | `src/volumeAnalysis/IslandScan/useIslandManager.ts` | React hook with `useNativeScan` toggle |
 
+## Mesh minima topology
+
+`src-tauri/src/mesh_minima.rs` handles the separate local mesh minima used by
+Support Studio. `scan_minima_internal` derives adjacency from a private
+`minima_analysis_mesh` view. Indexed imports can store the same position once per
+face; treating those corners as disconnected vertices produces triangle-local
+minima rather than minima of the connected surface.
+
+The analysis view uses the core mesh's `position_weld_ids` and
+`weld_by_position` operations to join exact coincident positions. Already welded
+meshes are borrowed without a geometry copy. When a copy is needed, it retains
+all faces in their original order, including degenerate faces, and retains their
+coordinates. The source mesh and the voxel/overhang analysis inputs are never
+modified. The result maps `vertexIndex` back to the first original vertex in the
+position group; `seedTriangleId` remains an index into the original face order.
+
+The soup IPC path keeps its existing relative-tolerance weld before this step;
+exact duplicate corners now share the same adjacency through both the path and
+soup entry points. This does not change imported geometry or file formats.
+Regression tests in the native module cover shared and duplicated indices,
+synthetic 3MF path loading with a world transform, source geometry preservation,
+face ordering, and result vertex/face references.
+
 ## Design Notes
 
 ### GPU acceleration — evaluated and rejected

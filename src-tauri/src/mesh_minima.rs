@@ -17,6 +17,7 @@ use dragonfruit_islands::{
 use dragonfruit_mesh_repair::{core::mesh::Vec3, IndexedMesh};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use tauri::Emitter;
@@ -166,7 +167,28 @@ thread_local! {
     static SCAN_CONTEXT: RefCell<Option<ThreadLocalScanContext>> = RefCell::new(None);
 }
 
+/// Normalize adjacency on an analysis-only copy, retaining face order and original vertex IDs.
+/// Some indexed formats repeat a position per face; those corners must share neighbors.
+fn minima_analysis_mesh(mesh: &IndexedMesh) -> (Cow<'_, IndexedMesh>, Vec<u32>) {
+    let groups = mesh.position_weld_ids();
+    let mut original_vertices = Vec::new();
+    // Core weld groups and weld_by_position both use first-occurrence order.
+    for (original, &group) in groups.iter().enumerate() {
+        if group as usize == original_vertices.len() {
+            original_vertices.push(original as u32);
+        }
+    }
+    if original_vertices.len() == mesh.vertex_count() {
+        return (Cow::Borrowed(mesh), original_vertices);
+    }
+    let mut analysis = mesh.clone();
+    analysis.weld_by_position();
+    (Cow::Owned(analysis), original_vertices)
+}
+
 fn scan_minima_internal(mesh: &IndexedMesh, k: Option<usize>) -> Vec<LocalMinimum> {
+    let (analysis, original_vertices) = minima_analysis_mesh(mesh);
+    let mesh = analysis.as_ref();
     let tri_count = mesh.triangle_count();
     let vert_count = mesh.vertex_count();
 
@@ -234,7 +256,7 @@ fn scan_minima_internal(mesh: &IndexedMesh, k: Option<usize>) -> Vec<LocalMinimu
 
                 if keep {
                     Some(LocalMinimum {
-                        vertex_index: vi as u32,
+                        vertex_index: original_vertices[vi],
                         position: mesh.positions[vi],
                         seed_triangle_id: vert_to_face[vi],
                     })
@@ -1033,6 +1055,187 @@ fn is_point_inside_mesh(orig: &Vec3, mesh: &IndexedMesh) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sheared_cube() -> IndexedMesh {
+        let corners = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ];
+        let faces = [
+            [0, 3, 2, 1],
+            [4, 5, 6, 7],
+            [0, 1, 5, 4],
+            [1, 2, 6, 5],
+            [2, 3, 7, 6],
+            [3, 0, 4, 7],
+        ];
+        IndexedMesh {
+            positions: corners
+                .iter()
+                .map(|p| Vec3::new(p[0], p[1], p[2] + 0.13 * p[0] + 0.27 * p[1]))
+                .collect(),
+            triangles: faces
+                .iter()
+                .flat_map(|f| [[f[0], f[1], f[2]], [f[0], f[2], f[3]]])
+                .collect(),
+        }
+    }
+
+    fn split_face_vertices(mesh: &IndexedMesh) -> IndexedMesh {
+        let soup = mesh.to_triangle_soup();
+        IndexedMesh {
+            positions: soup
+                .chunks_exact(3)
+                .map(|p| Vec3::new(p[0], p[1], p[2]))
+                .collect(),
+            triangles: (0..mesh.triangle_count() as u32)
+                .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
+                .collect(),
+        }
+    }
+
+    fn write_minima_3mf(mesh: &IndexedMesh) -> std::path::PathBuf {
+        use std::io::Write;
+        let mut xml = String::from("<model><resources><object id=\"1\"><mesh><vertices>");
+        for p in &mesh.positions {
+            xml.push_str(&format!(
+                "<vertex x=\"{}\" y=\"{}\" z=\"{}\"/>",
+                p.x, p.y, p.z
+            ));
+        }
+        xml.push_str("</vertices><triangles>");
+        for t in &mesh.triangles {
+            xml.push_str(&format!(
+                "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
+                t[0], t[1], t[2]
+            ));
+        }
+        xml.push_str(
+            "</triangles></mesh></object></resources><build><item objectid=\"1\"/></build></model>",
+        );
+        let path = std::env::temp_dir().join(format!(
+            "df-minima-{}-{}.3mf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file = std::fs::File::create(&path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .start_file("3D/3dmodel.model", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(xml.as_bytes()).unwrap();
+        archive.finish().unwrap();
+        path
+    }
+
+    fn assert_minima_reference_source(mesh: &IndexedMesh, minima: &[LocalMinimum]) {
+        for minimum in minima {
+            assert_eq!(
+                mesh.positions[minimum.vertex_index as usize],
+                minimum.position
+            );
+            assert!(mesh
+                .tri_positions(minimum.seed_triangle_id)
+                .contains(&minimum.position));
+        }
+    }
+
+    #[test]
+    fn minima_analysis_welds_only_duplicate_positions_without_changing_faces_or_source() {
+        let shared = sheared_cube();
+        assert!(matches!(minima_analysis_mesh(&shared).0, Cow::Borrowed(_)));
+        let mut split = split_face_vertices(&shared);
+        split.triangles.insert(3, [2, 2, 2]); // Degenerate faces keep their original IDs too.
+        let before = split.clone();
+        let (analysis, original_vertices) = minima_analysis_mesh(&split);
+        assert!(matches!(analysis, Cow::Owned(_)));
+        assert_eq!(analysis.vertex_count(), shared.vertex_count());
+        assert_eq!(analysis.triangles.len(), split.triangles.len());
+        for face in 0..split.triangle_count() {
+            assert_eq!(
+                analysis.tri_positions(face as u32),
+                split.tri_positions(face as u32)
+            );
+        }
+        for (vertex, &original) in original_vertices.iter().enumerate() {
+            assert_eq!(
+                analysis.positions[vertex],
+                split.positions[original as usize]
+            );
+        }
+        assert_eq!(split.positions, before.positions);
+        assert_eq!(split.triangles, before.triangles);
+    }
+
+    #[test]
+    fn minima_match_shared_and_duplicated_indices_with_original_vertex_references() {
+        let shared = sheared_cube();
+        let split = split_face_vertices(&shared);
+        let before = split.clone();
+        let shared_minima = scan_minima_internal(&shared, Some(2));
+        let split_minima = scan_minima_internal(&split, Some(2));
+        let soup = IndexedMesh::from_triangle_soup(&shared.to_triangle_soup(), 1e-5);
+        let soup_minima = scan_minima_internal(&soup, Some(2));
+        assert_eq!(shared_minima.len(), 1);
+        assert_eq!(split_minima.len(), 1);
+        assert_eq!(soup_minima.len(), 1);
+        assert_eq!(shared_minima[0].position, split_minima[0].position);
+        assert_eq!(shared_minima[0].position, soup_minima[0].position);
+        assert_eq!(
+            shared_minima[0].seed_triangle_id,
+            split_minima[0].seed_triangle_id
+        );
+        assert_minima_reference_source(&split, &split_minima);
+        assert_eq!(split.positions, before.positions);
+        assert_eq!(split.triangles, before.triangles);
+    }
+
+    #[test]
+    fn minima_3mf_path_scans_ignore_duplicate_indices_and_preserve_world_pose() {
+        // Pre-refine both representations identically so IO's coarse-face policy is unchanged.
+        let shared = dragonfruit_mesh_repair::io::refine_coarse_faces(sheared_cube());
+        let split = split_face_vertices(&shared);
+        let shared_path = write_minima_3mf(&shared);
+        let split_path = write_minima_3mf(&split);
+        let matrix = [
+            0.0, 2.0, 0.0, 0.0, -3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 0.0, 10.0, -7.0, 24.0, 1.0,
+        ];
+        let shared_result =
+            load_and_transform_mesh(shared_path.to_str().unwrap(), matrix, [0.0; 3]);
+        let split_result = load_and_transform_mesh(split_path.to_str().unwrap(), matrix, [0.0; 3]);
+        std::fs::remove_file(shared_path).unwrap();
+        std::fs::remove_file(split_path).unwrap();
+        let shared_world = shared_result.unwrap();
+        let split_world = split_result.unwrap();
+        let before = split_world.clone();
+        let shared_minima = scan_minima_internal(&shared_world, Some(2));
+        let split_minima = scan_minima_internal(&split_world, Some(2));
+        assert_eq!(shared_minima.len(), 1);
+        assert_eq!(split_minima.len(), 1);
+        assert_eq!(shared_minima[0].position, split_minima[0].position);
+        assert_eq!(
+            shared_minima[0].seed_triangle_id,
+            split_minima[0].seed_triangle_id
+        );
+        let pos = split_minima[0].position;
+        assert!(
+            (pos.x - 11.5).abs() < 1e-5
+                && (pos.y + 8.0).abs() < 1e-5
+                && (pos.z - 22.95).abs() < 1e-5
+        );
+        assert_minima_reference_source(&split_world, &split_minima);
+        assert_eq!(split_world.positions, before.positions);
+        assert_eq!(split_world.triangles, before.triangles);
+    }
 
     #[test]
     fn test_local_minima_scanner() {
