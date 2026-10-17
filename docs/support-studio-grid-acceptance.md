@@ -1,6 +1,6 @@
 # Support Studio Stage 3: Grid Optimization acceptance
 
-Status: **implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed; candidate ready for combined Stage 2/3 review and explicit user acceptance.** On 2026-10-16 the user instructed: “Proceed with Stage 3, I’ll review Stage 2 and 3 together”. This is an explicit exception to the normal sequence, not acceptance of Stage 2. Stage 1 remains accepted. Stage 4 is deferred until explicit acceptance after combined review. [Phase 0.5](upstream-0.1.17-acceptance.md) remains unaccepted; the package remains the unpublished 0.4.1 candidate. No release or version bump is authorized.
+Status: **implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed; candidate ready for combined Stage 2/3 review and explicit user acceptance.** On 2026-10-16 the user instructed: “Proceed with Stage 3, I’ll review Stage 2 and 3 together”. This is an explicit exception to the normal sequence, not acceptance of Stage 2. Stage 1 remains accepted. Stage 4 is deferred until explicit acceptance after combined review. [Phase 0.5](upstream-0.1.17-acceptance.md) remains unaccepted; the evidence below initially covers the unpublished 0.4.1 candidate. The user later authorized r2/package 0.4.2 to distinguish the corrected candidate; its build and normal-install validation are pending as recorded below. No public release is authorized.
 
 ## Scope and agreed intent
 
@@ -335,6 +335,33 @@ The earlier modifier-only key dispatch was an inconclusive harness attempt;
 correcting the temporary harness resolved that verification issue without
 product changes or another Apply. The user's actual scene retest remains
 pending.
+
+### 2026-10-16 correction: normal installation identity
+
+The user's normal application still rejected a five-trunk selection with the
+model-selection guard. A fresh native Settings → About tooltip identified that
+running window as `codex/support-studio-grid @ 27acd6a0f · Windows/x64`, while
+the latest verified installer source is `ee63a6c6`.
+
+The earlier installation and synthetic native checks exercised a separate
+Codex MSIX LocalCache installation. Their Preview/Cancel/Apply/Undo/Redo evidence
+remains valid for that tested copy only. The normal shortcut launches the
+unredirected application installation; shell file inspection was subject to
+redirection and misleadingly reported matching hashes. Those checks therefore
+do not establish that the user's normal application received the root-selection
+fix or that the actual scene passed.
+
+Updating and verifying the normal user installation remains pending. The user
+requested a distinguishable revision; the corrected unpublished candidate will
+use fork revision **stickninja r2** and package version **0.4.2**. This version
+change is now user-authorized; it does not accept a stage or authorize public
+release. The r2/0.4.2 build still needs preparation and validation. All earlier
+source, installer, hash, and tested-copy evidence above retains its recorded
+identity and does not describe the new candidate.
+
+Save/close and installation confirmation at action time have been requested;
+no successful normal-install update, r2/0.4.2 build, or user-scene retest is
+recorded here.
 
 ## Remaining acceptance boundary
 

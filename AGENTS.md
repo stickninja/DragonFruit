@@ -251,7 +251,7 @@ Whenever you change one of these crates, **bump its `version`** in that crate's
 
 ## App version — do not bump unprompted
 
-NEVER bump the DragonFruit main app version unprompted — `package.json` `version`, `src-tauri/tauri.conf.json` `version`, and `src-tauri/Cargo.toml` `[package] version` must agree. The current fork integration candidate is `0.4.1` (after the installed `0.4.0`); it is not a published release. The user controls each phase acceptance and release. The `rust/*` crate bumps above are allowed; see [fork build versioning](docs/dev/fork-builds.md) for the separate upstream display version.
+NEVER bump the DragonFruit main app version unprompted — `package.json` `version`, `src-tauri/tauri.conf.json` `version`, and `src-tauri/Cargo.toml` `[package] version` must agree. The user requested the distinguishable `0.4.2` / stickninja r2 integration candidate on 2026-10-16; it is not a published release. The user controls each phase acceptance and release. The `rust/*` crate bumps above are allowed; see [fork build versioning](docs/dev/fork-builds.md) for the separate upstream display version.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

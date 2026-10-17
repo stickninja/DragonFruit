@@ -2,6 +2,12 @@
 
 Phase 0.5 is in progress. The user approved the proposed 0.1.17 migration designs except the layer inspector redesign. Keep the current encoded layer inspector. Do not publish a release or start the next roadmap phase until these checks are completed and the user explicitly accepts this phase.
 
+On 2026-10-16 the user requested a distinguishable review candidate:
+`0.1.17 · stickninja r2`, package `0.4.2`. This updates candidate identity and
+upgrade ordering only. Earlier build evidence below belongs to the recorded r1
+packages; it does not verify an r2 build or normal-shortcut installation. Phase
+0.5 and Support Studio Stages 2/3 remain unaccepted, and no release is authorized.
+
 ## Required checks
 
 | Area | Acceptance check | Status |
