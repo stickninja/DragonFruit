@@ -496,9 +496,12 @@ Finish launched the normal installed application.
 
 The returned native window identified the executable as the normal installation,
 and its accessible welcome badge displayed **0.1.17 · stickninja r3 — Beta**.
-This confirms installed r3 identity through the welcome label and normal process,
-not About. A startup autosave-recovery prompt was left untouched for the user;
-About verification is pending that resolution. Actual-scene optimization visual
+The startup autosave-recovery prompt was initially left untouched for the user.
+After the user handled recovery, a fresh native Settings → About screenshot and
+accessibility reading explicitly confirmed **0.1.17 · stickninja r3**, with the
+normal installed executable again identified by the returned window. No
+build-ref tooltip or copied diagnostics were captured; package version `0.4.3`
+remains established by the build metadata above. Actual-scene optimization visual
 review remains pending. Neither stage is accepted, and no release is authorized.
 
 ## Remaining acceptance boundary

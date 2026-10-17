@@ -20,8 +20,10 @@ cache or device-specific paths out of public records.
 On 2026-10-17 the user authorized r3/package 0.4.3 for the continued support
 geometry correction. Its production frontend and Windows x64/NSIS build passed
 from source `07bb38ba`. Native setup completed successfully in the normal
-installation, and its welcome badge plus executable identity confirmed installed
-r3. About verification and actual-scene geometry review remain pending. Earlier
+installation; its welcome badge, subsequent native About reading, and executable
+identity confirmed installed r3. No build-ref tooltip or copied diagnostics were
+captured in that About check; package 0.4.3 is established by build metadata.
+Actual-scene geometry review remains pending. Earlier
 r2/package 0.4.2 evidence retains its historical identity. This remains an unpublished
 candidate, with no phase/stage acceptance or public release authorization.
 
