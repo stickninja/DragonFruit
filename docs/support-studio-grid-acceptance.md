@@ -294,8 +294,47 @@ browser evidence, not a byte-for-byte browser history comparison. The primary
 reviewed the Cluster preview and Grid applied screenshots. The run exited
 successfully with zero uncaught page errors.
 
-Windows native packaging is still in progress. A native retest is pending;
-the current native Optimize issue is not recorded as passed.
+The Windows x64 executable and NSIS package built successfully with exit code 0
+from source `ee63a6c6`. Rust release compilation took 5 minutes 10 seconds;
+this is the compilation-stage duration. The candidate is
+`DragonFruit-stickninja-optimize-marquee-ee63a6c6-x64-setup.exe`, **21,996,165 bytes**,
+SHA-256 `52B38A63E2DCF7578A29F4B69E7567FF459422A6662033DB5AD1A5E9A42B24AD`.
+The built and copied installer hashes match. The built executable identifies as
+`DragonFruit (stickninja)`, version `0.4.1`, SHA-256
+`243630FB3A5B92C341F8653EBD065876F1683C59BCDF3A2A0F9EF105D1044A8F`.
+
+An initial packaging attempt encountered inherited PowerShell module-path
+configuration. Retrying with Windows PowerShell modules in the build process's
+environment succeeded; no repository build change was needed. No release or
+version bump was performed.
+
+The user saved and closed the scene, and process inspection confirmed no
+DragonFruit process remained. Silent installation completed with exit code 0.
+The installed executable is **35,382,272 bytes**, version `0.4.1`, SHA-256
+`EABA4F34D0C705A938D07908B75C56DE02808CB6682F3FFEDB89EAC0B99766D8`.
+Full byte comparison with the built executable differed only in the expected
+three-byte Tauri bundle marker change from `UNK` to `NSS`.
+
+A native test used an isolated WebView2 profile and a synthetic scene loaded
+through the command-line interface. Actual mouse marquee selected eight trunks
+and their feet. Preview reduced eight trunks to four while preserving eight
+contacts; Cancel cleared the proposal; Apply reported one undoable change.
+This confirms the root-selection guard correction in the native synthetic
+fixture. The user's scene has not yet been retested.
+
+A follow-up history-only run against that same applied scene passed with exit
+code 0, without repeating Apply. The temporary harness sent actual Control/Shift
+key-down and key-up events: Ctrl+Z displayed the Cluster optimization Undo toast,
+restored eight straight trunks, and cleared the applied summary. Ctrl+Shift+Z
+displayed the Redo toast and restored four trunks with diagonal branches. The
+primary visually reviewed the before, Undo, and Redo captures. This establishes
+native Cluster Preview/Cancel/Apply/Undo/Redo on the synthetic fixture; history
+restoration was visually verified, not compared byte for byte.
+
+The earlier modifier-only key dispatch was an inconclusive harness attempt;
+correcting the temporary harness resolved that verification issue without
+product changes or another Apply. The user's actual scene retest remains
+pending.
 
 ## Remaining acceptance boundary
 
