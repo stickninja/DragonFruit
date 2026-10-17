@@ -204,7 +204,9 @@ export function sourceGraft(snapshot: SupportState, source: Trunk, knotsByShaft:
     if (!endpoints || !finitePoint(endpoints.start) || !finitePoint(endpoints.end)
         || endpoints.end.z - endpoints.start.z < 1) return 'unsupported-geometry';
     const length = distance3D(endpoints.start, endpoints.end);
-    let sourceT = 1 - 0.25 / length;
+    // With no hosted knots the original top joint is already the graft joint.
+    // Retain a shortened upper span only when an existing knot requires it.
+    let sourceT = 1;
     const hostedKnots: Graft['hostedKnots'] = [];
     if (knotsByShaft.has(source.id) || knotsByShaft.has(source.rootId)) return 'dependent-geometry';
     for (const knot of knotsByShaft.get(segment.id) ?? []) {
@@ -221,7 +223,7 @@ export function sourceGraft(snapshot: SupportState, source: Trunk, knotsByShaft:
     // Keep that span unchanged rather than quietly changing its constraint.
     if (Object.values(snapshot.kickstands).some(stand => stand.hostSegmentId === segment.id)) return 'dependent-geometry';
     if (sharedRoots.has(source.rootId) || sourceT <= EPS) return 'dependent-geometry';
-    return { sourceT, point: interpolate(endpoints.start, endpoints.end, sourceT), endpoints, hostedKnots };
+    return { sourceT, point: sourceT === 1 ? endpoints.end : interpolate(endpoints.start, endpoints.end, sourceT), endpoints, hostedKnots };
 }
 
 export function rebuildSelectedBraces(snapshot: SupportState, selected: ReadonlySet<string>, settings: AutoBracingSettings, gridSettings?: GridSettings, changedSupportIds?: ReadonlySet<string>): number {

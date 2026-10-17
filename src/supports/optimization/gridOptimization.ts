@@ -280,11 +280,14 @@ export function buildGridOptimization(
             });
             if (blocked) { reason = 'collision'; continue; }
             const kneeJoint = { id: createId(`grid-${source.id}-knee`), pos: knee, diameter: source.segments[0].topJoint!.diameter };
-            const graftJoint = { id: createId(`grid-${source.id}-joint`), pos: graft.point, diameter: kneeJoint.diameter };
+            const graftJoint = graft.sourceT === 1 ? source.segments[0].topJoint!
+                : { id: createId(`grid-${source.id}-joint`), pos: graft.point, diameter: kneeJoint.diameter };
             const trunk: Trunk = { ...source, typeId: 'trunk', segments: [
                 { id: createId(`grid-${source.id}-leg`), diameter: source.segments[0].diameter, topJoint: kneeJoint },
-                { id: createId(`grid-${source.id}-diagonal`), diameter: source.segments[0].diameter, bottomJoint: kneeJoint, topJoint: graftJoint },
-                { ...source.segments[0], bottomJoint: graftJoint }, ...source.segments.slice(1),
+                ...(graft.sourceT === 1 ? [{ ...source.segments[0], bottomJoint: kneeJoint }] : [
+                    { id: createId(`grid-${source.id}-diagonal`), diameter: source.segments[0].diameter, bottomJoint: kneeJoint, topJoint: graftJoint },
+                    { ...source.segments[0], bottomJoint: graftJoint },
+                ]), ...source.segments.slice(1),
             ] };
             next.trunks[source.id] = trunk;
             next.roots[root.id] = { ...root, transform: { ...root.transform, pos: point } };

@@ -202,12 +202,14 @@ leave more trunks. `CLUSTER_MAX_CANDIDATE_CHECKS` bounds geometry queries for
 the whole run at 6000, with at most 64 host samples per candidate.
 
 A converted trunk becomes a branch with the same support ID and unchanged
-contact-cone object, including its socket joint ID and tip profile. The planner
-grafts below the first shaft segment's lowest retained knot, shortens that
-segment, and remaps attachment positions along it while preserving their world
-positions. It uses existing segment endpoints, branch geometry, collision, and
-length-aware angle rules. The new connection is a conservative straight diagonal
-to the preserved source shaft; this does not invoke the full placement
+contact-cone object, including its socket joint ID and tip profile. When the
+first shaft span has no hosted knots, the planner reuses its original top joint
+and first segment for the direct connection from the retained host knot, avoiding a short retained stub and an extra graft joint. If that span has
+any hosted knot, including a free knot, the planner instead grafts below the
+lowest retained knot, shortens the segment, and remaps attachment positions
+along it while preserving their world positions. It uses existing segment
+endpoints, branch geometry, collision, and length-aware angle rules. The new
+connection is a conservative straight diagonal to the preserved source shaft; this does not invoke the full placement
 pathfinder to search around obstacles. Blocked connections are skipped.
 `segmentDistanceSq` in `src/supports/PlacementLogic/segmentDistance.ts` is the
 shared leaf helper for support-span crossing checks, also used by automatic
@@ -314,12 +316,18 @@ whole-model fallback, trunk merging, or occupied-owner replacement.
 
 The planner moves only eligible selected roots in XY and replaces the lower
 first span with a vertical node leg and a diagonal to the preserved upper shaft.
-The graft stays below retained knots; their normalized attachment positions are
-remapped to retain world positions. Contact-cone objects and upper geometry
-remain unchanged. Curved first spans, shared roots, incompatible dependents,
+If the first span has no hosted knots, its original top joint and segment are
+reused: the new lower leg reaches a knee, and the diagonal ends at that original
+joint. No retained first-span stub or extra graft joint is added in that case.
+With any hosted knot, including a free knot, the conservative graft stays below
+the lowest retained knot; normalized attachment positions are remapped to retain
+world positions. Contact-cone objects and upper geometry remain unchanged.
+Curved first spans, shared roots, incompatible dependents,
 kickstand hosts, invalid geometry, collisions, or insufficient height can force
 a skip. The existing length-aware angle and collision rules remain constraints;
-a partial result is valid.
+a partial result is valid. This narrow segment reuse does not add global routing
+or delete free knots; shared-root, kickstand, and legacy-dependency guards remain
+in force.
 
 The result carries a replacement snapshot, changed/selected/aligned trunk counts,
 before/after contact counts, skipped IDs and reasons, candidate-check count,

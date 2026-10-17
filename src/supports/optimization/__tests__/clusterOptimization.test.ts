@@ -14,6 +14,7 @@ import { getSettings, setSettings } from '../../Settings/state';
 import type { SupportState } from '../../types';
 import { scene, boxMesh } from './clusterFixture';
 import { buildClusterOptimization, DEFAULT_CLUSTER_OPTIMIZATION_OPTIONS, CLUSTER_MAX_CANDIDATE_CHECKS } from '../clusterOptimization';
+import { sourceGraft } from '../optimizationGeometry';
 
 initializeBVH();
 
@@ -33,6 +34,9 @@ test('reduces selected trunks into existing parent shafts, preserving exact cont
     assert.equal(JSON.stringify(input), before);
     for (const branch of Object.values(result.snapshot.branches)) {
         const old = input.trunks[branch.id];
+        assert.equal(branch.segments.length, old.segments.length, 'an unconstrained first span needs no extra joint or stub');
+        assert.equal(branch.segments[0].id, old.segments[0].id);
+        assert.equal(branch.segments[0].topJoint, old.segments[0].topJoint);
         assert.equal(branch.contactCone, old.contactCone);
         assert.deepEqual(getFinalSocketPosition(branch.contactCone!), old.segments[0].topJoint!.pos);
         assert.equal(result.snapshot.roots[old.rootId], undefined);
@@ -40,6 +44,88 @@ test('reduces selected trunks into existing parent shafts, preserving exact cont
         assert.ok(Object.values(result.snapshot.trunks).some(host => host.segments.some(segment => segment.id === parent.parentShaftId)));
     }
     assert.deepEqual(plan(input).snapshot, result.snapshot, 'IDs and geometry are deterministic');
+});
+
+test('a reused first span clears its old base joint while preserving later joints, cone and binary serialization', async () => {
+    const input = scene();
+    const first = input.trunks.a.segments[0];
+    first.bottomJoint = { id: 'old-base', diameter: 1.3, pos: { x: 0, y: 0, z: 2 } };
+    const upper = { id: 'upper-a', diameter: 1.2, bottomJoint: first.topJoint,
+        topJoint: { id: 'upper-socket', diameter: 1.3, pos: { x: 0, y: 0, z: 24 } } };
+    input.trunks.a.segments.push(upper);
+    input.trunks.a.contactCone = { ...input.trunks.a.contactCone!, pos: { x: 0, y: 0, z: 27 }, socketJointId: upper.topJoint.id };
+    const before = JSON.stringify(input);
+    const proposal = plan(input, ['a', 'b'], boxMesh(100, 100, 2, 0, 0, 28));
+    assert.equal(proposal.changedCount, 1);
+    const branch = proposal.snapshot.branches.a;
+    assert.equal(branch.segments.length, 2);
+    assert.equal(branch.segments[0].id, first.id);
+    assert.equal(branch.segments[0].diameter, first.diameter);
+    assert.equal(branch.segments[0].topJoint, first.topJoint);
+    assert.equal(branch.segments[0].bottomJoint, undefined);
+    assert.equal(branch.segments[1], upper);
+    assert.equal(branch.contactCone, input.trunks.a.contactCone);
+    assert.equal(branch.contactCone!.socketJointId, upper.topJoint.id);
+    assert.equal(JSON.stringify(input), before);
+    const original = getSnapshot();
+    try {
+        const binary = await serializeVoxlDocumentV2({ ...testInput(['model']), supports: buildSupportExportFromStores(proposal.snapshot) }, new Map());
+        loadFromImportFormat(parseVoxlBinaryV2(binary).document.supports);
+        assert.deepEqual(getSnapshot().branches.a.segments, branch.segments);
+        assert.deepEqual(getSnapshot().branches.a.contactCone, branch.contactCone);
+    } finally { setSnapshot(original); }
+});
+
+test('a free first-span knot remains a valid anchor and prevents complete span replacement', () => {
+    const input = scene();
+    input.knots.free = { id: 'free', parentShaftId: 'seg-a', t: 0.5, pos: { x: 0, y: 0, z: 11 }, diameter: 1.3 };
+    const before = JSON.stringify(input);
+    const proposal = plan(input);
+    assert.equal(proposal.changedCount, 1);
+    const branch = proposal.snapshot.branches.a;
+    assert.equal(branch.segments.length, 2);
+    assert.equal(branch.segments[1].id, 'seg-a');
+    assert.equal(branch.segments[1].topJoint, input.trunks.a.segments[0].topJoint);
+    const knot = proposal.snapshot.knots.free;
+    assert.deepEqual(knot.pos, input.knots.free.pos);
+    assert.equal(knot.parentShaftId, 'seg-a');
+    assert.ok(Number.isFinite(knot.t));
+    const ends = resolveSegmentEndpoints(branch, branch.segments[1], 1, { hostKnot: proposal.snapshot.knots[branch.parentKnotId] })!;
+    assert.ok(Math.abs(ends.start.z + (ends.end.z - ends.start.z) * knot.t! - knot.pos.z) < 1e-9);
+    assert.equal(JSON.stringify(input), before);
+});
+
+test('knot-free endpoint reuse still refuses protected root, legacy and kickstand dependencies', () => {
+    const input = scene();
+    const source = input.trunks.a;
+    const direct = sourceGraft(input, source, new Map(), new Set());
+    assert.notEqual(typeof direct, 'string');
+    if (typeof direct === 'string') return;
+    assert.equal(direct.sourceT, 1);
+    assert.deepEqual(direct.hostedKnots, []);
+    assert.deepEqual(direct.point, source.segments[0].topJoint!.pos);
+    for (const parent of [source.id, source.rootId]) {
+        assert.equal(sourceGraft(input, source, new Map([[parent, [{ id: 'legacy', parentShaftId: parent, pos: { x: 0, y: 0, z: 8 } }]]]), new Set()), 'dependent-geometry');
+    }
+    assert.equal(sourceGraft(input, source, new Map(), new Set([source.rootId])), 'dependent-geometry');
+    input.kickstands.stand = { id: 'stand', typeId: 'kickstand', modelId: 'model', rootId: 'stand-root', hostKnotId: 'stand-knot',
+        hostSegmentId: source.segments[0].id, hostMinT: 0.1, segments: [],
+        profile: { bodyDiameterMm: 1.2, terminalStartDiameterMm: 1.2, terminalEndDiameterMm: 1.2 } };
+    assert.equal(sourceGraft(input, source, new Map(), new Set()), 'dependent-geometry');
+});
+
+test('reusing the socket joint does not exempt a contact cone crossed below that joint', () => {
+    const input = scene();
+    for (const [id, direction] of [['a', -1], ['b', 1]] as const) {
+        const cone = input.trunks[id].contactCone!;
+        input.trunks[id].contactCone = { ...cone, pos: { x: 2, y: 0, z: 18 },
+            normal: { x: direction * Math.SQRT1_2, y: 0, z: Math.SQRT1_2 },
+            profile: { ...cone.profile, lengthMm: Math.sqrt(8) } };
+    }
+    const proposal = plan(input);
+    assert.equal(proposal.changedCount, 0);
+    assert.equal(proposal.snapshot, input);
+    assert.ok(proposal.skipped.every(skip => skip.reason === 'collision'));
 });
 
 test('retains dependent knots, branches, leaves, and manual braces at identical world positions', () => {

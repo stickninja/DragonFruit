@@ -1,6 +1,6 @@
 # Support Studio Stage 2: Cluster Optimization acceptance
 
-Status: **implemented; automated checks, optimized frontend browser review, and Windows build passed; candidate ready for explicit user acceptance.** Stage 2 was explicitly authorized by the user on 2026-10-16 after accepting Stage 1. Detailed manual/physical-print scenarios remain unverified. This record does not mark planned checks as passed. The current unpublished review candidate is `0.1.17 · stickninja r2`, package `0.4.2`, at the user's request to distinguish it from older r1 installations. Earlier build checks below apply to their recorded packages. The r2 build passed, and native About plus running-executable identification confirmed r2 in the normal installation; the actual-scene functional retest remains pending. See the latest [Stage 3 follow-up evidence](support-studio-grid-acceptance.md#r2042-candidate-build). [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance and no release is authorized. On 2026-10-16 the user authorized Stage 3 to proceed for combined Stage 2/3 review; this is an explicit sequencing exception, not Stage 2 acceptance. See [Stage 3 acceptance](support-studio-grid-acceptance.md).
+Status: **implemented; automated checks, optimized frontend browser review, and Windows build passed; combined review continues; actual-scene Preview is operable, with reported geometry quality under review.** Stage 2 was explicitly authorized by the user on 2026-10-16 after accepting Stage 1. Detailed manual/physical-print scenarios remain unverified. This record does not mark planned checks as passed. The current unpublished review candidate is `0.1.17 · stickninja r2`, package `0.4.2`, at the user's request to distinguish it from older r1 installations. Earlier build checks below apply to their recorded packages. The r2 build passed, and native About plus running-executable identification confirmed r2 in the normal installation; on 2026-10-16 the user confirmed Optimize Preview is operable on the actual scene in normal r2, resolving the blocked control, then reported strange support geometry. Geometry quality remains under review; this is not a broad optimization pass or acceptance. Actual-scene Cancel/Apply/Undo/Redo and explicit Stage 2/3 acceptance are not established by that confirmation. See the latest [Stage 3 follow-up evidence](support-studio-grid-acceptance.md#r2042-candidate-build). [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance and no release is authorized. On 2026-10-16 the user authorized Stage 3 to proceed for combined Stage 2/3 review; this is an explicit sequencing exception, not Stage 2 acceptance. See [Stage 3 acceptance](support-studio-grid-acceptance.md).
 
 ## Scope
 
@@ -125,6 +125,40 @@ compact layout passed: seven selected trunks reduced to four while preserving
 seven contacts, with zero uncaught page errors. This adds browser regression
 evidence after the shared preview-controller refactor; Stage 2 remains
 unaccepted pending combined review. See [Stage 3 evidence](support-studio-grid-acceptance.md).
+
+### Geometry-quality diagnosis in progress
+
+Source review confirmed the original shared graft logic retained a 0.25 mm
+first-span stub near the existing top joint, with dependencies able to move the
+graft lower. The original planners added connection joints around the preserved
+geometry. These details explained redundant small segments and joints, but the
+exact private-scene dependency configuration was not established.
+
+The narrow source correction now reuses the original top joint and first segment
+when the first span has no hosted knots. Grid retains its required lower leg
+and knee. Real or free hosted knots retain the conservative graft path, and
+shared-root, kickstand, legacy-dependency, cone, bend, and collision guards remain
+in force. The correction does not add global routing, remove free knots, or
+redesign long/low joins. Their geometry quality remains unresolved.
+
+Verification passed **77 optimization unit/controller/catalog tests**, including
+**44 planner geometry tests**, and **15 ReactCompiler/Lingui DOM tests**. Full
+TypeScript and scoped ESLint covering three production and two test files passed
+with zero lint warnings. Independent review passed **61 overlapping
+planner/controller tests** and found renderer, proxy, and export endpoints
+consistent. Coverage includes direct joint/segment reuse, binary save/load,
+removal of the old base-joint reference, free/attached-knot preservation,
+protected dependencies, cone/bend collisions, deterministic results, and Grid
+spacing changes followed by Cluster optimization.
+
+The primary production frontend build completed with exit code 0, including
+Next compilation, TypeScript, and prepared embedded frontend assets.
+Documentation accuracy passed for **169 documents**, and the whitespace diff
+check passed. These results validate the source and production frontend only:
+no new native executable or installer was built or installed for this correction.
+The installed application remains the existing r2/package 0.4.2. The user's
+actual-scene visual review of this correction remains pending. Neither stage is
+accepted; later stages and public release remain unauthorized.
 
 ## Remaining acceptance boundary
 

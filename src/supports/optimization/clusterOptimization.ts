@@ -200,15 +200,23 @@ export function buildClusterOptimization(
                     }
                     const knot: Knot = { id: createId(`cluster-${source.id}-knot`), parentShaftId: segment.id,
                         t, pos: position, diameter: segment.diameter + 0.1 };
-                    const joint = { id: createId(`cluster-${source.id}-joint`), pos: graft.point,
-                        diameter: source.segments[0].topJoint!.diameter };
-                    const diagonal: Segment = { id: createId(`cluster-${source.id}-shaft`),
-                        diameter: source.segments[0].diameter, topJoint: joint };
+                    let lowerSegments: Segment[];
+                    if (graft.sourceT === 1) {
+                        const diagonal = { ...source.segments[0] };
+                        delete diagonal.bottomJoint;
+                        lowerSegments = [diagonal];
+                    } else {
+                        const joint = { id: createId(`cluster-${source.id}-joint`), pos: graft.point,
+                            diameter: source.segments[0].topJoint!.diameter };
+                        lowerSegments = [{ id: createId(`cluster-${source.id}-shaft`),
+                            diameter: source.segments[0].diameter, topJoint: joint },
+                        { ...source.segments[0], bottomJoint: joint }];
+                    }
                     const common: Omit<Trunk, 'rootId' | 'baseDiameterMm'> & { rootId?: string; baseDiameterMm?: number } = { ...source };
                     delete common.rootId;
                     delete common.baseDiameterMm;
                     const branch: Branch = { ...common, typeId: 'branch', parentKnotId: knot.id,
-                        segments: [diagonal, { ...source.segments[0], bottomJoint: joint }, ...source.segments.slice(1)] };
+                        segments: [...lowerSegments, ...source.segments.slice(1)] };
                     next.branches[source.id] = branch;
                     delete next.trunks[source.id];
                     delete next.roots[source.rootId];

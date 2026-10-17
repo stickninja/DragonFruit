@@ -1,6 +1,6 @@
 # Support Studio Stage 3: Grid Optimization acceptance
 
-Status: **implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed; candidate ready for combined Stage 2/3 review and explicit user acceptance.** On 2026-10-16 the user instructed: “Proceed with Stage 3, I’ll review Stage 2 and 3 together”. This is an explicit exception to the normal sequence, not acceptance of Stage 2. Stage 1 remains accepted. Stage 4 is deferred until explicit acceptance after combined review. [Phase 0.5](upstream-0.1.17-acceptance.md) remains unaccepted; the evidence below initially covers the unpublished 0.4.1 candidate. The user later authorized r2/package 0.4.2 to distinguish the corrected candidate; its successful build and normal-application revision confirmation are recorded below; the actual-scene functional retest is pending. No public release is authorized.
+Status: **implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed; combined Stage 2/3 review continues; actual-scene Preview is operable, with reported geometry quality under review.** On 2026-10-16 the user instructed: “Proceed with Stage 3, I’ll review Stage 2 and 3 together”. This is an explicit exception to the normal sequence, not acceptance of Stage 2. Stage 1 remains accepted. Stage 4 is deferred until explicit acceptance after combined review. [Phase 0.5](upstream-0.1.17-acceptance.md) remains unaccepted; the evidence below initially covers the unpublished 0.4.1 candidate. The user later authorized r2/package 0.4.2 to distinguish the corrected candidate; its successful build, normal-application revision confirmation, and user-confirmed actual-scene Preview success are recorded below. No public release is authorized.
 
 ## Scope and agreed intent
 
@@ -355,7 +355,7 @@ Updating and verifying the normal user installation remains pending. The user
 requested a distinguishable revision; the corrected unpublished candidate will
 use fork revision **stickninja r2** and package version **0.4.2**. This version
 change is now user-authorized; it does not accept a stage or authorize public
-release. The r2/0.4.2 build completed as recorded below; normal-install validation remains pending. All earlier
+release. The r2/0.4.2 build completed as recorded below; normal-install validation was still pending at this point. All earlier
 source, installer, hash, and tested-copy evidence above retains its recorded
 identity and does not describe the new candidate.
 
@@ -387,9 +387,52 @@ confirmed **0.1.17 · stickninja r2**, and the running executable was identified
 as the normal unredirected installation rather than the separate Codex cache
 copy. This verifies the normal application's r2 upgrade identity despite the
 earlier uninstall error. The source tooltip was not captured in this round;
-built package version `0.4.2` is established by the build evidence above. The
-user's actual scene is loaded, and its Preview test has been requested but is
-still pending. This does not accept either stage or authorize public release.
+built package version `0.4.2` is established by the build evidence above.
+
+On 2026-10-16 the user confirmed “Preview works now” after being asked to select
+the same trunks in r2 and try Optimize → Preview for an enabled control and a
+produced result. This records user-confirmed Preview operability on the actual scene
+in the normal r2 application and resolves the reported blocked control. The user
+immediately clarified that Optimize creates “some strange support geometry”.
+Geometry quality is under review; this is not a broad optimization pass,
+readiness decision, or acceptance. It does not establish actual-scene Cancel,
+Apply, Undo, or Redo; their separate
+synthetic evidence above remains unchanged. Neither Stage 2 nor Stage 3 has been
+explicitly accepted, and no public release is authorized.
+
+### Geometry-quality diagnosis in progress
+
+Source review confirmed the original shared graft logic retained a 0.25 mm
+first-span stub near the existing top joint, with dependencies able to move the
+graft lower. The original planners added connection joints around the preserved
+geometry. These details explained redundant small segments and joints, but the
+exact private-scene dependency configuration was not established.
+
+The narrow source correction now reuses the original top joint and first segment
+when the first span has no hosted knots. Grid retains its required lower leg
+and knee. Real or free hosted knots retain the conservative graft path, and
+shared-root, kickstand, legacy-dependency, cone, bend, and collision guards remain
+in force. The correction does not add global routing, remove free knots, or
+redesign long/low joins. Their geometry quality remains unresolved.
+
+Verification passed **77 optimization unit/controller/catalog tests**, including
+**44 planner geometry tests**, and **15 ReactCompiler/Lingui DOM tests**. Full
+TypeScript and scoped ESLint covering three production and two test files passed
+with zero lint warnings. Independent review passed **61 overlapping
+planner/controller tests** and found renderer, proxy, and export endpoints
+consistent. Coverage includes direct joint/segment reuse, binary save/load,
+removal of the old base-joint reference, free/attached-knot preservation,
+protected dependencies, cone/bend collisions, deterministic results, and Grid
+spacing changes followed by Cluster optimization.
+
+The primary production frontend build completed with exit code 0, including
+Next compilation, TypeScript, and prepared embedded frontend assets.
+Documentation accuracy passed for **169 documents**, and the whitespace diff
+check passed. These results validate the source and production frontend only:
+no new native executable or installer was built or installed for this correction.
+The installed application remains the existing r2/package 0.4.2. The user's
+actual-scene visual review of this correction remains pending. Neither stage is
+accepted; later stages and public release remain unauthorized.
 
 ## Remaining acceptance boundary
 

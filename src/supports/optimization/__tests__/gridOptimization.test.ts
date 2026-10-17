@@ -12,6 +12,7 @@ import { parseVoxlBinaryV2, serializeVoxlDocumentV2 } from '../../../features/sc
 import { testInput } from '../../../features/scene/voxl/__tests__/voxlTestSupport';
 import type { SupportState } from '../../types';
 import { scene, boxMesh } from './clusterFixture';
+import { buildClusterOptimization, DEFAULT_CLUSTER_OPTIMIZATION_OPTIONS } from '../clusterOptimization';
 import {
     buildGridOptimization, DEFAULT_GRID_OPTIMIZATION_OPTIONS, GRID_MAX_CANDIDATE_CHECKS,
     type GridOptimizationContext, type GridOptimizationOptions,
@@ -79,13 +80,101 @@ test('aligns selected off-grid roots with vertical lower legs and preserves exac
         assert.equal(root.transform.pos.z, input.roots[trunk.rootId].transform.pos.z);
         assert.equal(trunk.contactCone, input.trunks[id].contactCone);
         assert.deepEqual(getFinalSocketPosition(trunk.contactCone!), input.trunks[id].segments[0].topJoint!.pos);
-        assert.equal(trunk.segments[2].topJoint, input.trunks[id].segments[0].topJoint);
+        assert.equal(trunk.segments.length, input.trunks[id].segments.length + 1, 'only the necessary vertical leg is added');
+        assert.equal(trunk.segments[1].id, input.trunks[id].segments[0].id);
+        assert.equal(trunk.segments[1].topJoint, input.trunks[id].segments[0].topJoint);
         const leg = resolveSegmentEndpoints(trunk, trunk.segments[0], 0, { root })!;
         assert.equal(leg.start.x, leg.end.x);
         assert.equal(leg.start.y, leg.end.y);
         assert.ok(leg.end.z > leg.start.z);
     }
     assert.deepEqual(plan(input, ['a', 'b']).snapshot, result.snapshot, 'stable IDs and geometry');
+});
+
+test('a reused Grid first span starts at its new knee and preserves later joints, cone and binary serialization', async () => {
+    const input = scene([1]);
+    const first = input.trunks.a.segments[0];
+    first.bottomJoint = { id: 'old-base', diameter: 1.3, pos: { x: 1, y: 0, z: 2 } };
+    const upper = { id: 'upper-a', diameter: 1.2, bottomJoint: first.topJoint,
+        topJoint: { id: 'upper-socket', diameter: 1.3, pos: { x: 1, y: 0, z: 24 } } };
+    input.trunks.a.segments.push(upper);
+    input.trunks.a.contactCone = { ...input.trunks.a.contactCone!, pos: { x: 1, y: 0, z: 27 }, socketJointId: upper.topJoint.id };
+    const before = JSON.stringify(input);
+    const proposal = plan(input, ['a'], {}, { mesh: boxMesh(100, 100, 2, 0, 0, 28) });
+    assert.equal(proposal.changedCount, 1);
+    const trunk = proposal.snapshot.trunks.a;
+    assert.equal(trunk.segments.length, 3);
+    assert.equal(trunk.segments[1].id, first.id);
+    assert.equal(trunk.segments[1].diameter, first.diameter);
+    assert.equal(trunk.segments[1].topJoint, first.topJoint);
+    assert.equal(trunk.segments[1].bottomJoint, trunk.segments[0].topJoint);
+    assert.notEqual(trunk.segments[1].bottomJoint, first.bottomJoint);
+    assert.equal(trunk.segments[2], upper);
+    assert.equal(trunk.contactCone, input.trunks.a.contactCone);
+    assert.equal(trunk.contactCone!.socketJointId, upper.topJoint.id);
+    assert.equal(JSON.stringify(input), before);
+    const original = getSnapshot();
+    try {
+        const binary = await serializeVoxlDocumentV2({ ...testInput(['model']), supports: buildSupportExportFromStores(proposal.snapshot) }, new Map());
+        loadFromImportFormat(parseVoxlBinaryV2(binary).document.supports);
+        assert.deepEqual(getSnapshot().trunks.a.segments, trunk.segments);
+        assert.deepEqual(getSnapshot().trunks.a.contactCone, trunk.contactCone);
+    } finally { setSnapshot(original); }
+});
+
+test('a free first-span knot retains its shaft and world position instead of being discarded for Grid alignment', () => {
+    const input = scene([1]);
+    input.knots.free = { id: 'free', parentShaftId: 'seg-a', t: 1 / 3, pos: { x: 1, y: 0, z: 8 }, diameter: 1.3 };
+    const before = JSON.stringify(input);
+    const proposal = plan(input);
+    assert.equal(proposal.changedCount, 1);
+    assert.equal(proposal.snapshot.trunks.a.segments.length, 3);
+    assert.equal(proposal.snapshot.trunks.a.segments[2].id, 'seg-a');
+    assert.deepEqual(proposal.snapshot.knots.free.pos, input.knots.free.pos);
+    assert.equal(proposal.snapshot.knots.free.parentShaftId, 'seg-a');
+    assertKnotsAttached(proposal.snapshot);
+    assert.equal(JSON.stringify(input), before);
+});
+
+test('Grid endpoint reuse still checks the contact cone below its socket and retained upper bends', () => {
+    const input = scene([1]);
+    const cone = input.trunks.a.contactCone!;
+    const length = Math.hypot(1, 1.5);
+    input.trunks.a.contactCone = { ...cone, pos: { x: 0, y: 0, z: 18.5 },
+        normal: { x: 1 / length, y: 0, z: 1.5 / length }, profile: { ...cone.profile, lengthMm: length } };
+    const blocked = plan(input, ['a'], { maxMoveMm: 1 });
+    assert.equal(blocked.changedCount, 0);
+    assert.equal(blocked.snapshot, input);
+    assert.equal(blocked.skipped[0].reason, 'collision');
+    const bend = scene([1]);
+    const socket = bend.trunks.a.segments[0].topJoint!;
+    bend.trunks.a.segments.push({ id: 'retained-bend', diameter: 1.2, type: 'bezier',
+        bottomJoint: socket, topJoint: { ...socket, id: 'bend-top' },
+        controlPoint1: { x: -2, y: 0, z: 15 }, controlPoint2: { x: -2, y: 0, z: 15 },
+        startTangent: { x: -1, y: 0, z: -1 }, endTangent: { x: 1, y: 0, z: 1 }, tension: 1, bias: 0.5, resolution: 32 });
+    const bendBlocked = plan(bend, ['a'], { maxMoveMm: 1 });
+    assert.equal(bendBlocked.changedCount, 0);
+    assert.equal(bendBlocked.snapshot, bend);
+    assert.equal(bendBlocked.skipped[0].reason, 'collision');
+});
+
+test('changed-spacing Grid then Cluster retains the earlier upper route without adding redundant graft joints', () => {
+    const input = scene([0.7, 4.7]);
+    const first = plan(input, ['a', 'b'], { spacingMm: 2, maxMoveMm: 2 });
+    assert.equal(first.changedCount, 2);
+    const second = plan(first.snapshot, ['a', 'b'], { spacingMm: 3, maxMoveMm: 2 });
+    assert.equal(second.changedCount, 1);
+    const result = buildClusterOptimization(second.snapshot, ['a', 'b'], DEFAULT_CLUSTER_OPTIMIZATION_OPTIONS, { modelId: 'model', mesh: boxMesh() });
+    assert.equal(result.changedCount, 1);
+    for (const branch of Object.values(result.snapshot.branches)) {
+        const prior = second.snapshot.trunks[branch.id];
+        assert.equal(branch.segments.length, prior.segments.length);
+        assert.equal(branch.segments[0].id, prior.segments[0].id);
+        assert.equal(branch.segments[0].topJoint, prior.segments[0].topJoint);
+        for (let index = 1; index < prior.segments.length; index++) assert.equal(branch.segments[index], prior.segments[index]);
+        assert.equal(branch.contactCone, input.trunks[branch.id].contactCone);
+    }
+    assert.deepEqual(plan(first.snapshot, ['a', 'b'], { spacingMm: 3, maxMoveMm: 2 }), second);
 });
 
 test('tiny positive and negative snaps keep distinct knee and graft joint volumes clear', () => {
