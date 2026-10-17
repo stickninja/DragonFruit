@@ -226,8 +226,27 @@ The replacement review candidate is
 SHA-256 `98F113290C897975414652771A3CA3125578423EDC5110F138866F453D6BE35C`.
 The built and copied review artifacts have matching hashes. This package includes
 the idle mesh-eligibility, dense scoring/diagnostics overflow, and native
-minima-connectivity fixes. Installation, native Preview verification, and a
-complete user-model run remain pending. No release or version bump was performed.
+minima-connectivity fixes. Installation and launch verification are recorded
+below. Native Preview verification and a complete user-model run remain pending.
+No release or version bump was performed.
+
+### Installation and launch of the follow-up candidate
+
+The user confirmed the scene was saved and the application closed; the native
+window list then confirmed no DragonFruit window remained. The silent NSIS
+installer completed with exit code 0. The installed executable identifies as
+`DragonFruit (stickninja)`, version `0.4.1`, **35,382,272 bytes**, SHA-256
+`9E22966389CA9442565DA4F18ECBE29FD87BCC6978CA4286DBA1A95F6F6D4302`.
+Byte comparison with the built executable matched except for the expected
+three-byte Tauri bundle marker change from `UNK` to `NSS` made by NSIS packaging.
+
+The installed application reopened in a native window and displayed upstream
+**0.1.17**, fork **stickninja r1**. The saved scene opened, and Support Studio's
+Optimize controls were visible. Control was left with the user when interaction
+was detected. No new scan, support-generation run, or native optimization Preview
+was performed during this check. Those behaviors remain pending; this evidence
+does not establish shortcut, file-association, official-installation, or
+profile-byte preservation checks.
 
 ## Remaining acceptance boundary
 
