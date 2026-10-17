@@ -18,8 +18,9 @@ launch context do not establish which build the user opened. Keep any package
 cache or device-specific paths out of public records.
 
 On 2026-10-17 the user authorized r3/package 0.4.3 for the continued support
-geometry correction. Its build and installation are pending; the currently
-installed application remains r2/package 0.4.2. This remains an unpublished
+geometry correction. Its production frontend and Windows x64/NSIS build passed
+from source `07bb38ba`; installation remains pending. The currently installed
+application remains r2/package 0.4.2. This remains an unpublished
 candidate, with no phase/stage acceptance or public release authorization.
 
 The bundle uses `io.github.stickninja.dragonfruit`, `DragonFruit (stickninja)`, and `dragonfruit-stickninja`. Its Windows bundle omits official `.voxl` association and COM registration. Updates remain manual through the fork releases page; no upstream updater key or feed is configured. The integration acceptance record is [Phase 0.5](../upstream-0.1.17-acceptance.md), and the release boundary is in the [fork roadmap](../fork-roadmap.md).

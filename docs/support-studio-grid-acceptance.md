@@ -467,11 +467,32 @@ stayed below the 6000-candidate limit. This used all trunks, default options,
 and an inferred plate frame; it does not reproduce the user's exact selection
 or establish visual acceptance. Private scene details are not published here.
 
-The user authorized unpublished r3/package 0.4.3 for this correction. Native
-build and installation remain pending, installed r2 is unchanged, and actual-scene
-visual acceptance of the corrected geometry remains pending. Long/low join
+The user authorized unpublished r3/package 0.4.3 for this correction. The native
+build completed as recorded below; installation is pending, installed r2 is
+unchanged, and actual-scene visual acceptance of the corrected geometry remains pending. Long/low join
 quality still requires review. Neither stage is accepted, and no later stage or
 public release is authorized.
+
+
+### r3/0.4.3 native candidate build
+
+Clean source `07bb38ba6073ed978cfe76cf9534536e988d7b2d` completed production
+frontend, TypeScript, thumbnail preparation, Windows x64 executable, and NSIS
+packaging successfully with exit code 0. The first attempt stopped in runtime
+preparation because inherited PowerShell 7 module paths hid the native Windows
+PowerShell hash command. Retrying with native Windows PowerShell module paths
+succeeded without source changes.
+
+The review candidate is
+`DragonFruit-stickninja-r3-0.4.3-07bb38ba-x64-setup.exe`, **21,988,782 bytes**,
+SHA-256 `68BAC0AF503B33D59F03E61D06CB3A167846BF4D0D174F37C88CA2DCA3B39453`.
+The executable identifies as `DragonFruit (stickninja)`, version `0.4.3`, PE
+machine `0x8664`, SHA-256
+`54CEB0F39AC6E52CCD1B220E754581CDF09355B91FD5F7844F295DA11572372B`.
+Installation awaits save/close confirmation; the installed application remains
+r2. The build does not establish installed identity or actual-scene visual
+acceptance of the correction. Neither stage is accepted, and no release is
+authorized.
 
 ## Remaining acceptance boundary
 
