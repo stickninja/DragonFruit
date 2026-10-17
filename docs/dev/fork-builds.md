@@ -23,8 +23,10 @@ from source `07bb38ba`. Native setup completed successfully in the normal
 installation; its welcome badge, subsequent native About reading, and executable
 identity confirmed installed r3. No build-ref tooltip or copied diagnostics were
 captured in that About check; package 0.4.3 is established by build metadata.
-Actual-scene geometry review remains pending. Earlier
-r2/package 0.4.2 evidence retains its historical identity. This remains an unpublished
-candidate, with no phase/stage acceptance or public release authorization.
+The user accepted Support Studio Stages 2/3 together on 2026-10-17, reporting
+optimization working; remaining refinement is support-size/auto-support preset
+tuning. Earlier r2/package 0.4.2 evidence retains its historical identity. This
+remains an unpublished candidate; Phase 0.5 overall is unaccepted, and no public
+release or next-stage implementation is authorized.
 
 The bundle uses `io.github.stickninja.dragonfruit`, `DragonFruit (stickninja)`, and `dragonfruit-stickninja`. Its Windows bundle omits official `.voxl` association and COM registration. Updates remain manual through the fork releases page; no upstream updater key or feed is configured. The integration acceptance record is [Phase 0.5](../upstream-0.1.17-acceptance.md), and the release boundary is in the [fork roadmap](../fork-roadmap.md).

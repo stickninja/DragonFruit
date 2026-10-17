@@ -1,6 +1,21 @@
 # Support Studio Stage 2: Cluster Optimization acceptance
 
-Status: **implemented; automated checks, optimized frontend browser review, and Windows build passed; combined review continues; actual-scene Preview is operable, with reported geometry quality under review.** Stage 2 was explicitly authorized by the user on 2026-10-16 after accepting Stage 1. Detailed manual/physical-print scenarios remain unverified. This record does not mark planned checks as passed. The previous installed review build was `0.1.17 · stickninja r2`, package `0.4.2`; installed r3 is now confirmed by native About and normal-process identity. On 2026-10-17 the user authorized unpublished r3/package 0.4.3 for the continued geometry correction; its build and normal installation completed as recorded below; actual-scene visual review remains pending. Earlier build checks below apply to their recorded packages. The r2 build passed, and native About plus running-executable identification confirmed r2 in the normal installation; on 2026-10-16 the user confirmed Optimize Preview is operable on the actual scene in normal r2, resolving the blocked control, then reported strange support geometry. Geometry quality remains under review; this is not a broad optimization pass or acceptance. Actual-scene Cancel/Apply/Undo/Redo and explicit Stage 2/3 acceptance are not established by that confirmation. See the latest [Stage 3 follow-up evidence](support-studio-grid-acceptance.md#r2042-candidate-build). [Phase 0.5](upstream-0.1.17-acceptance.md) remains awaiting acceptance and no release is authorized. On 2026-10-16 the user authorized Stage 3 to proceed for combined Stage 2/3 review; this is an explicit sequencing exception, not Stage 2 acceptance. See [Stage 3 acceptance](support-studio-grid-acceptance.md).
+Status: **accepted by the user on 2026-10-17 as part of combined Stage 2/3 review of installed 0.1.17 · stickninja r3, package 0.4.3.** The user reported optimization is working; remaining refinement concerns support sizes and auto-support presets. This does not accept Phase 0.5 overall or authorize a public release, version bump, or next-stage implementation. Historical checks and unperformed manual/physical scenarios remain distinguished below.
+
+## Combined Stage 2/3 acceptance — 2026-10-17
+
+The user explicitly accepted the r3 optimization changes on installed
+**0.1.17 · stickninja r3**, package **0.4.3**, reporting that optimization is
+working. The remaining refinement is support-size and auto-support preset
+tuning, rather than an unresolved optimizer defect. This accepts Stage 2 Cluster
+Optimization and Stage 3 Grid Optimization together.
+
+Acceptance does not imply that every detailed manual, actual-scene history,
+or physical-print check below was independently performed. Earlier pending
+statements describe their historical verification points; the evidence and
+remaining limits remain recorded. Phase 0.5 overall remains separate and
+unaccepted. Stage 4 is ready for separate instruction; this acceptance does not
+authorize its implementation, a version bump, or public release.
 
 ## Scope
 
@@ -124,7 +139,7 @@ embedding. Preview, Cancel, option-change staleness, Apply, Undo, Redo, and
 compact layout passed: seven selected trunks reduced to four while preserving
 seven contacts, with zero uncaught page errors. This adds browser regression
 evidence after the shared preview-controller refactor; Stage 2 remains
-unaccepted pending combined review. See [Stage 3 evidence](support-studio-grid-acceptance.md).
+unaccepted at that review point. See [Stage 3 evidence](support-studio-grid-acceptance.md).
 
 ### Geometry-quality diagnosis in progress
 
@@ -161,9 +176,8 @@ Next compilation, TypeScript, and prepared embedded frontend assets.
 Documentation accuracy passed for **169 documents**, and the whitespace diff
 check passed. These results validate the source and production frontend only:
 no new native executable or installer was built or installed for this correction.
-The installed application remains the existing r2/package 0.4.2. The user's
-actual-scene visual review of this correction remains pending. Neither stage is
-accepted; later stages and public release remain unauthorized.
+At that point, the installed application remained r2/package 0.4.2 and
+actual-scene review was pending. The later r3 acceptance is recorded above.
 
 
 On 2026-10-17 local inspection confirmed ordinary multi-span construction joints
@@ -194,9 +208,9 @@ and an inferred plate frame; it does not reproduce the user's exact selection
 or establish visual acceptance. Private scene details are not published here.
 
 The user authorized unpublished r3/package 0.4.3 for this correction. The native
-build and normal installation completed as recorded below; actual-scene visual acceptance of the corrected geometry remains pending. Long/low join
-quality still requires review. Neither stage is accepted, and no later stage or
-public release is authorized.
+build and normal installation completed as recorded below. At that point,
+actual-scene review was still pending; the later user acceptance and remaining
+settings tuning are recorded above.
 
 
 ### r3/0.4.3 native candidate build
@@ -228,8 +242,13 @@ accessibility reading explicitly confirmed **0.1.17 · stickninja r3**, with the
 normal installed executable again identified by the returned window. No
 build-ref tooltip or copied diagnostics were captured; package version `0.4.3`
 remains established by the build metadata above. Actual-scene optimization visual
-review remains pending. Neither stage is accepted, and no release is authorized.
+review was pending at this check; the subsequent combined acceptance is recorded
+above. No public release is authorized.
 
-## Remaining acceptance boundary
+## Remaining verification and scope boundary
 
-Stage 2 remains awaiting explicit user acceptance. The user authorized Stage 3 to proceed on 2026-10-16 so Stages 2 and 3 can be reviewed together. This exception does not mark Stage 2 accepted; Stage 4 remains deferred until the user explicitly accepts both stages after combined review. A build alone does not establish graph correctness, native pointer behavior, installation behavior, or physical print strength. No physical-print claim is made by this optimization.
+Stages 2 and 3 are accepted as recorded above. Detailed checks marked pending
+were not individually observed and are not retroactively marked passed.
+Physical print strength and hardware performance remain unverified. Phase 0.5
+overall is unaccepted, and Stage 4 requires separate instruction. No public
+release is authorized. See the [fork roadmap](fork-roadmap.md).

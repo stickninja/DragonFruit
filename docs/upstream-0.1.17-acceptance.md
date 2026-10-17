@@ -12,9 +12,11 @@ candidate's production frontend and Windows x64/NSIS build passed from source
 plus normal-process identity confirmed installed r3; a subsequent native About
 screenshot and accessibility reading also confirmed `0.1.17 · stickninja r3`.
 The build-ref tooltip and copied diagnostics were not captured; package 0.4.3 is
-established by build metadata. Actual-scene geometry review remains pending. Earlier build and installation evidence retains its recorded source
-and version identity. Phase 0.5 and Support Studio Stages 2/3 remain unaccepted,
-and no public release is authorized.
+established by build metadata. On 2026-10-17 the user explicitly accepted Support
+Studio Stages 2/3 together on installed r3, reporting optimization working with
+support-size/auto-support preset tuning remaining. Earlier build and installation
+evidence retains its recorded identity. This acceptance does not cover Phase 0.5
+overall, authorize next-stage implementation, or authorize public release.
 
 ## Required checks
 
