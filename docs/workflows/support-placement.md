@@ -25,6 +25,20 @@ Support type is determined by:
 
 For the full matrix, see [Hotkeys](../reference/hotkeys.md).
 
+## Automatic supports
+
+Open **Auto Supports**, select a run preset, and choose **Generate Supports** for
+the active model. It scans for islands first when no scan is available, then
+places supports against the current model geometry. Resolve any unapplied holes
+or hollowing when prompted. The auto-support settings must be **Enabled**;
+the current manual Generate button also follows that setting.
+
+Dense scans retain their complete candidate list during priority scoring;
+a high minima count does not require reducing the scan just to avoid a candidate
+count limit. Generation can still take longer for a large scan. Review the
+resulting contacts and support geometry before finalizing the scene. One Undo
+reverses a committed generation run.
+
 ## Support Studio bracing
 
 In Support Studio's bracing controls, choose **Fixed** to use the diameter in

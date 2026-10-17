@@ -145,6 +145,27 @@ test('generateCandidates sorts by priority descending', () => {
     assert.deepStrictEqual(ids, ['x', 'z', 'y']);
 });
 
+test('dense minima scans retain every candidate and priority ordering without an argument overflow', () => {
+    const count = 200_000;
+    const islands = Array.from({ length: count }, (_, index) => makeIsland({
+        id: `minima-${index}`,
+        source: 'minima',
+        class: 'minimaOnly',
+        baseZ: index + 1,
+        contact: new THREE.Vector3(0, 0, index + 1),
+        areaMm2: 0,
+    }));
+    const candidates = generateCandidates(islands, createDefaultAutoSupportSettings());
+
+    assert.equal(candidates.length, count, 'large scans must not be truncated to the argument limit');
+    assert.equal(candidates[0].id, 'minima-0', 'the lowest equal-area minimum keeps highest priority');
+    assert.equal(candidates[count - 1].id, `minima-${count - 1}`);
+    for (let index = 0; index < candidates.length; index++) {
+        assert.ok(Number.isFinite(candidates[index].priority));
+        if (index > 0) assert.ok(candidates[index - 1].priority >= candidates[index].priority);
+    }
+});
+
 test('deduplicateCandidates removes candidates within tipInfluenceRadiusMm', () => {
     // 3 candidates: 2 at the same position, 1 far away.
     const candidates: CandidatePoint[] = [

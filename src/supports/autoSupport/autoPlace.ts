@@ -3408,7 +3408,8 @@ export function computeAutoSupportPlan(
         const minArea = areas[0];
         const maxArea = areas[areas.length - 1];
         const avgArea = areas.reduce((s, a) => s + a, 0) / areas.length;
-        const zMax = Math.max(...candidates.map(c => c.zHeight), 1);
+        let zMax = 1;
+        for (const candidate of candidates) zMax = Math.max(zMax, candidate.zHeight);
         // Sample min/max/avg candidates for shaft diameter range.
         const makeSample = (area: number, z: number): CandidatePoint => ({
             id: 'dbg', tipPos: { x: 0, y: 0, z: 0 }, tipNormal: { x: 0, y: 0, z: -1 },

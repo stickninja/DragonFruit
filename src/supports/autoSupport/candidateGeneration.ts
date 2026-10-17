@@ -61,8 +61,13 @@ export function generateCandidates(
     applyContactTipCaps(candidates, prune?.mesh);
     // Score and sort
     if (candidates.length === 0) return [];
-    const maxZ = Math.max(...candidates.map(c => c.zHeight), 1);
-    const maxArea = Math.max(...candidates.map(c => c.islandAreaMm2), 0.01);
+    // Dense minima scans can exceed the engine's argument limit when spread.
+    let maxZ = 1;
+    let maxArea = 0.01;
+    for (const candidate of candidates) {
+        maxZ = Math.max(maxZ, candidate.zHeight);
+        maxArea = Math.max(maxArea, candidate.islandAreaMm2);
+    }
     for (const c of candidates) {
         c.priority = computePriority(c, maxZ, maxArea, settings);
     }

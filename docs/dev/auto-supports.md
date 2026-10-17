@@ -29,6 +29,11 @@ Six phases inside `computeAutoSupportPlan` (`autoPlace.ts`):
 
 Islands arrive from volume analysis carrying a `source`. Three matter: `overhang` (the mesh-normal classifier's shallow surfaces), `minima` (local low points, only when `class === 'minimaOnly'`), and `intersection`. Emission is island-typed by footprint span: sub-head specks (≤0.5mm) get one tip at the bbox center; narrow islands 1.5–6mm long split into a symmetric pair (half area each); wide blobs keep one candidate (the grid path covers their area).
 
+Candidate priority scoring and sizing diagnostics accumulate height and area
+maxima in loops. This preserves the existing values while handling dense scans
+without passing one function argument per candidate. Every eligible candidate
+continues through scoring before the existing deduplication and placement gates.
+
 ## Stabilization
 
 Formation overhang and stability are two different failure modes, and the
