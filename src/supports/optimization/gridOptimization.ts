@@ -10,7 +10,7 @@ import {
 import { SUPPORT_TYPES } from '../supportTypeRegistry';
 import type { Knot, Roots, SupportState, Trunk, Vec3 } from '../types';
 import {
-    contacts, copyCollections, finitePoint, interpolate, junctionTrim,
+    contacts, contactSocketJointIds, copyCollections, finitePoint, interpolate, junctionTrim,
     rebuildSelectedBraces, referencedKnots, removeInternalAutoBraces, sourceGraft, SpanIndex,
     supportSpans, syncSupportMap, uniqueIdFactory, type Graft, type SupportSpan,
 } from './optimizationGeometry';
@@ -98,13 +98,13 @@ class NodeOwners {
 }
 
 /** Shorten only a valid rooted first span; the retained knot locations never move. */
-function gridGraft(snapshot: SupportState, source: Trunk, knots: Map<string, Knot[]>, sharedRoots: ReadonlySet<string>): Graft | GridSkipReason {
+function gridGraft(snapshot: SupportState, source: Trunk, knots: Map<string, Knot[]>, sharedRoots: ReadonlySet<string>, socketJointIds: Set<string>): Graft | GridSkipReason {
     const root = snapshot.roots[source.rootId];
     if (!root || !root.transform || !validRoot(root)) return 'unsupported-geometry';
     if (source.segments.some(segment => !Number.isFinite(segment.diameter) || segment.diameter <= 0
         || (segment.topJoint && (!finitePoint(segment.topJoint.pos)
             || !Number.isFinite(segment.topJoint.diameter) || segment.topJoint.diameter <= 0)))) return 'unsupported-geometry';
-    const graft = sourceGraft(snapshot, source, knots, sharedRoots);
+    const graft = sourceGraft(snapshot, source, knots, sharedRoots, socketJointIds);
     if (typeof graft === 'string') return graft;
     const rootTop = { ...root.transform.pos, z: root.transform.pos.z + root.diskHeight + root.coneHeight };
     if (distance3D(graft.endpoints.start, rootTop) > EPS) return 'unsupported-geometry';
@@ -187,6 +187,7 @@ export function buildGridOptimization(
     }
     const createId = uniqueIdFactory(next);
     const changed = new Set<string>();
+    const socketJointIds = contactSocketJointIds(next);
     for (const source of eligible.toSorted((a, b) => a.id.localeCompare(b.id))) {
         const root = next.roots[source.rootId];
         const rootPos = root.transform?.pos;
@@ -226,89 +227,94 @@ export function buildGridOptimization(
             }
             for (const [id, spans] of removedSpans) spansByOwner.set(id, spans);
         };
-        const graft = gridGraft(next, source, knotsByShaft, sharedRoots);
-        if (typeof graft === 'string') {
+        const preferredGraft = gridGraft(next, source, knotsByShaft, sharedRoots, socketJointIds);
+        if (typeof preferredGraft === 'string') {
             restoreBraces();
-            result.skipped.push({ supportId: source.id, reason: graft });
+            result.skipped.push({ supportId: source.id, reason: preferredGraft });
             continue;
         }
         const candidates = buildNearestCandidateNodeKeys(preferred, 1).map(key => ({ key,
             point: { ...gridSnappedXYFromKey(key, spacing), z: rootPos.z },
         })).toSorted((a, b) => distance3D(a.point, rootPos) - distance3D(b.point, rootPos) || a.key.localeCompare(b.key));
         let reason: GridSkipReason = 'movement-limit';
-        for (const { key, point } of candidates) {
-            if (distance3D(point, rootPos) > maxMove + EPS) continue;
-            if (!insidePlate(point, root.diameter / 2, context.plateBounds)) { reason = 'out-of-bounds'; continue; }
-            if (owners.occupied(key, source.id)) { reason = 'occupied-node'; continue; }
-            const anchor = { ...point, z: graft.endpoints.start.z };
-            const lateral = Math.hypot(point.x - graft.point.x, point.y - graft.point.y);
-            // Use the existing routed-trunk 45° floor for long diagonals; an
-            // explicitly tighter user limit is still respected.
-            // Leave room for the two joint volumes even for a tiny snap. A
-            // sub-diameter diagonal would make the vertical leg overlap the
-            // retained shaft beyond its intentional graft junction.
-            const lowerDiameter = Math.max(source.segments[0].diameter, source.segments[0].topJoint!.diameter);
-            const knee = { ...anchor, z: graft.point.z - Math.max(lowerDiameter + 0.5,
-                lateral / Math.tan(maxAngle * Math.PI / 180)) };
-            const spanLength = distance3D(knee, graft.point);
-            if (knee.z < anchor.z + MIN_VERTICAL_LEG_MM
-                || memberDepartureAngleFromVerticalDeg(knee, graft.point) > Math.min(maxAngle,
-                    getLengthAwareMaxAngleFromVerticalDeg(spanLength, maxAngle, maxAngle)) + EPS) {
-                reason = 'angle-limit'; continue;
+        for (const graft of [preferredGraft, ...(preferredGraft.fallbacks ?? [])]) {
+            const retainedSegment = source.segments[graft.segmentIndex];
+            for (const { key, point } of candidates) {
+                if (distance3D(point, rootPos) > maxMove + EPS) continue;
+                if (!insidePlate(point, root.diameter / 2, context.plateBounds)) { reason = 'out-of-bounds'; continue; }
+                if (owners.occupied(key, source.id)) { reason = 'occupied-node'; continue; }
+                const anchor = { ...point, z: graft.endpoints.start.z };
+                const lateral = Math.hypot(point.x - graft.point.x, point.y - graft.point.y);
+                // Use the existing routed-trunk 45° floor for long diagonals; an
+                // explicitly tighter user limit is still respected.
+                // Leave room for the two joint volumes even for a tiny snap. A
+                // sub-diameter diagonal would make the vertical leg overlap the
+                // retained shaft beyond its intentional graft junction.
+                const lowerDiameter = Math.max(retainedSegment.diameter, retainedSegment.topJoint!.diameter);
+                const knee = { ...anchor, z: graft.point.z - Math.max(lowerDiameter + 0.5,
+                    lateral / Math.tan(maxAngle * Math.PI / 180)) };
+                const spanLength = distance3D(knee, graft.point);
+                if (knee.z < anchor.z + MIN_VERTICAL_LEG_MM
+                    || memberDepartureAngleFromVerticalDeg(knee, graft.point) > Math.min(maxAngle,
+                        getLengthAwareMaxAngleFromVerticalDeg(spanLength, maxAngle, maxAngle)) + EPS) {
+                    reason = 'angle-limit'; continue;
+                }
+                if (result.candidateChecks >= GRID_MAX_CANDIDATE_CHECKS) { reason = 'search-limit'; break; }
+                result.candidateChecks++;
+                const shaftRadius = lowerDiameter / 2;
+                const proposed = [
+                    { start: point, end: anchor, radius: root.diameter / 2, isDiagonal: false },
+                    { start: anchor, end: knee, radius: shaftRadius, isDiagonal: false },
+                    { start: knee, end: graft.point, radius: shaftRadius, isDiagonal: true },
+                ];
+                const blocked = proposed.some(span => {
+                    const crossesSupport = [...obstacleIndex.query(span.start, span.end, span.radius)].some(id =>
+                        (spansByOwner.get(id) ?? []).some(other => {
+                            if (id === source.rootId) return false;
+                            if (id === source.id && other.segmentId && graft.fullyRemovedSegmentIds.has(other.segmentId)) return false;
+                            const combined = span.radius + other.radius;
+                            let end = span.end;
+                            if (id === source.id && span.isDiagonal) end = interpolate(graft.point, knee, Math.min(1,
+                                junctionTrim(knee, graft.point, graft.endpoints.start, graft.endpoints.end, combined) / spanLength));
+                            const otherStart = id === source.id && other.segmentId === retainedSegment.id ? graft.point : other.start;
+                            return segmentDistanceSq(span.start, end, otherStart, other.end) < combined * combined;
+                        }));
+                    return crossesSupport || collisionMeshes.some(mesh => isCollisionSegmentBlocked(span.start, span.end,
+                        span.radius + SHAFT_CLEARANCE_MM, mesh));
+                });
+                if (blocked) { reason = 'collision'; continue; }
+                const kneeJoint = { id: createId(`grid-${source.id}-knee`), pos: knee, diameter: retainedSegment.topJoint!.diameter };
+                const graftJoint = graft.sourceT === 1 ? retainedSegment.topJoint!
+                    : { id: createId(`grid-${source.id}-joint`), pos: graft.point, diameter: kneeJoint.diameter };
+                const trunk: Trunk = { ...source, typeId: 'trunk', segments: [
+                    { id: createId(`grid-${source.id}-leg`), diameter: retainedSegment.diameter, topJoint: kneeJoint },
+                    ...(graft.sourceT === 1 ? [{ ...retainedSegment, bottomJoint: kneeJoint }] : [
+                        { id: createId(`grid-${source.id}-diagonal`), diameter: retainedSegment.diameter, bottomJoint: kneeJoint, topJoint: graftJoint },
+                        { ...retainedSegment, bottomJoint: graftJoint },
+                    ]), ...source.segments.slice(graft.segmentIndex + 1),
+                ] };
+                next.trunks[source.id] = trunk;
+                next.roots[root.id] = { ...root, transform: { ...root.transform, pos: point } };
+                for (const hosted of graft.hostedKnots) next.knots[hosted.knot.id] = {
+                    ...hosted.knot, t: (hosted.t - graft.sourceT) / (1 - graft.sourceT),
+                };
+                // Old broadphase cells may remain, but every query reads only the
+                // replacement spans. Keeping ownership reservations is conservative.
+                spansByOwner.delete(source.id);
+                spansByOwner.delete(root.id);
+                const single = { roots: next.roots, knots: next.knots } as SupportState;
+                for (const descriptor of SUPPORT_TYPES) Object.assign(single, { [descriptor.location.key]: {} });
+                single.trunks = { [source.id]: trunk };
+                indexSpans(supportSpans(single, collisionModels));
+                indexSpans([{ ownerId: root.id, start: point, end: anchor, radius: root.diameter / 2 }]);
+                owners.add(source.id, [point]);
+                changed.add(source.id);
+                result.changedCount++;
+                result.alignedTrunkCount++;
+                result.removedAutoBraceCount += removedBraces.length;
+                break;
             }
-            if (result.candidateChecks >= GRID_MAX_CANDIDATE_CHECKS) { reason = 'search-limit'; break; }
-            result.candidateChecks++;
-            const shaftRadius = lowerDiameter / 2;
-            const proposed = [
-                { start: point, end: anchor, radius: root.diameter / 2, isDiagonal: false },
-                { start: anchor, end: knee, radius: shaftRadius, isDiagonal: false },
-                { start: knee, end: graft.point, radius: shaftRadius, isDiagonal: true },
-            ];
-            const blocked = proposed.some(span => {
-                const crossesSupport = [...obstacleIndex.query(span.start, span.end, span.radius)].some(id =>
-                    (spansByOwner.get(id) ?? []).some(other => {
-                        if (id === source.rootId) return false;
-                        const combined = span.radius + other.radius;
-                        let end = span.end;
-                        if (id === source.id && span.isDiagonal) end = interpolate(graft.point, knee, Math.min(1,
-                            junctionTrim(knee, graft.point, graft.endpoints.start, graft.endpoints.end, combined) / spanLength));
-                        const otherStart = id === source.id && other.segmentId === source.segments[0].id ? graft.point : other.start;
-                        return segmentDistanceSq(span.start, end, otherStart, other.end) < combined * combined;
-                    }));
-                return crossesSupport || collisionMeshes.some(mesh => isCollisionSegmentBlocked(span.start, span.end,
-                    span.radius + SHAFT_CLEARANCE_MM, mesh));
-            });
-            if (blocked) { reason = 'collision'; continue; }
-            const kneeJoint = { id: createId(`grid-${source.id}-knee`), pos: knee, diameter: source.segments[0].topJoint!.diameter };
-            const graftJoint = graft.sourceT === 1 ? source.segments[0].topJoint!
-                : { id: createId(`grid-${source.id}-joint`), pos: graft.point, diameter: kneeJoint.diameter };
-            const trunk: Trunk = { ...source, typeId: 'trunk', segments: [
-                { id: createId(`grid-${source.id}-leg`), diameter: source.segments[0].diameter, topJoint: kneeJoint },
-                ...(graft.sourceT === 1 ? [{ ...source.segments[0], bottomJoint: kneeJoint }] : [
-                    { id: createId(`grid-${source.id}-diagonal`), diameter: source.segments[0].diameter, bottomJoint: kneeJoint, topJoint: graftJoint },
-                    { ...source.segments[0], bottomJoint: graftJoint },
-                ]), ...source.segments.slice(1),
-            ] };
-            next.trunks[source.id] = trunk;
-            next.roots[root.id] = { ...root, transform: { ...root.transform, pos: point } };
-            for (const hosted of graft.hostedKnots) next.knots[hosted.knot.id] = {
-                ...hosted.knot, t: (hosted.t - graft.sourceT) / (1 - graft.sourceT),
-            };
-            // Old broadphase cells may remain, but every query reads only the
-            // replacement spans. Keeping ownership reservations is conservative.
-            spansByOwner.delete(source.id);
-            spansByOwner.delete(root.id);
-            const single = { roots: next.roots, knots: next.knots } as SupportState;
-            for (const descriptor of SUPPORT_TYPES) Object.assign(single, { [descriptor.location.key]: {} });
-            single.trunks = { [source.id]: trunk };
-            indexSpans(supportSpans(single, collisionModels));
-            indexSpans([{ ownerId: root.id, start: point, end: anchor, radius: root.diameter / 2 }]);
-            owners.add(source.id, [point]);
-            changed.add(source.id);
-            result.changedCount++;
-            result.alignedTrunkCount++;
-            result.removedAutoBraceCount += removedBraces.length;
-            break;
+            if (changed.has(source.id) || result.candidateChecks >= GRID_MAX_CANDIDATE_CHECKS) break;
         }
         if (!changed.has(source.id)) {
             restoreBraces();

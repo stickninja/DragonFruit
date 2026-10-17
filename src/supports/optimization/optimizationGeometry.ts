@@ -55,6 +55,17 @@ export function contacts(snapshot: SupportState, selected?: ReadonlySet<string>)
     return result.sort();
 }
 
+export function contactSocketJointIds(snapshot: SupportState): Set<string> {
+    const ids = new Set<string>();
+    for (const descriptor of SUPPORT_TYPES) for (const entity of Object.values(snapshot[descriptor.location.key])) {
+        for (const field of descriptor.contactFields) {
+            const cone = (entity as unknown as Record<string, ContactCone>)[field];
+            if (cone?.socketJointId) ids.add(cone.socketJointId);
+        }
+    }
+    return ids;
+}
+
 export function referencedKnots(snapshot: SupportState): Set<string> {
     const result = new Set<string>();
     for (const descriptor of SUPPORT_TYPES) {
@@ -112,10 +123,14 @@ export function uniqueIdFactory(snapshot: SupportState): (base: string) => strin
 }
 
 export interface Graft {
+    segmentIndex: number;
+    fullyRemovedSegmentIds: ReadonlySet<string>;
+    /** Parameter on the original retained span, not the whole rooted prefix. */
     sourceT: number;
     point: Vec3;
     endpoints: { start: Vec3; end: Vec3 };
     hostedKnots: Array<{ knot: Knot; t: number }>;
+    fallbacks?: readonly Graft[];
 }
 
 export interface SupportSpan { ownerId: string; segmentId?: string; start: Vec3; end: Vec3; radius: number }
@@ -194,7 +209,7 @@ export function supportSpans(snapshot: SupportState, modelIds: ReadonlySet<strin
 }
 
 /** Keep every existing knot at the same world point above the new diagonal. */
-export function sourceGraft(snapshot: SupportState, source: Trunk, knotsByShaft: Map<string, Knot[]>, sharedRoots: ReadonlySet<string>): Graft | 'unsupported-geometry' | 'dependent-geometry' {
+export function sourceGraft(snapshot: SupportState, source: Trunk, knotsByShaft: Map<string, Knot[]>, sharedRoots: ReadonlySet<string>, socketJointIds = contactSocketJointIds(snapshot)): Graft | 'unsupported-geometry' | 'dependent-geometry' {
     const root = snapshot.roots[source.rootId];
     const segment = source.segments[0];
     if (!root || root.modelId !== source.modelId || !source.contactCone || !segment
@@ -203,27 +218,61 @@ export function sourceGraft(snapshot: SupportState, source: Trunk, knotsByShaft:
     const endpoints = resolveSegmentEndpoints({ ...source, typeId: 'trunk' }, segment, 0, { root });
     if (!endpoints || !finitePoint(endpoints.start) || !finitePoint(endpoints.end)
         || endpoints.end.z - endpoints.start.z < 1) return 'unsupported-geometry';
-    const length = distance3D(endpoints.start, endpoints.end);
-    // With no hosted knots the original top joint is already the graft joint.
-    // Retain a shortened upper span only when an existing knot requires it.
-    let sourceT = 1;
-    const hostedKnots: Graft['hostedKnots'] = [];
     if (knotsByShaft.has(source.id) || knotsByShaft.has(source.rootId)) return 'dependent-geometry';
-    for (const knot of knotsByShaft.get(segment.id) ?? []) {
-        // Resolve from geometry even for legacy knots without a trustworthy t.
-        const a = endpoints.start, b = endpoints.end, p = knot.pos;
-        if (!finitePoint(p)) return 'dependent-geometry';
-        const t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)
-            + (p.z - a.z) * (b.z - a.z)) / (length * length);
-        if (!Number.isFinite(t) || t < -EPS || t > 1 + EPS || distance3D(interpolate(a, b, t), p) > 0.001) return 'dependent-geometry';
-        hostedKnots.push({ knot, t });
-        sourceT = Math.min(sourceT, t - Math.max(0.25, segment.diameter + 0.5) / length);
-    }
     // A kickstand also stores a lower permitted parameter on its host span.
     // Keep that span unchanged rather than quietly changing its constraint.
     if (Object.values(snapshot.kickstands).some(stand => stand.hostSegmentId === segment.id)) return 'dependent-geometry';
-    if (sharedRoots.has(source.rootId) || sourceT <= EPS) return 'dependent-geometry';
-    return { sourceT, point: sourceT === 1 ? endpoints.end : interpolate(endpoints.start, endpoints.end, sourceT), endpoints, hostedKnots };
+    if (sharedRoots.has(source.rootId)) return 'dependent-geometry';
+    function atSpan(index: number, span: { start: Vec3; end: Vec3 }): Graft | 'dependent-geometry' {
+        const member = source.segments[index];
+        const length = distance3D(span.start, span.end);
+        let sourceT = 1;
+        const hostedKnots: Graft['hostedKnots'] = [];
+        for (const knot of knotsByShaft.get(member.id) ?? []) {
+            // Project onto this retained span; its earlier collinear spans may disappear.
+            const a = span.start, b = span.end, p = knot.pos;
+            if (!finitePoint(p)) return 'dependent-geometry';
+            const t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)
+                + (p.z - a.z) * (b.z - a.z)) / (length * length);
+            if (!Number.isFinite(t) || t < -EPS || t > 1 + EPS || distance3D(interpolate(a, b, t), p) > 0.001) return 'dependent-geometry';
+            hostedKnots.push({ knot, t });
+            sourceT = Math.min(sourceT, t - Math.max(0.25, member.diameter + 0.5) / length);
+        }
+        if (sourceT <= EPS || (hostedKnots.length > 0 && sourceT >= 1)) return 'dependent-geometry';
+        return { segmentIndex: index, fullyRemovedSegmentIds: new Set(source.segments.slice(0, index).map(item => item.id)),
+            sourceT, point: sourceT === 1 ? span.end : interpolate(span.start, span.end, sourceT),
+            endpoints: { start: endpoints!.start, end: span.end }, hostedKnots };
+    }
+    const initial = atSpan(0, endpoints);
+    if (typeof initial === 'string') return initial;
+    const candidates = [initial];
+    const axis = { x: endpoints.end.x - endpoints.start.x, y: endpoints.end.y - endpoints.start.y, z: endpoints.end.z - endpoints.start.z };
+    const axisLength = distance3D(endpoints.start, endpoints.end);
+    let previous = endpoints;
+    for (let index = 1; index < source.segments.length; index++) {
+        const prior = source.segments[index - 1], member = source.segments[index];
+        if ((knotsByShaft.get(prior.id)?.length ?? 0) > 0 || socketJointIds.has(prior.topJoint!.id)) break;
+        if (member.type === 'bezier' || !member.topJoint || !finitePoint(member.topJoint.pos)
+            || !Number.isFinite(member.diameter) || !(member.diameter > 0) || Math.abs(member.diameter - segment.diameter) > EPS
+            || !Number.isFinite(member.topJoint.diameter) || !(member.topJoint.diameter > 0) || Math.abs(member.topJoint.diameter - segment.topJoint.diameter) > EPS
+            || Object.values(snapshot.kickstands).some(stand => stand.hostSegmentId === member.id)) break;
+        const span = resolveSegmentEndpoints({ ...source, typeId: 'trunk' }, member, index, { root });
+        if (!span || !finitePoint(span.start) || !finitePoint(span.end) || distance3D(span.start, previous.end) > EPS) break;
+        if (member.bottomJoint && (member.bottomJoint.id !== prior.topJoint!.id
+            || !finitePoint(member.bottomJoint.pos) || distance3D(member.bottomJoint.pos, previous.end) > EPS
+            || !Number.isFinite(member.bottomJoint.diameter) || Math.abs(member.bottomJoint.diameter - prior.topJoint!.diameter) > EPS)) break;
+        const delta = { x: span.end.x - span.start.x, y: span.end.y - span.start.y, z: span.end.z - span.start.z };
+        const offset = { x: span.end.x - endpoints.start.x, y: span.end.y - endpoints.start.y, z: span.end.z - endpoints.start.z };
+        const lineDistance = Math.hypot(offset.y * axis.z - offset.z * axis.y,
+            offset.z * axis.x - offset.x * axis.z, offset.x * axis.y - offset.y * axis.x) / axisLength;
+        if (delta.x * axis.x + delta.y * axis.y + delta.z * axis.z <= EPS * axisLength || lineDistance > EPS) break;
+        const candidate = atSpan(index, span);
+        if (typeof candidate !== 'string' && candidate.point.z > candidates[candidates.length - 1].point.z + EPS) candidates.push(candidate);
+        if (typeof candidate === 'string' || candidate.hostedKnots.length > 0) break;
+        previous = span;
+    }
+    const best = candidates.pop()!;
+    return candidates.length ? { ...best, fallbacks: candidates.reverse() } : best;
 }
 
 export function rebuildSelectedBraces(snapshot: SupportState, selected: ReadonlySet<string>, settings: AutoBracingSettings, gridSettings?: GridSettings, changedSupportIds?: ReadonlySet<string>): number {

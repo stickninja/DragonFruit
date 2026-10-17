@@ -83,12 +83,14 @@ See [Support System](support-system.md#support-studio-grid-optimization), the
 [user workflow](../workflows/support-placement.md#support-studio-grid-optimization),
 and [Stage 3 acceptance](../support-studio-grid-acceptance.md).
 
-Both optimization planners can reuse an existing first segment and top joint
-when that span has no hosted knots. A span with any hosted knot, including a
-free knot, retains the conservative graft and attachment remapping. This is
-ordinary support-graph geometry, with no new persisted field, storage key,
-scene schema, optimization recipe, or migration. Existing complete before/after
-history snapshots continue to represent either result.
+Both optimization planners can consume a continuous, forward, collinear,
+same-size knot-free shaft prefix and retain a later span. Hosted real/free knots
+on that final span are remapped locally to preserve world positions; its upper
+suffix, contacts, and dependencies remain ordinary support geometry. Consumed
+span IDs and the retained-span index are transient planner bookkeeping, not new
+persisted fields. There is no storage key, scene schema, optimization recipe,
+UI setting, or migration change. Complete before/after history snapshots continue
+to represent the resulting graph.
 
 ### Support presets (`support-presets-v1`)
 

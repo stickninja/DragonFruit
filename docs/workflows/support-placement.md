@@ -116,12 +116,15 @@ This is [Stage 3](../support-studio-grid-acceptance.md), authorized for combined
 Stage 2/3 review on 2026-10-16. Neither stage is accepted yet. Advanced Placement
 and support influence remain deferred.
 
-For both optimization tools, a first shaft span without attached knots reuses
-its original top joint and segment to avoid adding a tiny stub. Grid still
-creates a lower leg and knee; Cluster connects directly from the retained host.
-If any knot is attached, including a free knot, the tool preserves it and uses
-the conservative lower graft instead. Contact geometry and dependency safety
-remain constraints; this does not remove free knots or search new global routes.
+Both optimization tools can reuse a continuous straight prefix of equal-size
+shaft spans to avoid unnecessary low joins and tiny stubs. Only knot-free spans
+can be consumed. The last retained span may have attachments; the tool joins
+below its lowest knot and preserves every attachment's world position. Real and
+free knots, genuine bends, curves, size changes, contacts, and the remaining
+upper geometry stay protected. Higher grafts are tried first; a blocked higher route falls back through lower
+choices to the previous conservative graft. Grid keeps its lower leg and knee,
+while Cluster connects from the retained host. This does not remove free knots
+or search new global routes.
 
 ## Interaction precedence
 

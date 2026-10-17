@@ -96,9 +96,9 @@ test('a reused Grid first span starts at its new knee and preserves later joints
     const first = input.trunks.a.segments[0];
     first.bottomJoint = { id: 'old-base', diameter: 1.3, pos: { x: 1, y: 0, z: 2 } };
     const upper = { id: 'upper-a', diameter: 1.2, bottomJoint: first.topJoint,
-        topJoint: { id: 'upper-socket', diameter: 1.3, pos: { x: 1, y: 0, z: 24 } } };
+        topJoint: { id: 'upper-socket', diameter: 1.3, pos: { x: 2, y: 0, z: 24 } } };
     input.trunks.a.segments.push(upper);
-    input.trunks.a.contactCone = { ...input.trunks.a.contactCone!, pos: { x: 1, y: 0, z: 27 }, socketJointId: upper.topJoint.id };
+    input.trunks.a.contactCone = { ...input.trunks.a.contactCone!, pos: { x: 2, y: 0, z: 27 }, socketJointId: upper.topJoint.id };
     const before = JSON.stringify(input);
     const proposal = plan(input, ['a'], {}, { mesh: boxMesh(100, 100, 2, 0, 0, 28) });
     assert.equal(proposal.changedCount, 1);

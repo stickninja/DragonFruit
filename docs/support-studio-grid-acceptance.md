@@ -402,6 +402,11 @@ explicitly accepted, and no public release is authorized.
 
 ### Geometry-quality diagnosis in progress
 
+On 2026-10-17 the user clarified that each screenshot came from running one tool
+separately on the original supports. Sequential application is ruled out for
+those examples; the exact private-scene graph had not yet been inspected at
+that point.
+
 Source review confirmed the original shared graft logic retained a 0.25 mm
 first-span stub near the existing top joint, with dependencies able to move the
 graft lower. The original planners added connection joints around the preserved
@@ -433,6 +438,40 @@ no new native executable or installer was built or installed for this correction
 The installed application remains the existing r2/package 0.4.2. The user's
 actual-scene visual review of this correction remains pending. Neither stage is
 accepted; later stages and public release remain unauthorized.
+
+
+On 2026-10-17 local inspection confirmed ordinary multi-span construction joints
+and real dependencies in the reported scene; sequential use was not the cause.
+The continued source correction advances through a forward, continuous,
+collinear, same-size knot-free prefix when it raises a viable graft. The final
+retained span may host knots, with a cut below the lowest knot and local
+attachment remapping that preserves world positions. Higher routes are tried
+first, with lower candidates and the conservative choice retained as fallbacks
+when angle or collision checks block them. Explicit consumed-span IDs and the
+retained-span index guide collision checks; the suffix, genuine bends/curves,
+size changes, contacts/sockets, and dependency guards remain intact. No schema,
+setting, or UI change is introduced.
+
+Source verification passed **85 optimization unit/controller/catalog tests**,
+including eight new actual-builder/prefix regressions, and **15 compiled
+ReactCompiler/Lingui DOM tests**. Full TypeScript, scoped ESLint, and whitespace
+checks passed. Independent review passed **67 overlapping planner/controller
+tests** plus an in-memory fallback check, with no remaining findings. The primary
+DOM run initially hit a concurrent Windows compiler-cache rename error; the
+serial rerun passed 15/15. This was a test-harness race and required no app fix.
+
+A bounded local diagnostic ran both default planners against the transformed
+embedded mesh from a private scene copy. All contacts and protected attachment
+world positions were preserved, the input remained unchanged, and each run
+stayed below the 6000-candidate limit. This used all trunks, default options,
+and an inferred plate frame; it does not reproduce the user's exact selection
+or establish visual acceptance. Private scene details are not published here.
+
+The user authorized unpublished r3/package 0.4.3 for this correction. Native
+build and installation remain pending, installed r2 is unchanged, and actual-scene
+visual acceptance of the corrected geometry remains pending. Long/low join
+quality still requires review. Neither stage is accepted, and no later stage or
+public release is authorized.
 
 ## Remaining acceptance boundary
 

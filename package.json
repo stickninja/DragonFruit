@@ -1,8 +1,8 @@
 {
   "name": "dragonfruit",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "upstreamVersion": "0.1.17",
-  "forkRevision": 2,
+  "forkRevision": 3,
   "buildChannel": "beta",
   "private": true,
   "engines": {

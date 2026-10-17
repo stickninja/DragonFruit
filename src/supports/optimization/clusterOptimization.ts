@@ -11,7 +11,7 @@ import { SUPPORT_TYPES } from '../supportTypeRegistry';
 import type { Branch, Knot, Segment, SupportState, Trunk } from '../types';
 
 import {
-    contacts, copyCollections, finitePoint, interpolate, junctionTrim,
+    contacts, contactSocketJointIds, copyCollections, finitePoint, interpolate, junctionTrim,
     rebuildSelectedBraces, removeInternalAutoBraces, sourceGraft, SpanIndex,
     supportSpans, syncSupportMap, uniqueIdFactory, type SupportSpan,
 } from './optimizationGeometry';
@@ -137,107 +137,114 @@ export function buildClusterOptimization(
     indexSpans(supportSpans(next, collisionModels));
     const createId = uniqueIdFactory(next);
     const keepers = new Set<string>();
+    const socketJointIds = contactSocketJointIds(next);
     // Stable ordering makes repeated previews and saves reproducible.
     const ordered = eligible.toSorted((a, b) => a.id.localeCompare(b.id));
     for (const source of ordered) {
         if (result.remainingTrunkCount <= target) break;
         if (keepers.has(source.id)) continue;
-        const graft = sourceGraft(next, source, knotsByShaft, sharedRoots);
-        if (typeof graft === 'string') {
-            result.skipped.push({ supportId: source.id, reason: graft });
+        const preferredGraft = sourceGraft(next, source, knotsByShaft, sharedRoots, socketJointIds);
+        if (typeof preferredGraft === 'string') {
+            result.skipped.push({ supportId: source.id, reason: preferredGraft });
             continue;
         }
         let attached = false;
         let collision = false;
         const sourceRoot = next.roots[source.rootId];
-        const hosts = [...hostIndex.query(graft.point, graft.point, reach)]
-            .map(id => next.trunks[id]).filter((host): host is Trunk => !!host && host.id !== source.id)
-            .toSorted((a, b) => distance3D(next.roots[a.rootId]?.transform.pos ?? graft.point, sourceRoot.transform.pos)
-                - distance3D(next.roots[b.rootId]?.transform.pos ?? graft.point, sourceRoot.transform.pos)
-                || a.id.localeCompare(b.id));
-        for (const host of hosts) {
-            result.hostChecks++;
-            const root = next.roots[host.rootId];
-            if (!root || root.modelId !== context.modelId || Math.abs(root.transform.pos.z - sourceRoot.transform.pos.z) > 0.01) continue;
-            for (let index = host.segments.length - 1; index >= 0 && !attached; index--) {
-                const segment = host.segments[index];
-                if (segment.type === 'bezier' || segment.diameter + EPS < source.segments[0].diameter) continue;
-                const ends = resolveSegmentEndpoints({ ...host, typeId: 'trunk' }, segment, index, { root });
-                if (!ends || !finitePoint(ends.start) || !finitePoint(ends.end)) continue;
-                const samples = Math.min(MAX_HOST_SAMPLES, Math.max(1, Math.ceil(distance3D(ends.start, ends.end))));
-                for (let sample = samples; sample >= 0; sample--) {
-                    const t = sample / samples;
-                    const position = interpolate(ends.start, ends.end, t);
-                    const lateral = Math.hypot(position.x - graft.point.x, position.y - graft.point.y);
-                    if (lateral > reach || lateral < EPS || position.z >= graft.point.z - EPS) continue;
-                    const span = distance3D(position, graft.point);
-                    if (span > reach + EPS) continue;
-                    const allowance = Math.min(joinAngle, getLengthAwareMaxAngleFromVerticalDeg(span, joinAngle));
-                    if (memberDepartureAngleFromVerticalDeg(position, graft.point) > allowance + EPS) continue;
-                    if (result.candidateChecks >= CLUSTER_MAX_CANDIDATE_CHECKS) break;
-                    result.candidateChecks++;
-                    const clearance = source.segments[0].diameter / 2 + SHAFT_CLEARANCE_MM;
-                    const crossesSupport = [...obstacleIndex.query(position, graft.point, clearance)].some(id =>
-                        (spansByOwner.get(id) ?? []).some(other => {
-                            const combined = source.segments[0].diameter / 2 + other.radius;
-                            // Only the intentional junction volumes overlap. Test the
-                            // rest of this same host/source too, including their bends.
-                            let from = position, to = graft.point;
-                            if (id === host.id) from = interpolate(position, graft.point, Math.min(1,
-                                junctionTrim(position, graft.point, ends.start, ends.end, combined) / span));
-                            if (id === source.id) {
-                                // The lower original first shaft is being removed.
-                                to = interpolate(graft.point, position, Math.min(1,
-                                    junctionTrim(position, graft.point, graft.endpoints.start, graft.endpoints.end, combined) / span));
-                            }
-                            const otherStart = id === source.id && other.segmentId === source.segments[0].id
-                                ? graft.point : other.start;
-                            return segmentDistanceSq(from, to, otherStart, other.end) < combined * combined;
-                        }));
-                    if (crossesSupport || collisionMeshes.some(mesh => isCollisionSegmentBlocked(position, graft.point, clearance, mesh))) {
-                        collision = true;
-                        continue;
+        for (const graft of [preferredGraft, ...(preferredGraft.fallbacks ?? [])]) {
+            const retainedSegment = source.segments[graft.segmentIndex];
+            const hosts = [...hostIndex.query(graft.point, graft.point, reach)]
+                .map(id => next.trunks[id]).filter((host): host is Trunk => !!host && host.id !== source.id)
+                .toSorted((a, b) => distance3D(next.roots[a.rootId]?.transform.pos ?? graft.point, sourceRoot.transform.pos)
+                    - distance3D(next.roots[b.rootId]?.transform.pos ?? graft.point, sourceRoot.transform.pos)
+                    || a.id.localeCompare(b.id));
+            for (const host of hosts) {
+                result.hostChecks++;
+                const root = next.roots[host.rootId];
+                if (!root || root.modelId !== context.modelId || Math.abs(root.transform.pos.z - sourceRoot.transform.pos.z) > 0.01) continue;
+                for (let index = host.segments.length - 1; index >= 0 && !attached; index--) {
+                    const segment = host.segments[index];
+                    if (segment.type === 'bezier' || segment.diameter + EPS < retainedSegment.diameter) continue;
+                    const ends = resolveSegmentEndpoints({ ...host, typeId: 'trunk' }, segment, index, { root });
+                    if (!ends || !finitePoint(ends.start) || !finitePoint(ends.end)) continue;
+                    const samples = Math.min(MAX_HOST_SAMPLES, Math.max(1, Math.ceil(distance3D(ends.start, ends.end))));
+                    for (let sample = samples; sample >= 0; sample--) {
+                        const t = sample / samples;
+                        const position = interpolate(ends.start, ends.end, t);
+                        const lateral = Math.hypot(position.x - graft.point.x, position.y - graft.point.y);
+                        if (lateral > reach || lateral < EPS || position.z >= graft.point.z - EPS) continue;
+                        const span = distance3D(position, graft.point);
+                        if (span > reach + EPS) continue;
+                        const allowance = Math.min(joinAngle, getLengthAwareMaxAngleFromVerticalDeg(span, joinAngle));
+                        if (memberDepartureAngleFromVerticalDeg(position, graft.point) > allowance + EPS) continue;
+                        if (result.candidateChecks >= CLUSTER_MAX_CANDIDATE_CHECKS) break;
+                        result.candidateChecks++;
+                        const clearance = retainedSegment.diameter / 2 + SHAFT_CLEARANCE_MM;
+                        const crossesSupport = [...obstacleIndex.query(position, graft.point, clearance)].some(id =>
+                            (spansByOwner.get(id) ?? []).some(other => {
+                                if (id === source.id && other.segmentId && graft.fullyRemovedSegmentIds.has(other.segmentId)) return false;
+                                const combined = retainedSegment.diameter / 2 + other.radius;
+                                // Only the intentional junction volumes overlap. Test the
+                                // rest of this same host/source too, including their bends.
+                                let from = position, to = graft.point;
+                                if (id === host.id) from = interpolate(position, graft.point, Math.min(1,
+                                    junctionTrim(position, graft.point, ends.start, ends.end, combined) / span));
+                                if (id === source.id) {
+                                    // The consumed prefix is absent; only the retained
+                                    // terminal span starts at the graft.
+                                    to = interpolate(graft.point, position, Math.min(1,
+                                        junctionTrim(position, graft.point, graft.endpoints.start, graft.endpoints.end, combined) / span));
+                                }
+                                const otherStart = id === source.id && other.segmentId === retainedSegment.id
+                                    ? graft.point : other.start;
+                                return segmentDistanceSq(from, to, otherStart, other.end) < combined * combined;
+                            }));
+                        if (crossesSupport || collisionMeshes.some(mesh => isCollisionSegmentBlocked(position, graft.point, clearance, mesh))) {
+                            collision = true;
+                            continue;
+                        }
+                        const knot: Knot = { id: createId(`cluster-${source.id}-knot`), parentShaftId: segment.id,
+                            t, pos: position, diameter: segment.diameter + 0.1 };
+                        let lowerSegments: Segment[];
+                        if (graft.sourceT === 1) {
+                            const diagonal = { ...retainedSegment };
+                            delete diagonal.bottomJoint;
+                            lowerSegments = [diagonal];
+                        } else {
+                            const joint = { id: createId(`cluster-${source.id}-joint`), pos: graft.point,
+                                diameter: retainedSegment.topJoint!.diameter };
+                            lowerSegments = [{ id: createId(`cluster-${source.id}-shaft`),
+                                diameter: retainedSegment.diameter, topJoint: joint },
+                            { ...retainedSegment, bottomJoint: joint }];
+                        }
+                        const common: Omit<Trunk, 'rootId' | 'baseDiameterMm'> & { rootId?: string; baseDiameterMm?: number } = { ...source };
+                        delete common.rootId;
+                        delete common.baseDiameterMm;
+                        const branch: Branch = { ...common, typeId: 'branch', parentKnotId: knot.id,
+                            segments: [...lowerSegments, ...source.segments.slice(graft.segmentIndex + 1)] };
+                        next.branches[source.id] = branch;
+                        delete next.trunks[source.id];
+                        delete next.roots[source.rootId];
+                        next.knots[knot.id] = knot;
+                        const hostKnots = knotsByShaft.get(knot.parentShaftId) ?? [];
+                        hostKnots.push(knot);
+                        knotsByShaft.set(knot.parentShaftId, hostKnots);
+                        for (const hosted of graft.hostedKnots) next.knots[hosted.knot.id] = {
+                            ...hosted.knot, t: (hosted.t - graft.sourceT) / (1 - graft.sourceT),
+                        };
+                        keepers.add(host.id);
+                        spansByOwner.delete(source.id);
+                        const single = { roots: next.roots, knots: next.knots } as SupportState;
+                        for (const descriptor of SUPPORT_TYPES) Object.assign(single, { [descriptor.location.key]: {} });
+                        single.branches = { [branch.id]: branch };
+                        indexSpans(supportSpans(single, collisionModels));
+                        result.changedCount++;
+                        result.remainingTrunkCount--;
+                        attached = true;
+                        break;
                     }
-                    const knot: Knot = { id: createId(`cluster-${source.id}-knot`), parentShaftId: segment.id,
-                        t, pos: position, diameter: segment.diameter + 0.1 };
-                    let lowerSegments: Segment[];
-                    if (graft.sourceT === 1) {
-                        const diagonal = { ...source.segments[0] };
-                        delete diagonal.bottomJoint;
-                        lowerSegments = [diagonal];
-                    } else {
-                        const joint = { id: createId(`cluster-${source.id}-joint`), pos: graft.point,
-                            diameter: source.segments[0].topJoint!.diameter };
-                        lowerSegments = [{ id: createId(`cluster-${source.id}-shaft`),
-                            diameter: source.segments[0].diameter, topJoint: joint },
-                        { ...source.segments[0], bottomJoint: joint }];
-                    }
-                    const common: Omit<Trunk, 'rootId' | 'baseDiameterMm'> & { rootId?: string; baseDiameterMm?: number } = { ...source };
-                    delete common.rootId;
-                    delete common.baseDiameterMm;
-                    const branch: Branch = { ...common, typeId: 'branch', parentKnotId: knot.id,
-                        segments: [...lowerSegments, ...source.segments.slice(1)] };
-                    next.branches[source.id] = branch;
-                    delete next.trunks[source.id];
-                    delete next.roots[source.rootId];
-                    next.knots[knot.id] = knot;
-                    const hostKnots = knotsByShaft.get(knot.parentShaftId) ?? [];
-                    hostKnots.push(knot);
-                    knotsByShaft.set(knot.parentShaftId, hostKnots);
-                    for (const hosted of graft.hostedKnots) next.knots[hosted.knot.id] = {
-                        ...hosted.knot, t: (hosted.t - graft.sourceT) / (1 - graft.sourceT),
-                    };
-                    keepers.add(host.id);
-                    spansByOwner.delete(source.id);
-                    const single = { roots: next.roots, knots: next.knots } as SupportState;
-                    for (const descriptor of SUPPORT_TYPES) Object.assign(single, { [descriptor.location.key]: {} });
-                    single.branches = { [branch.id]: branch };
-                    indexSpans(supportSpans(single, collisionModels));
-                    result.changedCount++;
-                    result.remainingTrunkCount--;
-                    attached = true;
-                    break;
                 }
+                if (attached || result.candidateChecks >= CLUSTER_MAX_CANDIDATE_CHECKS) break;
             }
             if (attached || result.candidateChecks >= CLUSTER_MAX_CANDIDATE_CHECKS) break;
         }

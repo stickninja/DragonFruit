@@ -2,11 +2,15 @@
 
 Phase 0.5 is in progress. The user approved the proposed 0.1.17 migration designs except the layer inspector redesign. Keep the current encoded layer inspector. Do not publish a release or start the next roadmap phase until these checks are completed and the user explicitly accepts this phase.
 
-On 2026-10-16 the user requested a distinguishable review candidate:
-`0.1.17 · stickninja r2`, package `0.4.2`. This updates candidate identity and
-upgrade ordering only. Earlier build evidence below belongs to the recorded r1
-packages; it does not verify an r2 build or normal-shortcut installation. Phase
-0.5 and Support Studio Stages 2/3 remain unaccepted, and no release is authorized.
+On 2026-10-16 the user requested the distinguishable r2/package 0.4.2
+candidate. Its normal running application identity and later actual-scene
+Preview operability were confirmed; see the [Support Studio follow-up
+record](support-studio-grid-acceptance.md). On 2026-10-17 the user authorized
+r3/package 0.4.3 for the continued support geometry correction. That unpublished
+candidate's build and installation are pending; the currently installed app
+remains r2. Earlier build and installation evidence retains its recorded source
+and version identity. Phase 0.5 and Support Studio Stages 2/3 remain unaccepted,
+and no public release is authorized.
 
 ## Required checks
 
