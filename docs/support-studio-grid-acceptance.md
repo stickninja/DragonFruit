@@ -1,6 +1,6 @@
 # Support Studio Stage 3: Grid Optimization acceptance
 
-Status: **implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed; candidate ready for combined Stage 2/3 review and explicit user acceptance.** On 2026-10-16 the user instructed: “Proceed with Stage 3, I’ll review Stage 2 and 3 together”. This is an explicit exception to the normal sequence, not acceptance of Stage 2. Stage 1 remains accepted. Stage 4 is deferred until explicit acceptance after combined review. [Phase 0.5](upstream-0.1.17-acceptance.md) remains unaccepted; the evidence below initially covers the unpublished 0.4.1 candidate. The user later authorized r2/package 0.4.2 to distinguish the corrected candidate; its build and normal-install validation are pending as recorded below. No public release is authorized.
+Status: **implemented; automated checks, optimized frontend browser review, and Windows x64/NSIS build passed; candidate ready for combined Stage 2/3 review and explicit user acceptance.** On 2026-10-16 the user instructed: “Proceed with Stage 3, I’ll review Stage 2 and 3 together”. This is an explicit exception to the normal sequence, not acceptance of Stage 2. Stage 1 remains accepted. Stage 4 is deferred until explicit acceptance after combined review. [Phase 0.5](upstream-0.1.17-acceptance.md) remains unaccepted; the evidence below initially covers the unpublished 0.4.1 candidate. The user later authorized r2/package 0.4.2 to distinguish the corrected candidate; its successful build and normal-application revision confirmation are recorded below; the actual-scene functional retest is pending. No public release is authorized.
 
 ## Scope and agreed intent
 
@@ -355,13 +355,41 @@ Updating and verifying the normal user installation remains pending. The user
 requested a distinguishable revision; the corrected unpublished candidate will
 use fork revision **stickninja r2** and package version **0.4.2**. This version
 change is now user-authorized; it does not accept a stage or authorize public
-release. The r2/0.4.2 build still needs preparation and validation. All earlier
+release. The r2/0.4.2 build completed as recorded below; normal-install validation remains pending. All earlier
 source, installer, hash, and tested-copy evidence above retains its recorded
 identity and does not describe the new candidate.
 
-Save/close and installation confirmation at action time have been requested;
-no successful normal-install update, r2/0.4.2 build, or user-scene retest is
-recorded here.
+At that point, normal-install confirmation and the user-scene retest were
+pending. The later revision confirmation is recorded below.
+
+### r2/0.4.2 candidate build
+
+The user-authorized r2 candidate built successfully with exit code 0 from source
+`1b2adb5c0`; the embedded frontend source identity was confirmed. Rust release
+compilation took 5 minutes 29 seconds, describing that compilation stage only.
+The NSIS output `DragonFruit (stickninja)_0.4.2_x64-setup.exe` and copied review
+candidate `DragonFruit-stickninja-r2-0.4.2-1b2adb5c-x64-setup.exe` are
+**21,995,002 bytes**, with matching SHA-256
+`B17ACC98E6B2FAFD66D69BDDC2DBFC2182E0F808B015325CAA3AE909F20367BC`.
+The built executable identifies as `DragonFruit (stickninja)`,
+FileVersion/ProductVersion `0.4.2`, SHA-256
+`41634F41A9B251F59FE5141DC2967CDD8806C068BC45897FEA821840D2389BC0`.
+
+The user saved and closed the application and authorized native installation.
+The native installer detected an older normal installation. During interaction,
+user input occurred and an “Unable to uninstall!” error was observed. The
+installer later closed, and the user reopened the normal application. Because
+the user handled concurrent installer interaction, no installer exit-code success
+is claimed for this attempt.
+
+The user then opened About. A fresh native screenshot and UI Automation reading
+confirmed **0.1.17 · stickninja r2**, and the running executable was identified
+as the normal unredirected installation rather than the separate Codex cache
+copy. This verifies the normal application's r2 upgrade identity despite the
+earlier uninstall error. The source tooltip was not captured in this round;
+built package version `0.4.2` is established by the build evidence above. The
+user's actual scene is loaded, and its Preview test has been requested but is
+still pending. This does not accept either stage or authorize public release.
 
 ## Remaining acceptance boundary
 
