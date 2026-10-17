@@ -260,7 +260,12 @@ ordinary hover preserves it.
 
 `subscribeToAutoBraceMeshes` in
 `src/supports/autoBracing/meshGeometryStore.ts` lets the controller invalidate
-when current or neighboring geometry/transform registration changes. The
+when current or neighboring geometry/transform registration changes. Both
+optimization cards also subscribe before any preview exists, using their
+selection-error getter as the external-store snapshot. Mesh arrival or removal
+must update idle Preview eligibility immediately, even if Optimize opened before
+the model finished registering geometry. Selection, model, plate, lock, and mesh
+guards remain authoritative; Apply is disabled whenever eligibility fails. The
 Support Renderer displays the proposal through unselected batches and suppresses
 pointer editing and joint/knot/curve gizmos during preview.
 `getOwnedPrimitives(typeId, collection, snapshot)` in `src/supports/state.ts`

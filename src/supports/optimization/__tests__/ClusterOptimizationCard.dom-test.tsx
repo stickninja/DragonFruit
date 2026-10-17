@@ -12,6 +12,7 @@ import { getUndoCount, undo } from '@/history/historyStore';
 import { registerSupportHistoryHandlers } from '../../history/useSupportHistoryHandlers';
 import { setSelectedSupportIds } from '../../interaction/supportMultiSelection';
 import { clusterPreviewFixture } from './clusterPreviewFixture';
+import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '../../autoBracing/meshGeometryStore';
 
 test('Cluster card requires selection and preview, displays real counts, cancels stale limits, and clears rendering on unmount', async () => {
     const fixture = clusterPreviewFixture();
@@ -154,4 +155,51 @@ test('Apply feedback survives equal normalized settings restored when the primar
         setSettings(previousSettings);
         fixture.cleanup();
     }
+});
+
+
+test('Cluster Preview enables when trunks are selected after Optimize has mounted', async () => {
+    const fixture = clusterPreviewFixture();
+    setSelectedSupportIds([]);
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const i18n = setupI18n({ locale: 'en', messages: { en: {} } });
+    const button = (label: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === label)!;
+    try {
+        await act(async () => root.render(<I18nProvider i18n={i18n}><ClusterOptimizationCard context={fixture.context} /></I18nProvider>));
+        assert.equal(button('Preview').disabled, true);
+        assert.match(container.querySelector('[role="status"]')!.textContent!, /Select at least two trunks/);
+        await act(async () => setSelectedSupportIds(['a']));
+        assert.equal(button('Preview').disabled, true);
+        await act(async () => setSelectedSupportIds(['a', 'b']));
+        assert.equal(button('Preview').disabled, false);
+        assert.match(container.querySelector('[role="status"]')!.textContent!, /Preview joins selected trunks/);
+        await act(async () => button('Preview').click());
+        assert.equal(getClusterPreview().status, 'ready');
+        assert.equal(button('Apply').disabled, false);
+    } finally { await act(async () => root.unmount()); container.remove(); fixture.cleanup(); }
+});
+
+
+test('Cluster Preview eligibility follows model mesh registration after mounting', async () => {
+    const fixture = clusterPreviewFixture();
+    unregisterMeshForAutoBrace('model');
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const i18n = setupI18n({ locale: 'en', messages: { en: {} } });
+    const button = (label: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === label)!;
+    try {
+        await act(async () => root.render(<I18nProvider i18n={i18n}><ClusterOptimizationCard context={fixture.context} /></I18nProvider>));
+        assert.equal(button('Preview').disabled, true);
+        assert.match(container.querySelector('[role="status"]')!.textContent!, /Model geometry is unavailable/);
+        await act(async () => registerMeshForAutoBrace('model', fixture.geometry, fixture.transform));
+        assert.equal(button('Preview').disabled, false);
+        assert.match(container.querySelector('[role="status"]')!.textContent!, /Preview joins selected trunks/);
+        await act(async () => unregisterMeshForAutoBrace('model'));
+        assert.equal(button('Preview').disabled, true);
+        assert.match(container.querySelector('[role="status"]')!.textContent!, /Model geometry is unavailable/);
+        assert.equal(getUndoCount(), 0);
+    } finally { await act(async () => root.unmount()); container.remove(); fixture.cleanup(); }
 });

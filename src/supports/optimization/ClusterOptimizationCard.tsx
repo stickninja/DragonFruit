@@ -9,6 +9,7 @@ import { Button } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { getSnapshot, subscribe } from '../state';
+import { subscribeToAutoBraceMeshes } from '../autoBracing/meshGeometryStore';
 import { useResolvedSelectionState } from '../interaction/shared/selection/resolvedSelectionStore';
 import { DEFAULT_CLUSTER_OPTIMIZATION_OPTIONS } from './clusterOptimization';
 import {
@@ -43,7 +44,11 @@ export function ClusterOptimizationCard({ context }: { context: ClusterPreviewCo
     const support = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     const selection = useResolvedSelectionState();
     const count = selection.selectedIds.filter((id) => support.trunks[id]).length;
-    const selectionError = clusterSelectionError(context);
+    const selectionError = React.useSyncExternalStore(
+        subscribeToAutoBraceMeshes,
+        () => clusterSelectionError(context),
+        () => clusterSelectionError(context),
+    );
     const result = preview.result;
     const contactsPreserved = !!result && result.contactCountBefore === result.contactCountAfter;
     const canApply = !selectionError && preview.status === 'ready' && !!result?.changedCount && contactsPreserved;

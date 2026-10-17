@@ -15,6 +15,7 @@ import { getUndoCount, undo } from '@/history/historyStore';
 import { registerSupportHistoryHandlers } from '../../history/useSupportHistoryHandlers';
 import { setSelectedSupportIds } from '../../interaction/supportMultiSelection';
 import { gridPreviewFixture } from './gridPreviewFixture';
+import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '../../autoBracing/meshGeometryStore';
 
 test('Grid card requires selection and preview, displays real counts, cancels stale limits, and clears rendering on unmount', async () => {
     const fixture = gridPreviewFixture();
@@ -220,6 +221,29 @@ test('Grid cancels a proposal on context and lock changes, and never enables App
         await render(fixture.context);
         assert.equal(button('Preview').disabled, false);
         assert.equal(button('Apply').disabled, true);
+        assert.equal(getUndoCount(), 0);
+    } finally { await act(async () => root.unmount()); container.remove(); fixture.cleanup(); }
+});
+
+
+test('Grid Preview eligibility follows model mesh registration after mounting', async () => {
+    const fixture = gridPreviewFixture();
+    unregisterMeshForAutoBrace('model');
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const i18n = setupI18n({ locale: 'en', messages: { en: {} } });
+    const button = (label: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === label)!;
+    try {
+        await act(async () => root.render(<I18nProvider i18n={i18n}><GridOptimizationCard context={fixture.context} /></I18nProvider>));
+        assert.equal(button('Preview').disabled, true);
+        assert.match(container.querySelector('[role="status"]')!.textContent!, /Model geometry is unavailable/);
+        await act(async () => registerMeshForAutoBrace('model', fixture.geometry, fixture.transform));
+        assert.equal(button('Preview').disabled, false);
+        assert.match(container.querySelector('[role="status"]')!.textContent!, /Preview aligns selected trunk roots/);
+        await act(async () => unregisterMeshForAutoBrace('model'));
+        assert.equal(button('Preview').disabled, true);
+        assert.match(container.querySelector('[role="status"]')!.textContent!, /Model geometry is unavailable/);
         assert.equal(getUndoCount(), 0);
     } finally { await act(async () => root.unmount()); container.remove(); fixture.cleanup(); }
 });

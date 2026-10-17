@@ -138,6 +138,31 @@ above. This is an unpublished build for combined Stage 2/3 review. Installation,
 native UI, remaining detailed manual scenarios, and physical printing have not
 been independently verified. No release or version bump was performed.
 
+### Follow-up: idle Preview eligibility
+
+After the candidate above was built, user review reported a blocked Preview
+with idle help text and a separate automatic support-generation failure.
+Investigation confirmed that the optimization cards did not subscribe to mesh
+registration until a preview existed. Opening Optimize before model geometry
+registered could therefore leave Preview disabled after the geometry became
+available.
+
+Both Cluster and Grid cards now observe mesh registration while idle, using the
+existing eligibility getter and retaining the selection/model/plate/lock guards.
+Apply is also disabled when current eligibility fails. The focused compiled DOM
+suite passed **13/13 tests**. New Cluster/Grid mesh-arrival and removal cases
+failed before the fix and passed after it. A Cluster zero-to-one-to-two-trunk
+selection case passed before the fix and remains a selection sanity check;
+it does not reproduce the mesh-registration defect. TypeScript, scoped ESLint,
+and the localization literal gate passed for the follow-up.
+
+This evidence establishes the confirmed idle-eligibility fix only. The reported
+automatic support-generation failure remains unresolved, and the fix has not
+been shown to resolve every reported symptom. The Windows candidate and prior
+production-browser evidence above describe source commit `27acd6a0`; they do
+not include this later change. Updated production/native verification and a
+replacement package are pending.
+
 ## Remaining acceptance boundary
 
 Stage 2 and Stage 3 require explicit user acceptance after the combined review. Successful automated tests or a build do not establish native pointer behavior, installation, physical print strength, or hardware performance. No physical-print claim is made. See the [fork roadmap](fork-roadmap.md) and [Stage 2 record](support-studio-cluster-acceptance.md).
