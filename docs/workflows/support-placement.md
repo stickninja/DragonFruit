@@ -72,6 +72,10 @@ then open **Optimize** in Support Studio and choose **Cluster**. Cluster Optimiz
 support selection; it does not fall back to the whole model. Adjust **Trunk
 reduction** to request a reduction from 0–75% (default 50%). Advanced controls
 limit reach (default 8 mm) and branch angle from vertical (default 45°).
+Marquee selection may also include the same model's feet, branches, or braces.
+Those items do not prevent preview or count as additional trunks; ownership must
+resolve to the active model for every selected item. This also applies to Grid
+Optimization.
 
 Choose **Preview** to inspect the proposed replacement graph and its selected
 trunk counts, preserved contacts, and skipped candidates. Preview does not edit

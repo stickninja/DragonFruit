@@ -248,6 +248,7 @@ const applied = applyClusterOptimization(context, options);
 returns a selection/model/plate/mesh error or prepares a proposal. A planning
 exception returns `failed`, with a recoverable localized message and no graph or
 history mutation.
+See the shared selection contract under [Grid Optimization](#support-studio-grid-optimization).
 `subscribeClusterPreview` observes idle/ready/stale/applied state.
 `getClusterRenderSnapshot` exposes a current proposal only to ephemeral scene
 rendering; ordinary serialization continues to read the committed store.
@@ -364,6 +365,17 @@ idle/ready/stale/applied state, `cancelGridPreview` returns to idle, and
 recoverable `failed` error without graph/history changes. `getGridRenderSnapshot`
 exposes only the current Grid proposal. Switching modes cancels the previous
 controller, so only one tool can supply scene geometry.
+
+Shared optimization selection validation resolves every selected entity through
+`getModelIdForSupportEntityId` in `src/supports/state.ts`, including
+roots caught by marquee selection and owned segment, joint, knot, and brace-span
+IDs. Same-model selected roots
+and other support parts are allowed alongside the required trunk count. Only
+selected trunks become planner targets; selected parts do not become independent
+optimization targets or inflate contact/skipped-trunk counts. Unknown entities, different-model owners, insufficient
+trunks, and invalid model/plate/lock/mesh context still reject the operation.
+Freshness compares the complete selection, including parts, so changing a root
+or another selected primitive invalidates a prepared proposal.
 
 The shared `createOptimizationPreview` factory takes a minimum trunk count,
 localized history descriptor, optional context validator, and a pure planner

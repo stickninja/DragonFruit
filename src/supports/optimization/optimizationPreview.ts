@@ -1,8 +1,8 @@
 import type { MessageDescriptor } from '@lingui/core';
 import { subscribeHistory } from '@/history/historyStore';
-import { getSnapshot, setSnapshot, subscribe } from '../state';
+import { getModelIdForSupportEntityId, getSnapshot, setSnapshot, subscribe } from '../state';
 import type { SupportState } from '../types';
-import { SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '../supportTypeRegistry';
+import { SUPPORT_COLLECTION_KEYS } from '../supportTypeRegistry';
 import { clearSelectedSupportIds, getSelectedSupportIds, subscribeSupportMultiSelection } from '../interaction/supportMultiSelection';
 import { getMeshEntryForAutoBrace, subscribeToAutoBraceMeshes } from '../autoBracing/meshGeometryStore';
 import type { AutoBracingSettings } from '../autoBracing/settings';
@@ -116,10 +116,7 @@ export function createOptimizationPreview<Options extends object, Result extends
         const selectedIds = getSelectedSupportIds();
         const snapshot = getSnapshot();
         if (selectedIds.filter((id) => snapshot.trunks[id]).length < config.minimumTrunks) return 'selection';
-        if (!context.modelId || selectedIds.some((id) => {
-            const entity = SUPPORT_TYPES.map((type) => snapshot[type.location.key][id]).find(Boolean);
-            return !entity || !('modelId' in entity) || entity.modelId !== context.modelId;
-        })) return 'model';
+        if (!context.modelId || selectedIds.some((id) => getModelIdForSupportEntityId(id) !== context.modelId)) return 'model';
         if (!context.plateId || context.modelPlateId !== context.plateId) return 'plate';
         if (!getMeshEntryForAutoBrace(context.modelId)) return 'mesh';
         return config.contextError?.(context) ?? null;
@@ -140,7 +137,7 @@ export function createOptimizationPreview<Options extends object, Result extends
         }));
         let result: Result;
         try {
-            result = config.build(before, selectedIds, options, context, meshEntry, collisionEntries);
+            result = config.build(before, selectedIds.filter((id) => before.trunks[id]), options, context, meshEntry, collisionEntries);
         } catch {
             return 'failed';
         }

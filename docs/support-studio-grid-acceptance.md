@@ -248,6 +248,55 @@ was performed during this check. Those behaviors remain pending; this evidence
 does not establish shortcut, file-association, official-installation, or
 profile-byte preservation checks.
 
+### User retest after installation
+
+The user confirmed automatic support generation works on the installed corrected
+candidate and reported that Optimize still does not work. This is user-confirmed
+generation behavior; it does not establish all topology, support-quality, or
+physical-print acceptance checks.
+
+Native review with ten selected trunks showed Preview enabled, Apply disabled,
+and the idle helper. An attempted click was inconclusive because window movement
+and cleared selection prevented a reliable interaction result. It is not recorded
+as a passing Preview check and does not establish the cause. Native Optimize
+behavior remains unresolved and requires further investigation.
+
+### Follow-up: marquee-selected root ownership
+
+Further native review with eight selected trunks displayed a model-selection
+error. Investigation confirmed marquee selection also emits root IDs, while the
+shared optimization guard looked only through support-type collections that
+exclude roots. A valid same-model trunk-and-root selection was therefore
+incorrectly rejected.
+
+The correction uses the canonical entity-owner resolver for every selected ID,
+accepting same-model roots and support parts while targeting only selected
+trunks. The complete selection still participates in preview invalidation;
+unknown or differently owned entities retain their guards.
+
+Verification passed **27 controller/resolver tests** and **15 compiled DOM tests**.
+Independent review also passed the 27 unit tests and two new DOM regressions,
+plus ephemeral checks for both tools using same-model roots and trunks through
+Preview, Apply, and a single Undo. Primary scoped lint and documentation checks
+passed, and the frontend build passed with type checking. These checks establish
+the selection-ownership correction in synthetic fixtures; they do not establish
+native behavior. The four new unit and two DOM regressions failed before the
+fix with the model-selection error and passed after it.
+
+Actual pointer interaction in the optimized production frontend passed with
+Optimize opened before selection. A right-to-left marquee included eight trunks
+and visibly selected feet. Cluster reduced eight trunks to five, preserved eight
+contacts, and reported three fewer trunks with two legitimate geometry skips.
+Grid shifted all eight trunks, preserved eight contacts, and reported zero
+unchanged trunks. Preview, Cancel, stale-limit feedback, and Apply passed for
+both tools. Undo/Redo actions and screenshot review completed; this is visual
+browser evidence, not a byte-for-byte browser history comparison. The primary
+reviewed the Cluster preview and Grid applied screenshots. The run exited
+successfully with zero uncaught page errors.
+
+Windows native packaging is still in progress. A native retest is pending;
+the current native Optimize issue is not recorded as passed.
+
 ## Remaining acceptance boundary
 
 Stage 2 and Stage 3 require explicit user acceptance after the combined review. Successful automated tests or a build do not establish native pointer behavior, installation, physical print strength, or hardware performance. No physical-print claim is made. See the [fork roadmap](fork-roadmap.md) and [Stage 2 record](support-studio-cluster-acceptance.md).
