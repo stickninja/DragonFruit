@@ -156,12 +156,78 @@ selection case passed before the fix and remains a selection sanity check;
 it does not reproduce the mesh-registration defect. TypeScript, scoped ESLint,
 and the localization literal gate passed for the follow-up.
 
-This evidence establishes the confirmed idle-eligibility fix only. The reported
-automatic support-generation failure remains unresolved, and the fix has not
-been shown to resolve every reported symptom. The Windows candidate and prior
-production-browser evidence above describe source commit `27acd6a0`; they do
-not include this later change. Updated production/native verification and a
-replacement package are pending.
+Source commit `261181db` includes the idle-eligibility fix. The primary review
+of its optimized frontend passed Cluster selection after the card mounted,
+Preview, Cancel, option-change staleness, Apply, Undo, Redo, and compact layout:
+four selected trunks reduced to three retained trunks with four contacts
+preserved. Grid's full browser workflow also passed with two trunks moved and
+two contacts preserved. A Windows build of that source completed, but was
+superseded by the separate dense-candidate correction below; it is not the final
+replacement package.
+
+These checks establish the confirmed idle-eligibility defect and synthetic
+browser workflow. The cause of the user's actual blocked Preview has not yet
+been verified in native use; this change has not been shown to resolve every
+reported symptom.
+
+### Follow-up: dense automatic-support candidates
+
+A separate synthetic regression reproduced a numeric-maximum `RangeError`
+with **652,392 minima**. Source commit `0a7334fa` replaces array-spread
+maximum calculations for candidate height and area during scoring, and maximum
+height in sizing diagnostics, with bounded-argument iteration. The same dense
+fixture passed after the correction. The focused candidate-generation suite
+passed **17 tests**, and worker/related coverage passed **14 tests**. This
+confirms the dense scoring/diagnostics overflow and its correction; it does not
+establish completion of a support-generation run on the user's actual model.
+
+Native UI observation confirmed About displays upstream **0.1.17**, fork
+**stickninja r1**, with the current preset enabled and a reported **652,392
+minima**. The actual native Preview cause and user-model retest remain pending.
+
+The Windows x64/NSIS build from `0a7334fa` completed successfully but is
+superseded by the final replacement package below.
+The earlier installer/hash above remains historical evidence for `27acd6a0`
+and excludes the follow-up fixes.
+
+### Follow-up: duplicate-position minima connectivity
+
+A separate synthetic native scan found different minima counts for equivalent
+cube geometry: eight shared vertices and twelve faces produced **one minimum**,
+while thirty-six per-face vertices with the same twelve faces produced **ten
+minima**. Welding exact duplicate positions in the analysis copy produced
+**one minimum** for each representation.
+
+The native correction uses the existing core connectivity groups on a private
+analysis copy with exact duplicate positions welded. It preserves the original
+source/world coordinates, face order, and original vertex references. Five
+native module tests passed in an isolated harness, and the targeted full desktop
+Rust tests passed **5/5**. The correction is committed in source `199f9bf2`
+(full commit `199f9bf2c8dbf377e77188fde1e2069cc4968e07`).
+
+The user's private 3MF has not been inspected, so the synthetic duplicate-index
+case does not establish the cause of that file's reported minima count. Review
+of the user-provided screenshot showed enabled-looking Preview,
+disabled-looking Apply, and idle help text. The image does not establish actual
+control eligibility, cursor state, or the cause of the reported interaction.
+Native Preview behavior and a complete run on the user's actual model remain
+pending.
+
+### Final follow-up Windows candidate
+
+Source `199f9bf2` built the final Windows x64 executable and NSIS installer
+successfully with exit code 0. Rust release compilation took 4 minutes 45 seconds;
+this is the compilation stage duration, not total build time. The executable's
+PE machine type is `0x8664`, ProductName is `DragonFruit (stickninja)`, and
+FileVersion/ProductVersion remain `0.4.1`.
+
+The replacement review candidate is
+`DragonFruit-stickninja-support-fixes-199f9bf2-x64-setup.exe`, **21,995,851 bytes**,
+SHA-256 `98F113290C897975414652771A3CA3125578423EDC5110F138866F453D6BE35C`.
+The built and copied review artifacts have matching hashes. This package includes
+the idle mesh-eligibility, dense scoring/diagnostics overflow, and native
+minima-connectivity fixes. Installation, native Preview verification, and a
+complete user-model run remain pending. No release or version bump was performed.
 
 ## Remaining acceptance boundary
 
