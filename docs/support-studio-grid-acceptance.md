@@ -468,8 +468,7 @@ and an inferred plate frame; it does not reproduce the user's exact selection
 or establish visual acceptance. Private scene details are not published here.
 
 The user authorized unpublished r3/package 0.4.3 for this correction. The native
-build completed as recorded below; installation is pending, installed r2 is
-unchanged, and actual-scene visual acceptance of the corrected geometry remains pending. Long/low join
+build and normal installation completed as recorded below; actual-scene visual acceptance of the corrected geometry remains pending. Long/low join
 quality still requires review. Neither stage is accepted, and no later stage or
 public release is authorized.
 
@@ -489,10 +488,18 @@ SHA-256 `68BAC0AF503B33D59F03E61D06CB3A167846BF4D0D174F37C88CA2DCA3B39453`.
 The executable identifies as `DragonFruit (stickninja)`, version `0.4.3`, PE
 machine `0x8664`, SHA-256
 `54CEB0F39AC6E52CCD1B220E754581CDF09355B91FD5F7844F295DA11572372B`.
-Installation awaits save/close confirmation; the installed application remains
-r2. The build does not establish installed identity or actual-scene visual
-acceptance of the correction. Neither stage is accepted, and no release is
-authorized.
+The user confirmed the scene was saved and closed and authorized r3
+installation. The native Windows installer upgraded the normal existing
+installation using its “Do not uninstall” path, with no uninstall error. It
+explicitly displayed Installation Complete and successful setup completion;
+Finish launched the normal installed application.
+
+The returned native window identified the executable as the normal installation,
+and its accessible welcome badge displayed **0.1.17 · stickninja r3 — Beta**.
+This confirms installed r3 identity through the welcome label and normal process,
+not About. A startup autosave-recovery prompt was left untouched for the user;
+About verification is pending that resolution. Actual-scene optimization visual
+review remains pending. Neither stage is accepted, and no release is authorized.
 
 ## Remaining acceptance boundary
 

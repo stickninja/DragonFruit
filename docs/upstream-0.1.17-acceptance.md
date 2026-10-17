@@ -8,7 +8,9 @@ Preview operability were confirmed; see the [Support Studio follow-up
 record](support-studio-grid-acceptance.md). On 2026-10-17 the user authorized
 r3/package 0.4.3 for the continued support geometry correction. That unpublished
 candidate's production frontend and Windows x64/NSIS build passed from source
-`07bb38ba`; installation is pending and the currently installed app remains r2. Earlier build and installation evidence retains its recorded source
+`07bb38ba`. Normal native setup completed successfully, and its welcome badge
+plus process identity confirmed installed r3. About verification and actual-scene
+geometry review remain pending. Earlier build and installation evidence retains its recorded source
 and version identity. Phase 0.5 and Support Studio Stages 2/3 remain unaccepted,
 and no public release is authorized.
 
