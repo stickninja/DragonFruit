@@ -13,6 +13,7 @@
 # framework/build outputs
 /.next/
 /build
+/builds/
 /coverage
 /dist/
 /out/

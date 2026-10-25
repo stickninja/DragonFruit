@@ -30,3 +30,19 @@ remains an unpublished candidate; Phase 0.5 overall is unaccepted, and no public
 release or next-stage implementation is authorized.
 
 The bundle uses `io.github.stickninja.dragonfruit`, `DragonFruit (stickninja)`, and `dragonfruit-stickninja`. Its Windows bundle omits official `.voxl` association and COM registration. Updates remain manual through the fork releases page; no upstream updater key or feed is configured. The integration acceptance record is [Phase 0.5](../upstream-0.1.17-acceptance.md), and the release boundary is in the [fork roadmap](../fork-roadmap.md).
+
+## Local build storage
+
+Store installers, review artifacts, and private build diagnostics in the
+repository-local `builds/` directory, which stays untracked. Keep each review's
+artifacts together; existing folders are `support-studio-bracing/`,
+`support-studio-cluster/`, and `support-studio-grid/`. Record only shareable
+verification results in the relevant acceptance document; keep personal paths,
+device files, and their contents out of public documentation and commits.
+
+`builds/windows-migration-cache/` archives local Windows dependency and build
+caches separately from active dependencies. These archives preserve migration
+material; they do not establish a working Linux environment. Linux build and
+runtime validation remain pending. Historical Windows verification and stage
+acceptance records retain their original scope; this workspace cleanup does not
+accept Phase 0.5 or authorize the next stage or a release.
